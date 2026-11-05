@@ -1,4 +1,4 @@
-// 翻译服务配置：列表里只有加进来的服务（体检 B21）——8 个内置服务（智谱、百度、有道、Google、DeepL、微软、火山、腾讯）
+// 翻译服务配置：列表里只有加进来的服务（体检 B21）——9 个内置服务（智谱、百度、有道、有道网页版、Google、DeepL、微软、火山、腾讯）
 // 可删、在设置「+」里加回来，外加用户自建的 AI 实例（OpenAI 兼容 / Azure / Anthropic，「+」里有厂商预设，D15）。
 // 从没存过列表时默认只有智谱（启用）。列表顺序即结果卡片顺序。
 // 非密钥配置以 JSON 存 UserDefaults，密钥存钥匙串（账户名 "<服务 id>.<字段>"，字段名已定，改名会读不到已存的密钥）。
@@ -9,13 +9,14 @@ import Observation
 
 nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
   enum Kind: String, Codable, CaseIterable, Sendable {
-    case zhipu, baidu, youdao, google, deepl, microsoft, volcengine, tencent, ai
+    case zhipu, baidu, youdao, youdaoWeb, google, deepl, microsoft, volcengine, tencent, ai
 
     var defaultName: String {
       switch self {
       case .zhipu: "智谱 GLM（免费）"
       case .baidu: "百度翻译"
       case .youdao: "有道翻译"
+      case .youdaoWeb: "有道翻译（网页版·免费）"
       case .google: "Google 翻译"
       case .deepl: "DeepL"
       case .microsoft: "微软翻译"
@@ -126,6 +127,7 @@ nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
       [SecretField(name: "appId", label: "App ID"), SecretField(name: "secret", label: "密钥")]
     case .youdao:
       [SecretField(name: "appKey", label: "应用 ID"), SecretField(name: "appSecret", label: "应用密钥")]
+    case .youdaoWeb: []
     case .google: [SecretField(name: "apiKey", label: "API Key")]
     case .deepl: [SecretField(name: "authKey", label: "Auth Key", prompt: "免费版以 :fx 结尾")]
     case .microsoft:
@@ -150,6 +152,7 @@ nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
     case .ai: AIService.stream(request, service: self)
     case .baidu: Baidu.stream(request, service: self)
     case .youdao: Youdao.stream(request, service: self)
+    case .youdaoWeb: YoudaoWeb.stream(request, service: self)
     case .google: Google.stream(request, service: self)
     case .deepl: DeepL.stream(request, service: self)
     case .microsoft: Microsoft.stream(request, service: self)
