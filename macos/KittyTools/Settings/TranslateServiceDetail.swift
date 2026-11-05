@@ -71,15 +71,18 @@ struct TranslateServiceDetail: View {
         options(service)
         if current.kind == .ai { modelRow(service) }
       }
-      Section {
-        ForEach(current.secretFields, id: \.name) { field in
-          SecureField(field.label, text: secretBinding(field.name), prompt: Text(field.prompt))
-            .focused($focusedSecret, equals: field.name)
+      // 有道网页版不要密钥：没有字段就整段不出现（不然只剩一个空的「密钥」标题）
+      if !current.secretFields.isEmpty {
+        Section {
+          ForEach(current.secretFields, id: \.name) { field in
+            SecureField(field.label, text: secretBinding(field.name), prompt: Text(field.prompt))
+              .focused($focusedSecret, equals: field.name)
+          }
+        } header: {
+          Text("密钥")
+        } footer: {
+          SectionFootnote("只存在这台 Mac 的钥匙串里。")
         }
-      } header: {
-        Text("密钥")
-      } footer: {
-        SectionFootnote("只存在这台 Mac 的钥匙串里。")
       }
       Section {
         HStack(spacing: 8) {
@@ -300,6 +303,7 @@ extension TranslateService {
           secret("authKey") == nil ? ("未填密钥", true) : ("官方 API", false)
         }
       case .microsoft: (secret("subscriptionKey") == nil ? "免费 Edge 接口" : "Azure 翻译", false)
+      case .youdaoWeb: ("免费的网页版接口", false)
       default:
         secretFields.allSatisfy { secret($0.name) != nil } ? ("已填密钥", false) : ("未填密钥", true)
       }

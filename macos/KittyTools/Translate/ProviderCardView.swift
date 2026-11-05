@@ -603,6 +603,8 @@ struct ServiceTile: View {
       switch service.kind {
       case .zhipu, .baidu, .youdao, .google, .deepl, .microsoft, .volcengine, .tencent:
         service.kind.rawValue
+      // 有道网页版复用有道的官方 logo（同一个牌子）
+      case .youdaoWeb: "youdao"
       case .ai: service.aiProtocol == .azure ? "microsoft" : AIVendor(service: service)?.rawValue
       }
     return name.map { ("ServiceLogo/" + $0, !fullBleed.contains($0)) }
@@ -619,7 +621,7 @@ struct ServiceTile: View {
       switch service.kind {
       case .zhipu: 0x3D5AFE
       case .baidu: 0x2932E1
-      case .youdao: 0xE1251B
+      case .youdao, .youdaoWeb: 0xE1251B
       case .google: 0x4285F4
       case .deepl: 0x0F2B46
       case .microsoft: 0x0078D4

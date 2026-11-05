@@ -65,7 +65,7 @@ Kitty Tools 用 Swift 6 + SwiftUI / AppKit 写成，常驻菜单栏、不占程�
 
 - **划词翻译**：在任意 App 里选中文字按快捷键就翻译，浮窗跟着鼠标出现；取不到选区时自动改用 ⌘C 取词，用完把剪贴板恢复原样
 - **输入翻译、复制即译、截图翻译**：框选屏幕上的文字，本机识别后翻译
-- **多服务并行**：智谱 GLM（内置，开箱即用）、百度、有道、Google、DeepL / DeepLX、微软（不填密钥也能用）、火山、腾讯，以及 OpenAI / Azure OpenAI / Anthropic 协议的大模型；DeepSeek、Kimi、通义千问、硅基流动、OpenRouter、Gemini、Ollama 等有预设，填好密钥就能用；大模型的译文边生成边显示
+- **多服务并行**：智谱 GLM（内置，开箱即用）、百度、有道、Google、DeepL / DeepLX、微软（不填密钥也能用）、火山、腾讯，以及免费、不要密钥的有道翻译（网页版），OpenAI / Azure OpenAI / Anthropic 协议的大模型；DeepSeek、Kimi、通义千问、硅基流动、OpenRouter、Gemini、Ollama 等有预设，填好密钥就能用；大模型的译文边生成边显示
 - **查词**：单个词显示系统词典释义卡片，大模型按词典格式回答
 - **替换原文**：用译文直接替换原 App 里选中的文字，也可以设一个静默热键，一按即替换
 - **翻译历史 / 生词本**：可搜索、收藏，导出 CSV 或可直接导入 Anki 的 TSV
