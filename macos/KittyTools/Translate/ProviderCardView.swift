@@ -639,8 +639,9 @@ struct ServiceTile: View {
       switch service.kind {
       case .zhipu, .baidu, .youdao, .google, .deepl, .microsoft, .volcengine, .tencent:
         service.kind.rawValue
-      // 有道词典和有道翻译是同一个牌子；系统翻译没有 logo，用色块
+      // 有道词典、有道网页版和有道翻译是同一个牌子；系统翻译没有 logo，用色块
       case .youdaoDict: "youdao"
+      case .youdaoWeb: "youdao"
       case .apple: nil
       case .ai: service.aiProtocol == .azure ? "microsoft" : AIVendor(service: service)?.rawValue
       }
@@ -658,7 +659,7 @@ struct ServiceTile: View {
       switch service.kind {
       case .zhipu: 0x3D5AFE
       case .baidu: 0x2932E1
-      case .youdao: 0xE1251B
+      case .youdao, .youdaoWeb: 0xE1251B
       case .google: 0x4285F4
       case .deepl: 0x0F2B46
       case .microsoft: 0x0078D4

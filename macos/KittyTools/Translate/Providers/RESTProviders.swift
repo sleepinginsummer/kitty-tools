@@ -1,6 +1,8 @@
-// 非流式的传统翻译接口：百度、有道、Google、DeepL / DeepLX、微软。每家一个 enum，签名部分是纯函数（配单测）。
+// 非流式的传统翻译接口：百度、有道、有道网页版、Google、DeepL / DeepLX、微软。每家一个 enum，签名部分是纯函数（配单测）。
 // 语言码各家不同，按各自文档映射；源语言 nil 表示让服务自动识别。
 
+import CommonCrypto
+import CryptoKit
 import Foundation
 
 nonisolated enum Baidu {
@@ -122,6 +124,177 @@ nonisolated enum Youdao {
     case let lang?: lang.rawValue
     }
   }
+}
+
+/// 有道网页版：fanyi.youdao.com 背后的 `dict.youdao.com/webtranslate`。不要密钥——sign 用网页 JS 里抄来的常量现算，
+/// 响应是 AES-128-CBC 加密的（aesKey / aesIv 由 `/webtranslate/key` 下发，各自取 MD5 当 key 和 IV），解密后才是译文。
+/// 这是有道自己的前端私有接口，不是官方授权通道：有道改签名、加风控就失效。只有用户自己在「+」里加了这个服务才用。
+nonisolated enum YoudaoWeb {
+  static let limit = 5000
+
+  /// 网页前端的固定参数（照 fanyi.youdao.com 的 JS 抄的；签名一改这里要跟着改）
+  private enum Web {
+    static let client = "fanyideskweb"
+    static let product = "webfanyi"
+    static let point = "client,mysticTime,product"
+    /// 取密钥那一步签的 key（前端 JS 里的常量）
+    static let getterKey = "asdjnjfenknafdfsdfsd"
+    static let userAgent =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+      + "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  }
+
+  /// 取密钥那一步的响应：签名用的 secretKey，解密用的 aesKey / aesIv
+  struct Key: Sendable {
+    let secret: String
+    let aesKey: String
+    let aesIv: String
+  }
+
+  static func stream(_ request: TranslateRequest, service: TranslateService)
+    -> AsyncThrowingStream<String, Error>
+  {
+    guard request.text.count <= limit else { return Signing.tooLong(limit) }
+    return Signing.oneShot { try await translate(request) }
+  }
+
+  /// 一次翻译两个请求：先取密钥，再带签名翻（网页自己也是这么走的）
+  static func translate(_ request: TranslateRequest) async throws -> String {
+    let key = try await fetchKey()
+    let time = timestamp()
+    let fields =
+      baseFields() + [
+        ("keyid", Web.product), ("sign", sign(timestamp: time, key: key.secret)),
+        ("mysticTime", time), ("i", request.text),
+        ("from", Youdao.code(request.from)), ("to", Youdao.code(request.to)),
+        ("dictResult", "false"),
+      ]
+    let body = try await post("https://dict.youdao.com/webtranslate", fields)
+    // 正常是加密的 base64；风控或参数不对时直接回明文 JSON（`{"code":50}`），解不开就按明文解析
+    let plain = (try? decrypt(body, key: key.aesKey, iv: key.aesIv)) ?? body
+    guard let object = try? JSONSerialization.jsonObject(with: Data(plain.utf8)) as? [String: Any]
+    else { throw TranslateError(message: "有道翻译（网页版）返回的数据看不懂") }
+    return try parse(object)
+  }
+
+  /// md5("client=…&mysticTime=…&product=…&key=…")
+  static func sign(timestamp: String, key: String) -> String {
+    Signing.md5("client=\(Web.client)&mysticTime=\(timestamp)&product=\(Web.product)&key=\(key)")
+  }
+
+  /// 毫秒时间戳（签名和 mysticTime 用同一个）
+  static func timestamp(_ now: Date = .now) -> String {
+    String(Int(now.timeIntervalSince1970 * 1000))
+  }
+
+  static func baseFields() -> [(String, String)] {
+    [
+      ("client", Web.client), ("product", Web.product), ("appVersion", "1.0.0"),
+      ("vendor", "web"), ("pointParam", Web.point), ("keyfrom", "fanyi.web"),
+    ]
+  }
+
+  /// 网页接口只认「浏览器来的」请求：Referer 和 OUTFOX_SEARCH_USER_ID 这个 Cookie 缺一个都回 code 50（2026-11 实测）
+  static var headers: [String: String] {
+    [
+      "User-Agent": Web.userAgent,
+      "Referer": "https://fanyi.youdao.com/",
+      "Cookie": cookie,
+    ]
+  }
+
+  /// 网页自己往 Cookie 里塞一个随机编号；服务端只认「有没有」，值随便（同一个 App 进程里不变）
+  private static let cookie =
+    "OUTFOX_SEARCH_USER_ID=\(UInt64.random(in: 1_000_000_000...9_999_999_999))@192.168.1.2;"
+
+  /// 取签名用的 secretKey 和解密用的 aesKey / aesIv
+  static func fetchKey() async throws -> Key {
+    let time = timestamp()
+    let fields =
+      baseFields() + [
+        ("keyid", "webfanyi-key-getter"), ("sign", sign(timestamp: time, key: Web.getterKey)),
+        ("mysticTime", time),
+      ]
+    let query = String(decoding: Signing.form(fields), as: UTF8.self)
+    var request = URLRequest(url: URL(string: "https://dict.youdao.com/webtranslate/key?" + query)!)
+    request.allHTTPHeaderFields = headers
+    let object = try await HTTP.send(request)
+    guard let data = object["data"] as? [String: Any],
+      let secret = data["secretKey"] as? String,
+      let aesKey = data["aesKey"] as? String, let aesIv = data["aesIv"] as? String
+    else { throw TranslateError(message: "有道翻译（网页版）没给密钥，接口可能改版了") }
+    return Key(secret: secret, aesKey: aesKey, aesIv: aesIv)
+  }
+
+  /// 表单 POST，返回原始响应文本（正常是加密的 base64）
+  static func post(_ link: String, _ fields: [(String, String)]) async throws -> String {
+    var request = URLRequest(url: URL(string: link)!)
+    request.httpMethod = "POST"
+    request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+    request.httpBody = Signing.form(fields)
+    for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+    let (data, response) = try await HTTP.perform {
+      try await HTTP.session(for: request.url!).data(for: request)
+    }
+    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    guard (200..<300).contains(status) else {
+      throw TranslateError(message: "有道翻译（网页版）拒绝了这个请求（\(status)）", status: status)
+    }
+    return String(decoding: data, as: UTF8.self)
+  }
+
+  /// 结果按句子分组（外层一行、里层一句），拼起来就是整段译文
+  static func parse(_ object: [String: Any]) throws -> String {
+    if let code = object["code"] as? Int, code != 0 { throw error(code: code) }
+    let groups = object["translateResult"] as? [[[String: Any]]] ?? []
+    return groups.map { group in group.map { $0["tgt"] as? String ?? "" }.joined() }.joined()
+  }
+
+  /// 错误码：50 是参数或风控没通过——网页接口改了签名，或有道加了验证，这个免费通道多半就不能用了
+  static func error(code: Int) -> TranslateError {
+    switch code {
+    case 50:
+      TranslateError(message: "有道翻译（网页版）拒绝了请求：接口可能已经改版，这个免费通道暂时不能用")
+    case 101, 108: TranslateError(message: "有道翻译（网页版）认不出这个语种", kind: .config)
+    default: TranslateError(message: "有道翻译（网页版）出错（错误码 \(code)）")
+    }
+  }
+
+  /// AES-128-CBC / PKCS7：key 和 IV 分别是 aesKey、aesIv 两个字符串自己的 MD5，密文是 URL 安全的 base64
+  static func decrypt(_ text: String, key: String, iv: String) throws -> String {
+    var base64 = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "-", with: "+")
+      .replacingOccurrences(of: "_", with: "/")
+    if base64.count % 4 != 0 {
+      base64 += String(repeating: "=", count: 4 - base64.count % 4)
+    }
+    let keyBytes = Data(Insecure.MD5.hash(data: Data(key.utf8)))
+    let ivBytes = Data(Insecure.MD5.hash(data: Data(iv.utf8)))
+    guard let cipher = Data(base64Encoded: base64) else { throw undecryptable }
+    var plain = Data(count: cipher.count + kCCBlockSizeAES128)
+    let room = plain.count
+    var moved = 0
+    // 四层 withUnsafe… 是 CCCrypt 要裸指针；用不了 CryptoKit 的 AES（它只有 GCM，没有 CBC）
+    let status = plain.withUnsafeMutableBytes { output in
+      cipher.withUnsafeBytes { input in
+        keyBytes.withUnsafeBytes { keyBuffer in
+          ivBytes.withUnsafeBytes { ivBuffer in
+            CCCrypt(
+              CCOperation(kCCDecrypt), CCAlgorithm(kCCAlgorithmAES),
+              CCOptions(kCCOptionPKCS7Padding),
+              keyBuffer.baseAddress, kCCKeySizeAES128, ivBuffer.baseAddress,
+              input.baseAddress, cipher.count, output.baseAddress, room, &moved)
+          }
+        }
+      }
+    }
+    guard status == kCCSuccess, let text = String(data: plain.prefix(moved), encoding: .utf8) else {
+      throw undecryptable
+    }
+    return text
+  }
+
+  static let undecryptable = TranslateError(message: "有道翻译（网页版）的响应解不开")
 }
 
 nonisolated enum Google {
