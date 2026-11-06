@@ -71,7 +71,7 @@ struct TranslateServiceDetail: View {
         options(service)
         if current.kind == .ai { modelRow(service) }
       }
-      // 系统翻译、有道词典不用密钥
+      // 系统翻译、有道词典、有道网页版不用密钥：没有字段就整段不出现（不然只剩一个空的「密钥」标题）
       if !current.secretFields.isEmpty {
         Section {
           ForEach(current.secretFields, id: \.name) { field in
@@ -308,6 +308,7 @@ extension TranslateService {
       case .microsoft: (secret("subscriptionKey") == nil ? "免费 Edge 接口" : "Azure 翻译", false)
       case .apple: AppleTranslation.isAvailable ? ("离线 · 本机翻译", false) : ("要 macOS 26", true)
       case .youdaoDict: ("免费 · 只查单词", false)
+      case .youdaoWeb: ("免费的网页版接口", false)
       default:
         secretFields.allSatisfy { secret($0.name) != nil } ? ("已填密钥", false) : ("未填密钥", true)
       }

@@ -70,11 +70,12 @@ struct ProviderSigningTests {
     #expect(TranslateServiceStore.defaults.map(\.isEnabled) == [true])
     let ai = TranslateService.newAI()
     let store = TranslateServiceStore(services: [.builtin(.baidu), ai])
-    #expect(store.services.map(\.id) == ["baidu", ai.id])  // 不再自动补齐 8 个内置
-    // 9 个没加的内置（系统翻译只在 macOS 26 起列出来，2026-11-05）
+    #expect(store.services.map(\.id) == ["baidu", ai.id])  // 不再自动补齐 10 个内置
+    // 10 个没加的内置（系统翻译只在 macOS 26 起列出来，2026-11-05；有道网页版在「+」里）
     #expect(
-      store.missingBuiltins.count == (AppleTranslation.isAvailable ? 9 : 8)
+      store.missingBuiltins.count == (AppleTranslation.isAvailable ? 10 : 9)
         && !store.missingBuiltins.contains(.baidu))
+    #expect(store.missingBuiltins.contains(.youdaoWeb))
     #expect(!store.missingBuiltins.contains(.ai))
     // 传进来的列表怎么改都不写用户的偏好（详情页的输入框会把绑定写一遍，曾经这样盖掉过 Dev 版的真实列表）
     let saved = UserDefaults.standard.data(forKey: "translateServices")
@@ -131,5 +132,55 @@ struct ProviderSigningTests {
     // 缺密钥、HTTP 401 / 404 也是配置类；网络错误、5xx 不是
     #expect(TranslateError.config("x").kind == .config)
     #expect((HTTP.userFacing(URLError(.timedOut)) as? TranslateError)?.kind == .network)
+  }
+
+  /// 有道网页版：签名 = md5("client=…&mysticTime=…&product=…&key=…")，两个期望值由独立的 Python 算出来
+  @Test func youdaoWebSignature() {
+    #expect(
+      YoudaoWeb.sign(timestamp: "1790000000000", key: "secretKeyExample")
+        == "97737c324cfb7f4947eb83b0b3c35c3f")
+    #expect(
+      YoudaoWeb.sign(timestamp: "1790000000000", key: "asdjnjfenknafdfsdfsd")
+        == "94ad77cacff276ad8b072f4e02e2c2ab")
+    #expect(YoudaoWeb.timestamp(Date(timeIntervalSince1970: 1_790_000_000)) == "1790000000000")
+  }
+
+  /// 响应是 URL 安全 base64 的 AES-128-CBC/PKCS7，key / IV 取 aesKey / aesIv 两个字符串自己的 MD5；
+  /// 这串密文是 openssl 用一个固定向量加密出来的，明文是一段真实的返回体
+  @Test func youdaoWebDecryptsResponse() throws {
+    let cipher =
+      "sWZ8ipGowiE4i-Ep2bje-cmWFA7z2XqBG0DkmG8Mzq5qf_9L2zR_uFUJ9Xhi2jB8z3xS908hdtAeUxsCeWlKrA=="
+    #expect(
+      try YoudaoWeb.decrypt(cipher, key: "kitty-test-key", iv: "kitty-test-iv")
+        == #"{"code":0,"translateResult":[[{"tgt":"你好"}]]}"#)
+    #expect(throws: TranslateError.self) {
+      try YoudaoWeb.decrypt("不是 base64", key: "kitty-test-key", iv: "kitty-test-iv")
+    }
+  }
+
+  /// 结果按「行 → 句」两层数组给，拼起来就是整段译文；code 不为 0 报错，50 是接口改版或风控
+  @Test func youdaoWebParsesResponse() throws {
+    let object: [String: Any] = [
+      "code": 0,
+      "translateResult": [
+        [["tgt": "你好"], ["tgt": "世界"]],
+        [["tgt": "第二行"]],
+      ],
+    ]
+    #expect(try YoudaoWeb.parse(object) == "你好世界第二行")
+    #expect(
+      YoudaoWeb.error(code: 50).message
+        == "有道翻译（网页版）拒绝了请求：接口可能已经改版，这个免费通道暂时不能用")
+    #expect(YoudaoWeb.error(code: 101).kind == .config)
+    #expect(YoudaoWeb.error(code: 999).message == "有道翻译（网页版）出错（错误码 999）")
+    #expect(throws: TranslateError.self) { try YoudaoWeb.parse(["code": 50]) }
+  }
+
+  /// 有道网页版不要密钥：没有密钥字段，状态里永不写「未填密钥」，加进列表时默认关着
+  @Test func youdaoWebNeedsNoSecret() {
+    let service = TranslateService.builtin(.youdaoWeb)
+    #expect(service.id == "youdaoWeb" && service.name == "有道翻译（网页版·免费）")
+    #expect(service.secretFields.isEmpty && !service.isEnabled && !service.isStreaming)
+    #expect(service.settingsStatus.text == "免费的网页版接口" && !service.settingsStatus.isProblem)
   }
 }
