@@ -117,8 +117,11 @@ struct ScreenshotSnapshotTests {
     let trays: [(String, Annotation.Tool, Annotation.Style)] = [
       ("tray-rectangle", .rectangle, .init(color: .pink, weight: .medium, option: 1)),
       ("tray-text", .text, .init(color: .red, weight: .large, option: 2)),
-      ("tray-mosaic", .mosaic, .init(weight: .small, option: 0)),
+      ("tray-mosaic", .mosaic, .init(weight: .small, option: 1)),
       ("tray-spotlight", .spotlight, .init(weight: .large)),
+      // 吸管取过色：预设色后面多一个取的颜色（亮着），最后是吸管
+      ("tray-custom", .rectangle, .init(color: .pink, custom: 0x7A5CFA)),
+      ("tray-arrow", .arrow, .init(color: .blue, option: 1)),
     ]
     for (name, tool, style) in trays {
       let h = adjust()
@@ -126,6 +129,8 @@ struct ScreenshotSnapshotTests {
       h.view.style = style
       h.view.tool = tool
       try shoot(h.window, name, crop: barsFrame(h))
+      try shootContent(
+        try #require(h.view.subviews.lazy.compactMap { $0 as? StyleBar }.first), name)
     }
 
     // 10 种标注（有 / 没有聚光灯各一张）
@@ -137,7 +142,7 @@ struct ScreenshotSnapshotTests {
       h.move(CGPoint(x: 1150, y: 760))
       try shoot(h.window, name)
     }
-    // 选中的矩形（虚线框 + 四角手柄）、选中的箭头（两端手柄，托盘显示它的颜色）
+    // 选中的矩形（虚线框 + 四角和边中点手柄）、选中的箭头（两端手柄，托盘显示它的颜色）
     for (name, shape, style) in [
       (
         "selected-rectangle",
@@ -183,6 +188,27 @@ struct ScreenshotSnapshotTests {
       h.view.annotations = Self.curved(tool)
       h.move(CGPoint(x: 1150, y: 760))
       try shoot(h.window, "curved-\(noun)s", crop: CGRect(x: 120, y: 150, width: 480, height: 300))
+      if tool == .arrow {
+        // 双头（拍板 O4）：同一组摆法全换成双头
+        h = capture()
+        h.view.select(selection)
+        h.view.annotations = Self.curved(tool).map {
+          var double = $0
+          double.style.option = 1
+          return double
+        }
+        h.move(CGPoint(x: 1150, y: 760))
+        try shoot(h.window, "double-arrows", crop: CGRect(x: 120, y: 150, width: 480, height: 300))
+        h = capture()
+        h.view.select(selection)
+        h.view.annotations = Self.extreme(tool).map {
+          var double = $0
+          double.style.option = 1
+          return double
+        }
+        h.move(CGPoint(x: 1150, y: 760))
+        try shoot(h.window, "double-arrows-extreme", crop: selection)
+      }
       // 弯到头的：手柄拖过尖端 / 尾端（沿弦停在 ¾ / ¼ 处）、贴着尖端的钩（箭头颈部不折）、弦很短的深 U、弯过后被拖短的
       h = capture()
       h.view.select(selection)
@@ -217,6 +243,32 @@ struct ScreenshotSnapshotTests {
     try shoot(
       h.window, "ratio-menu",
       crop: menu.frame.union(try #require(h.sizeField).frame).insetBy(dx: -40, dy: -30))
+    // 文字托盘的字号菜单（2026-11-12 拍板 A1），选中序号时托盘多一段编号（O2）
+    h = adjust()
+    h.move(CGPoint(x: 550, y: 400))
+    h.view.style = .init(color: .red, fontSize: 32)
+    h.view.tool = .text
+    let fontBar = try #require(h.view.subviews.lazy.compactMap { $0 as? StyleBar }.first)
+    let sizeButton = try #require(
+      Self.descendants(of: fontBar).compactMap { $0 as? NSButton }.first {
+        $0.accessibilityLabel() == "字号"
+      })
+    sizeButton.sendAction(sizeButton.action, to: sizeButton.target)
+    try shoot(
+      h.window, "font-menu",
+      crop: try #require(h.menu).frame.union(fontBar.frame).insetBy(dx: -30, dy: -30))
+    try shootContent(fontBar, "tray-text")
+    try shootContent(try #require(h.menu), "font-menu")
+    h = adjust()
+    let counter = Annotation(
+      shape: .counter(7, center: CGPoint(x: 500, y: 400)), style: .init(color: .blue))
+    h.view.annotations = [counter]
+    h.view.selectedAnnotation = counter.id
+    h.move(CGPoint(x: 1150, y: 760))
+    try shoot(h.window, "tray-counter-selected", crop: barsFrame(h))
+    try shootContent(
+      try #require(h.view.subviews.lazy.compactMap { $0 as? StyleBar }.first),
+      "tray-counter-selected")
     h = adjust()
     let caret = try #require(h.toolbar?.button(for: .saveMenu))
     caret.sendAction(caret.action, to: caret.target)
@@ -913,6 +965,11 @@ struct ScreenshotSnapshotTests {
     ]
   }
 
+  /// view 底下所有的子视图（深度优先）
+  static func descendants(of view: NSView) -> [NSView] {
+    view.subviews.flatMap { [$0] + descendants(of: $0) }
+  }
+
   /// 工具栏 + 样式托盘（+ 开着的菜单）外扩 24
   private func barsFrame(_ h: Harness) -> CGRect {
     let bars = h.view.subviews.filter {
@@ -1015,8 +1072,30 @@ struct ScreenshotSnapshotTests {
     return window
   }
 
+  /// 只画栏里的内容（按钮、字），垫一块 HUD 深底：macOS 26 起样式托盘、HUD 菜单单独的玻璃在屏外画成一块白，
+  /// 看不到里面排成什么样（工具栏两段在玻璃容器里，不受影响）。要在 shoot 之后调（窗口显示过，图层才有内容）
+  private func shootContent(_ bar: HUDBar, _ name: String) throws {
+    let out = try #require(Self.directory)
+    let size = bar.bounds.size
+    let scale: CGFloat = 2
+    let bitmap = try #require(
+      NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale),
+        pixelsHigh: Int(size.height * scale), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+        isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+    let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap)).cgContext
+    context.scaleBy(x: scale, y: scale)
+    context.setFillColor(gray: 0.12, alpha: 1)
+    context.fill(CGRect(origin: .zero, size: size))
+    let origin = bar.effect.convert(CGPoint.zero, to: bar)
+    context.translateBy(x: origin.x, y: origin.y)
+    try #require(bar.effect.layer).render(in: context)
+    try write(try #require(bitmap.cgImage), to: "\(out)/shot-\(name)-content.png")
+  }
+
   /// 同 SnapshotProbeTests.renderLayers：屏外窗口显示一下、跑几轮 RunLoop，再按 2x 渲染内容视图的图层
   /// （cacheDisplay 画不出直接加的子图层）。prepare 在布局之后跑；crop（点，视图坐标）另存一张局部
+
   private func shoot(
     _ window: NSWindow, _ name: String, dark: Bool = false, crop: CGRect? = nil,
     prepare: () -> Void = {}

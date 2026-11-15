@@ -5,6 +5,7 @@
 // 弧线（远处先按外框排除）、沿弧线画；箭头颈部不折、拖短了照样沿弧线画且都在外框里，直箭头的七边形、直线的像素都不变。
 
 import AppKit
+import CoreImage
 import Foundation
 import Testing
 
@@ -31,7 +32,13 @@ struct AnnotationToolTests {
     #expect(Annotation.Tool.allCases.filter { !$0.isDragDrawn } == [.text, .counter])
     #expect(Annotation.Tool.text.optionTitles == ["无底", "描边", "底色"])
     #expect(Annotation.Tool.mosaic.optionTitles == ["像素", "模糊"])
-    #expect(Annotation.Tool.arrow.optionTitles.isEmpty)
+    #expect(
+      Annotation.Tool.mosaic.optionOrder == [1, 0] && Annotation.Tool.text.optionOrder == [0, 1, 2])
+    #expect(
+      Annotation.Tool.mosaic.title == "打码"
+        && Annotation.Tool.mosaic.weightTitles == ["弱", "中", "强"])
+    #expect(Annotation.Tool.arrow.optionTitles == ["单头", "双头"])
+    #expect(Annotation.Tool.line.optionTitles.isEmpty)
     #expect(Annotation.Palette.allCases.first == .pink && Annotation.Palette.allCases.count == 8)
   }
 
@@ -83,6 +90,16 @@ struct AnnotationToolTests {
         == .mosaic(CGRect(x: 10, y: -5, width: 30, height: 15)))
     #expect(
       Annotation.shape(for: .pen, from: start, to: end, constrained: true) == .pen([start, end]))
+    // ⌥：矩形类以起点为中心（拍板 B3），线类不管它
+    #expect(
+      Annotation.shape(for: .ellipse, from: start, to: end, constrained: false, fromCenter: true)
+        == .ellipse(CGRect(x: -20, y: -5, width: 60, height: 30)))
+    #expect(
+      Annotation.shape(for: .rectangle, from: start, to: end, constrained: true, fromCenter: true)
+        == .rectangle(CGRect(x: -20, y: -20, width: 60, height: 60)))
+    #expect(
+      Annotation.shape(for: .arrow, from: start, to: end, constrained: false, fromCenter: true)
+        == Annotation.shape(for: .arrow, from: start, to: end, constrained: false))
     // 线类 ⇧ 吸 45°，长度不变
     for tool in [Annotation.Tool.line, .highlighter] {
       guard
@@ -131,14 +148,136 @@ struct AnnotationToolTests {
     #expect(!Annotation(shape: .line(from: .zero, to: CGPoint(x: 3, y: 3))).isMeaningful)
   }
 
+  // 字号（2026-11-12 拍板 A1–A3）：档位、换档、旧数据没有字号时按三档；别的工具滚轮换三档（O1）
+  @Test func fontSizesAndSteps() throws {
+    var style = Annotation.Style()
+    #expect(style.textSize == 20 && Annotation.Style(weight: .large).textSize == 28)
+    #expect(style.stepped(1, for: .text).fontSize == 24)
+    #expect(style.stepped(-1, for: .text).fontSize == 16)
+    // 旧的「大」28 不在档位上：往上 32、往下 24
+    let old = Annotation.Style(weight: .large)
+    #expect(old.stepped(1, for: .text).fontSize == 32 && old.stepped(-1, for: .text).fontSize == 24)
+    style.fontSize = 72
+    #expect(style.stepped(1, for: .text).fontSize == 72)
+    style.fontSize = 12
+    #expect(style.stepped(-1, for: .text).fontSize == 12)
+    #expect(Annotation.Style().stepped(1, for: .rectangle).weight == .large)
+    #expect(Annotation.Style(weight: .large).stepped(3, for: .mosaic).weight == .large)
+    #expect(Annotation.Style(weight: .small).stepped(-1, for: .spotlight).weight == .small)
+    #expect(Annotation.Style().stepped(1, for: .rectangle).fontSize == nil)
+    // 截图历史、记住的样式里没有 fontSize 的旧 JSON 照常读；字号跟着标注存
+    let legacy = try JSONDecoder().decode(
+      Annotation.Style.self, from: Data(#"{"color":2,"weight":2,"option":1}"#.utf8))
+    #expect(legacy == Annotation.Style(color: .orange, weight: .large, option: 1))
+    let sized = Annotation(
+      shape: .text("字", origin: .zero), style: Annotation.Style(fontSize: 40))
+    #expect(try JSONDecoder().decode(Annotation.self, from: JSONEncoder().encode(sized)) == sized)
+    #expect(
+      sized.bounds.height > Annotation(shape: .text("字", origin: .zero)).bounds.height + 15)
+  }
+
+  // 双头箭头（拍板 O4）：两头都有箭头、杆一样粗；直的、弯的都是。单头的尾巴那头只有细杆
+  @Test func doubleArrows() throws {
+    let from = CGPoint(x: 10, y: 50)
+    let to = CGPoint(x: 90, y: 50)
+    let nearTail = CGPoint(x: 22, y: 54)  // 尾端往里 12、往上 4 点：单头的杆只有 0.3 × 线宽，双头那里是箭头
+    let single = try #require(Annotation.arrowInk(from: from, to: to, width: 4, double: false))
+    let double = try #require(Annotation.arrowInk(from: from, to: to, width: 4, double: true))
+    #expect(!single.contains(nearTail) && double.contains(nearTail))
+    #expect(double.contains(CGPoint(x: 78, y: 54)))  // 尖端那头照样是箭头
+    #expect(double.contains(CGPoint(x: 50, y: 52)))  // 中间的杆不收细：1.2 × 线宽，半宽 2.4
+    // 两头的尖是尖的：杆停在底边，不从尖上露出来（评审抓到的平头）
+    #expect(
+      !double.contains(CGPoint(x: 10.5, y: 51.5)) && !double.contains(CGPoint(x: 89.5, y: 51.5)))
+    // 很短的（12 点、线宽 4）：两头各占一半，合成菱形，中间最宽（不是中间细成一点的蝴蝶结）
+    let short = try #require(
+      Annotation.arrowInk(from: .zero, to: CGPoint(x: 12, y: 0), width: 4, double: true))
+    #expect(short.contains(CGPoint(x: 6, y: 2.5)))
+    let bend = CGVector(dx: 0, dy: 0.3)
+    let curved = try #require(
+      Annotation.arrowInk(from: from, to: to, width: 4, bend: bend, double: true))
+    let mid = Annotation.curveMidpoint(from: from, to: to, bend: bend)
+    #expect(curved.contains(mid))
+    // 点中：按两半各问
+    var style = Annotation.Style()
+    style.option = 1
+    let arrow = Annotation(shape: .arrow(from: from, to: to), style: style)
+    #expect(arrow.contains(nearTail, tolerance: 0))
+    #expect(!Annotation(shape: .arrow(from: from, to: to)).contains(nearTail, tolerance: 0))
+  }
+
+  // 吸管取的颜色（拍板 O10）：画出来就是它，底色上的字按亮度，旧数据没有它照常读
+  @Test func customColors() throws {
+    var style = Annotation.Style(color: .blue)
+    #expect(style.paint == Annotation.Palette.blue.color && style.custom == nil)
+    style.custom = 0x112233
+    #expect(style.paint == Annotation.Palette.srgb(0x112233))
+    #expect(style.ink == .white && !style.outlinesDark)
+    style.custom = 0xF0F0E0
+    #expect(style.ink == .black && style.outlinesDark)
+    #expect(
+      Annotation.Style(color: .white).outlinesDark && Annotation.Style(color: .yellow).ink == .black
+    )
+    let roundTrip = try JSONDecoder().decode(
+      Annotation.Style.self, from: JSONEncoder().encode(style))
+    #expect(roundTrip == style)
+    // 实心矩形的底色是取的颜色
+    let white = try ScreenshotTests.image(size: 100) { context in
+      context.setFillColor(CGColor(gray: 1, alpha: 1))
+      context.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
+    }
+    let box = Annotation(
+      shape: .rectangle(CGRect(x: 20, y: 20, width: 60, height: 60)),
+      style: .init(weight: .large, custom: 0x00C000))
+    let pixel = try draw([box], over: white)
+    let edge = pixel(20, 50)
+    #expect(edge[1] > 150 && edge[0] < 40 && edge[2] < 40, "\(edge)")
+  }
+
+  // 序号拖角改大小（2026-11-12 用户反馈）：圆心不动、直径跟着角走、夹在 14–160；滚轮按 1.25 倍；点三档清掉
+  @Test func counterResizesByCorners() throws {
+    let counter = Annotation(shape: .counter(3, center: CGPoint(x: 100, y: 100)))
+    let corners = Dictionary(uniqueKeysWithValues: counter.handles.map { ($0.0, $0.1) })
+    #expect(corners[.topRight] == CGPoint(x: 113, y: 113))  // 中号直径 26
+    let grown = counter.resized(.topRight, to: CGPoint(x: 130, y: 120), constrained: false)
+    #expect(grown.style.diameter == 60 && grown.shape == counter.shape && grown.id == counter.id)
+    #expect(grown.bounds.width == 62)  // 白描边一半在圆外
+    #expect(grown.contains(CGPoint(x: 100, y: 128)))
+    #expect(
+      counter.resized(.bottomLeft, to: CGPoint(x: 99, y: 99), constrained: false).style.diameter
+        == 14)
+    #expect(
+      counter.resized(.topLeft, to: CGPoint(x: -500, y: 100), constrained: false).style.diameter
+        == 160)
+    #expect(counter.resized(.top, to: .zero, constrained: false) == counter)  // 没有边中点
+    #expect(grown.style.stepped(1, for: .counter).diameter == 75)
+    #expect(Annotation.Style().stepped(1, for: .counter).diameter == nil)  // 没改过的照旧换三档
+    let legacy = try JSONDecoder().decode(
+      Annotation.Style.self, from: Data(#"{"color":0,"weight":1,"option":0}"#.utf8))
+    #expect(legacy.diameter == nil && legacy.counterDiameter == 26)
+  }
+
+  // 序号改编号（拍板 O2）：1–99，别的工具不动
+  @Test func counterRenumber() {
+    let counter = Annotation(shape: .counter(3, center: .zero))
+    #expect(counter.renumbered(5).shape == .counter(5, center: .zero))
+    #expect(counter.renumbered(5).id == counter.id)
+    #expect(counter.renumbered(0).shape == .counter(1, center: .zero))
+    #expect(counter.renumbered(120).shape == .counter(99, center: .zero))
+    let box = Annotation(shape: .rectangle(CGRect(x: 0, y: 0, width: 9, height: 9)))
+    #expect(box.renumbered(4) == box)
+  }
+
   @Test func handlesAndResize() {
     let rect = CGRect(x: 10, y: 20, width: 40, height: 30)
     let box = Annotation(shape: .rectangle(rect))
     let corners = Dictionary(uniqueKeysWithValues: box.handles.map { ($0.0, $0.1) })
     #expect(
       corners[.topLeft] == CGPoint(x: 10, y: 50) && corners[.bottomRight] == CGPoint(x: 50, y: 20))
-    #expect(corners.count == 4)
-    // 拖左上角：右下角不动；拖过头翻过去；⇧ 正方形
+    // 四角 + 四条边的中点（2026-11-12 拍板 B1）
+    #expect(corners.count == 8)
+    #expect(corners[.top] == CGPoint(x: 30, y: 50) && corners[.right] == CGPoint(x: 50, y: 35))
+    // 拖左上角：右下角不动；拖过头翻过去；⇧ 保持原来的长宽比（B2：40 × 30 拉到宽 60 → 高 45）
     let grown = box.resized(.topLeft, to: CGPoint(x: 0, y: 60), constrained: false)
     #expect(
       grown.id == box.id && grown.shape == .rectangle(CGRect(x: 0, y: 20, width: 50, height: 40)))
@@ -147,7 +286,32 @@ struct AnnotationToolTests {
         == .rectangle(CGRect(x: 50, y: 10, width: 10, height: 10)))
     #expect(
       box.resized(.bottomRight, to: CGPoint(x: 70, y: 40), constrained: true).shape
-        == .rectangle(CGRect(x: 10, y: -10, width: 60, height: 60)))
+        == .rectangle(CGRect(x: 10, y: 5, width: 60, height: 45)))
+    // 边中点只动那条边，⇧ 不管；拖过对边翻过去
+    #expect(
+      box.resized(.right, to: CGPoint(x: 90, y: 999), constrained: true).shape
+        == .rectangle(CGRect(x: 10, y: 20, width: 80, height: 30)))
+    #expect(
+      box.resized(.top, to: CGPoint(x: -5, y: 0), constrained: false).shape
+        == .rectangle(CGRect(x: 10, y: 0, width: 40, height: 20)))
+    // ⌥：中心不动，对边反向一起动（B3）
+    #expect(
+      box.resized(.right, to: CGPoint(x: 60, y: 35), constrained: false, fromCenter: true).shape
+        == .rectangle(CGRect(x: 0, y: 20, width: 60, height: 30)))
+    #expect(
+      box.resized(.topRight, to: CGPoint(x: 70, y: 35), constrained: true, fromCenter: true).shape
+        == .rectangle(CGRect(x: -10, y: 5, width: 80, height: 60)))
+    // 边短于 24 的不给那条边的中点；聚光灯、马赛克同矩形
+    let thin = Annotation(shape: .ellipse(CGRect(x: 0, y: 0, width: 100, height: 20))).handles
+    #expect(thin.map(\.0).contains(.top) && !thin.map(\.0).contains(.left))
+    #expect(Annotation(shape: .mosaic(rect)).handles.count == 8)
+    // 长图缩小着看（0.5 倍）：按屏幕上的边长算，40 × 30 只剩四角
+    #expect(box.handles(zoom: 0.5).count == 4)
+    #expect(
+      Annotation(shape: .spotlight(rect)).resized(
+        .bottom, to: CGPoint(x: 0, y: 0), constrained: false
+      )
+      .shape == .spotlight(CGRect(x: 10, y: 0, width: 40, height: 50)))
     #expect(box.resized(.start, to: .zero, constrained: false) == box)
     // 线类两端：另一端不动，⇧ 吸 45°；箭头、直线还有弧线中点的弯曲手柄（直的在弦中点），荧光笔没有
     let arrow = Annotation(shape: .arrow(from: .zero, to: CGPoint(x: 100, y: 0)))
@@ -171,7 +335,7 @@ struct AnnotationToolTests {
     #expect(box.resized(.bend, to: .zero, constrained: false) == box)
     // 文字、序号、画笔只能拖动
     #expect(Annotation(shape: .text("字", origin: .zero)).handles.isEmpty)
-    #expect(Annotation(shape: .counter(1, center: .zero)).handles.isEmpty)
+    #expect(Annotation(shape: .counter(1, center: .zero)).handles.count == 4)
     #expect(Annotation(shape: .pen([.zero, CGPoint(x: 9, y: 9)])).handles.isEmpty)
   }
 
@@ -950,10 +1114,41 @@ struct AnnotationToolTests {
     let pixelData = try #require(pixelated.dataProvider?.data as Data?)
     let blurData = try #require(blurred.dataProvider?.data as Data?)
     #expect(pixelData != blurData)
-    // 模糊也得认不出原来的字（打码的本意）
+    // 模糊是平滑的（2026-11-12 拍板 C2：先缩小再高斯）：同一行相邻像素不会有像素块那样的硬台阶
+    func steepest(_ image: CGImage, _ data: Data) -> Int {
+      let row = image.height / 2 * image.bytesPerRow
+      return (0..<(image.width - 1)).map { x in
+        abs(Int(data[row + x * 4 + 1]) - Int(data[row + (x + 1) * 4 + 1]))
+      }.max() ?? 0
+    }
+    #expect(steepest(blurred, blurData) < 24 && steepest(pixelated, pixelData) > 40)
+    // 三档模糊都得认不出原来的字（打码的本意；弱档也要，拍板 C3）
+    for weight in Annotation.Weight.allCases {
+      blur.weight = weight
+      let masked = try #require(
+        Annotation.render(
+          [Annotation(shape: .mosaic(CGRect(origin: .zero, size: viewSize)), style: blur)],
+          over: image, pixelRect: full, viewSize: viewSize))
+      let text = await OCR.recognizeLines(in: masked).map { OCR.text($0, joined: false) } ?? ""
+      #expect(!text.contains("Secret") && !text.contains("12345"), "\(weight)：\(text)")
+      // 反锐化 + 提对比度之后也认不出（评审的还原手法：格子太细时 28 pt 的字弱档能认回大半）
+      let input = CIImage(cgImage: masked)
+      let sharpened = input.clampedToExtent()
+        .applyingFilter(
+          "CIUnsharpMask",
+          parameters: ["inputRadius": weight.blurRadius, "inputIntensity": 3.0]
+        )
+        .cropped(to: input.extent)
+        .applyingFilter("CIColorControls", parameters: ["inputContrast": 2.5])
+      let attacked = try #require(CIContext().createCGImage(sharpened, from: input.extent))
+      let recovered =
+        await OCR.recognizeLines(in: attacked).map { OCR.text($0, joined: false) } ?? ""
+      #expect(
+        !recovered.contains("Secret") && !recovered.contains("12345"), "锐化 \(weight)：\(recovered)")
+    }
     #expect(
-      await OCR.recognizeLines(in: blurred).map { OCR.text($0, joined: false) }?.contains("Secret")
-        == false)
+      Annotation.Style.remembered(for: .mosaic, in: UserDefaults(suiteName: "never-written")!)
+        .option == 1)
   }
 
   @Test func highlighterLooksTheSameOnScreenAndInExport() throws {
@@ -981,7 +1176,7 @@ struct AnnotationToolTests {
   @Test func textOptionsDrawOutlineAndPlate() throws {
     let white = try Self.solid(gray: 1)
     let origin = CGPoint(x: 20, y: 60)
-    let frame = Annotation.textFrame("字", origin: origin, weight: .medium)
+    let frame = Annotation.textFrame("字", origin: origin, size: 20)
     var plate = Annotation.Style(color: .blue)
     plate.option = 2
     let plated = try draw(

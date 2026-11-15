@@ -522,6 +522,7 @@ struct SnapshotProbeTests {
         AnyView(
           GeneralTab(
             transfer: SettingsTransfer(services: services, clipboard: store, history: history)))
+      case .island: AnyView(IslandTab())
       case .clipboard: AnyView(ClipboardTab(store: store))
       case .launcher: AnyView(LauncherTab())
       case .launchpad: AnyView(LaunchpadTab())
@@ -619,6 +620,18 @@ struct SnapshotProbeTests {
       try snapshot(
         RecordTab().defaultAppStorage(recordPrefs), size: NSSize(width: 640, height: 860),
         dark: dark, to: "\(out)/settings-record-default\(dark ? "-dark" : "").png")
+    }
+    // 设置 › 刘海岛（PR #17）排过先后、关掉一个、不列提示；临时偏好域（功能关着的那几行变灰跟着本机的功能开关）
+    let islandSuite = "kitty-snapshot-\(UUID().uuidString)"
+    let islandPrefs = try #require(UserDefaults(suiteName: islandSuite))
+    defer { islandPrefs.removePersistentDomain(forName: islandSuite) }
+    islandPrefs.set("noteCapture\nscreenshot", forKey: Prefs.islandActionOrder)
+    islandPrefs.set("recognizeText", forKey: Prefs.islandActionsOff)
+    islandPrefs.set(true, forKey: Prefs.islandShowsHistory)
+    for dark in [false, true] {
+      try snapshot(
+        IslandTab().defaultAppStorage(islandPrefs), size: NSSize(width: 640, height: 1400),
+        dark: dark, to: "\(out)/settings-island-custom\(dark ? "-dark" : "").png")
     }
     // 设置 › 通用「菜单栏」（第 9 批 M1 M2）：显示 + 彩色、隐藏（图标样式置灰），各出深色；临时偏好域，不动用户的菜单栏图标
     let barSuite = "kitty-snapshot-\(UUID().uuidString)"
@@ -1027,9 +1040,237 @@ struct SnapshotProbeTests {
         IslandView(island: island), size: geometry.windowSize, dark: false,
         to: "\(out)/\(name).png")
     }
+    // 设置 › 刘海岛 里不列最近的提示（PR #17）：只有快捷动作；快捷动作也都关了就一句话
+    for (name, actions) in [("island-board-no-history", quick), ("island-board-nothing", [])] {
+      let island = Island(
+        showing: nil, geometry: notch, board: records, quickActions: actions, showsHistory: false)
+      try snapshot(
+        IslandView(island: island), size: notch.windowSize, dark: false, to: "\(out)/\(name).png")
+    }
+    // 那一张上的月历（设置里打开时）：有今天的日程 / 没有日程 / 没有「日历」授权、同时列着最近的提示。日子定死
+    do {
+      let day = try #require(
+        Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 14, hour: 9)))
+      let busy = Island.Agenda(
+        items: [
+          Island.AgendaItem(id: "1", title: "周会", time: "10:30"),
+          Island.AgendaItem(id: "2", title: "和供应商对一下第四季度的排期和报价", time: "14:00"),
+          Island.AgendaItem(id: "3", title: "牙医", time: "18:30"),
+        ], more: 2)
+      let cases: [(String, Island.Agenda?, Bool)] = [
+        ("island-board-calendar", busy, false),
+        ("island-board-calendar-empty", Island.Agenda(items: []), false),
+        ("island-board-calendar-history", nil, true),
+      ]
+      for (name, agenda, history) in cases {
+        let island = Island(
+          showing: nil, geometry: notch, board: records, quickActions: quick,
+          showsHistory: history, calendarDay: day, agenda: agenda)
+        try snapshot(
+          IslandView(island: island), size: notch.windowSize, dark: false,
+          to: "\(out)/\(name).png")
+      }
+    }
     try snapshot(
       IslandView(island: Island(showing: nil, geometry: notch, peeking: true)),
       size: notch.windowSize, dark: false, to: "\(out)/island-peek.png")
+    // 活动（刘海岛扩展 B1–B3）：耳朵上的录屏计时、长任务一圈进度、指针停在耳朵上鼓起、点耳朵展开的卡片
+    let recording = Island.Activity(
+      id: "record", kind: .record, title: "录屏中", symbol: "record.circle.fill", tone: .error,
+      trailing: .elapsed(since: .now.addingTimeInterval(-42)),
+      actions: [Island.Action("停止") {}, Island.Action("暂停") {}])
+    let compressing = Island.Activity(
+      id: "compress", kind: .progress, title: "正在压缩", detail: "录屏 2026-11-13 14.32.08.mov",
+      symbol: "film", trailing: .fraction(0.37), actions: [Island.Action("停止") {}])
+    let wingStates: [(String, [Island.Activity], Bool)] = [
+      ("island-wings-record", [recording], false), ("island-wings-progress", [compressing], false),
+      ("island-wings-peek", [recording, compressing], true),
+    ]
+    for (name, list, peeking) in wingStates {
+      try snapshot(
+        IslandView(
+          island: Island(showing: nil, geometry: notch, peeking: peeking, activities: list)),
+        size: notch.windowSize, dark: false, to: "\(out)/\(name).png")
+    }
+    let card = Island(showing: nil, geometry: notch, activities: [recording, compressing])
+    card.tapped()
+    try snapshot(
+      IslandView(island: card), size: notch.windowSize, dark: false,
+      to: "\(out)/island-wings-card.png")
+    // 正在播放（刘海岛扩展第 2 期）：耳朵上的封面 + 跳动条（在播 / 暂停）、点耳朵的播放卡片（有封面 / 没有封面也没有 App 图标）、
+    // 封面是画出来的一块渐变，不读用户的东西
+    let cover = NSImage(size: NSSize(width: 256, height: 256), flipped: false) { rect in
+      NSGradient(colors: [.systemPink, .systemOrange])?.draw(in: rect, angle: 45)
+      return true
+    }
+    func media(
+      playing: Bool, artwork: NSImage?, canSeek: Bool = true, canSkip: Bool = true,
+      modes: Bool = false
+    ) -> Island.Activity {
+      let snapshot = NowPlayingSnapshot(
+        bundleID: "com.apple.Music", parentBundleID: nil, appName: "音乐",
+        title: "Right Now (Na Na Na)", artist: "Akon", album: "Freedom", duration: 240,
+        elapsed: 84, timestamp: .now, rate: playing ? 1 : 0, isPlaying: playing,
+        canPrevious: canSkip, canNext: canSkip && playing, canSeek: canSeek,
+        shuffle: modes ? 3 : nil, repeatMode: modes ? 1 : nil,
+        artworkID: artwork == nil ? nil : "a", artwork: nil)
+      return Island.Activity(
+        id: NowPlaying.activityID, kind: .media, title: snapshot.title, detail: snapshot.artist,
+        symbol: "music.note",
+        media: Island.Media(
+          snapshot: snapshot, artwork: artwork, tint: artwork.flatMap(ArtworkTint.color(of:)),
+          appIcon: nil, send: { _ in }, seek: { _ in }, open: {}))
+    }
+    for (name, playing) in [("island-wings-media", true), ("island-wings-media-paused", false)] {
+      try snapshot(
+        IslandView(
+          island: Island(
+            showing: nil, geometry: notch, activities: [media(playing: playing, artwork: cover)])),
+        size: notch.windowSize, dark: false, to: "\(out)/\(name).png")
+    }
+    for (name, art) in [("island-media-card", cover), ("island-media-card-bare", nil)] {
+      let island = Island(
+        showing: nil, geometry: notch, activities: [media(playing: art != nil, artwork: art)])
+      island.tapped()
+      try snapshot(
+        IslandView(island: island), size: notch.windowSize, dark: false, to: "\(out)/\(name).png")
+    }
+    // 按音量键 / 亮度键时的那一行：音量 62%、静音、亮度 30%
+    for (name, level) in [
+      ("island-level-volume", Island.Level(kind: .volume, fraction: 0.625)),
+      ("island-level-muted", Island.Level(kind: .volume, fraction: 0.625, muted: true)),
+      ("island-level-brightness", Island.Level(kind: .brightness, fraction: 0.3125)),
+      // 耳机连上：电量还没读到、读到了、快没电
+      (
+        "island-level-device-pending",
+        Island.Level(kind: .device, fraction: -1, label: "AirPods Pro", glyph: "airpodspro")
+      ),
+      (
+        "island-level-device",
+        Island.Level(kind: .device, fraction: 0.85, label: "AirPods Pro", glyph: "airpodspro")
+      ),
+      (
+        "island-level-device-low",
+        Island.Level(
+          kind: .device, fraction: 0.15, label: "WH-1000XM5", glyph: "headphones", tone: .low)
+      ),
+      // 电源：充电中、拔掉、电量低
+      ("island-level-power", SystemNotices.powerLevel(plugged: true, percent: 99, low: false)),
+      (
+        "island-level-power-unplugged",
+        SystemNotices.powerLevel(plugged: false, percent: 64, low: false)
+      ),
+      ("island-level-power-low", SystemNotices.powerLevel(plugged: false, percent: 9, low: true)),
+    ] {
+      let island = Island(showing: nil, geometry: notch)
+      island.showLevel(level)
+      try snapshot(
+        IslandView(island: island), size: notch.windowSize, dark: false,
+        to: "\(out)/\(name).png")
+    }
+    // 没有刘海的屏上还是一行（符号 · 细条 · 百分比）
+    do {
+      let capsule = Island.Geometry.capsule(menuBar: 24)
+      let island = Island(showing: nil, geometry: capsule)
+      island.showLevel(Island.Level(kind: .volume, fraction: 0.625))
+      try snapshot(
+        IslandView(island: island), size: capsule.windowSize, dark: false,
+        to: "\(out)/island-level-capsule.png")
+      let device = Island(showing: nil, geometry: capsule)
+      device.showLevel(
+        Island.Level(kind: .device, fraction: 0.85, label: "AirPods Pro", glyph: "airpodspro"))
+      try snapshot(
+        IslandView(island: device), size: capsule.windowSize, dark: false,
+        to: "\(out)/island-level-device-capsule.png")
+    }
+    // 下一个日程：开始前 10 分钟挂在耳朵上倒数；点开是标题、时间地点、加入会议 / 打开日历
+    do {
+      let start = Date.now.addingTimeInterval(8 * 60 + 2)
+      let event = NextEvent.activity(
+        NextEvent.Entry(
+          id: "e", title: "周会", start: start, end: start.addingTimeInterval(1800),
+          location: "会议室 A", url: URL(string: "https://zoom.us/j/1")),
+        join: { _ in }, openCalendar: {})
+      try snapshot(
+        IslandView(island: Island(showing: nil, geometry: notch, activities: [event])),
+        size: notch.windowSize, dark: false, to: "\(out)/island-wings-event.png")
+      let island = Island(showing: nil, geometry: notch, activities: [event])
+      island.tapped()
+      try snapshot(
+        IslandView(island: island), size: notch.windowSize, dark: false,
+        to: "\(out)/island-event-card.png")
+    }
+    // 换歌的一瞥：耳朵不动，下面垂一行居中的「♪ 歌名 · 艺人」
+    do {
+      let island = Island(
+        showing: nil, geometry: notch, activities: [media(playing: true, artwork: cover)])
+      island.glance(
+        NowPlaying.activityID, title: "Right Now (Na Na Na)", detail: "Akon", symbol: "music.note",
+        leading: .thumbnail(cover))
+      try snapshot(
+        IslandView(island: island), size: notch.windowSize, dark: false,
+        to: "\(out)/island-media-glance.png")
+    }
+    // 指针停在耳朵上：右耳的跳动条换成暂停符号
+    try snapshot(
+      IslandView(
+        island: Island(
+          showing: nil, geometry: notch, peeking: true,
+          activities: [media(playing: true, artwork: cover)])),
+      size: notch.windowSize, dark: false, to: "\(out)/island-wings-media-peek.png")
+    // 双指往右滑（上一首）：岛往左伸出一截，里面一个箭头
+    do {
+      var previous = media(playing: true, artwork: cover)
+      previous.media?.snapshot.canPrevious = true
+      let island = Island(showing: nil, geometry: notch, peeking: true, activities: [previous])
+      island.swipeTrack(forward: false)
+      try snapshot(
+        IslandView(island: island), size: notch.windowSize, dark: false,
+        to: "\(out)/island-wings-media-skip.png")
+    }
+    // 上一首 / 下一首都没有的源（单个视频）：两个按钮换成后退 / 前进 15 秒
+    do {
+      let island = Island(
+        showing: nil, geometry: notch,
+        activities: [media(playing: true, artwork: cover, canSkip: false)])
+      island.tapped()
+      try snapshot(
+        IslandView(island: island), size: notch.windowSize, dark: false,
+        to: "\(out)/island-media-card-jumps.png")
+    }
+    // 随机开着、循环关着：按钮行两头各一个小符号，开着的染封面的主色
+    do {
+      let island = Island(
+        showing: nil, geometry: notch,
+        activities: [media(playing: true, artwork: cover, modes: true)])
+      island.tapped()
+      try snapshot(
+        IslandView(island: island), size: notch.windowSize, dark: false,
+        to: "\(out)/island-media-card-modes.png")
+    }
+    // 输出音量的滑杆开着（60%）：进度那一行换成它，右上角的设备图标亮着
+    if let volume = media(playing: true, artwork: cover).media {
+      try snapshot(
+        IslandMediaCard(
+          island: Island(showing: nil, geometry: notch), media: volume, stagedVolume: 0.6
+        )
+        .background(.black)
+        .environment(\.colorScheme, .dark),
+        size: NSSize(width: 340, height: 134), dark: true,
+        to: "\(out)/island-media-card-volume.png")
+    }
+    // 进度条正拖着（拖到 2:30）：细条变粗、露出圆点、左边的时间是拖到的位置。卡片单独垫黑底出一张
+    if let scrubbing = media(playing: true, artwork: cover).media {
+      try snapshot(
+        IslandMediaCard(
+          island: Island(showing: nil, geometry: notch), media: scrubbing, staged: 150
+        )
+        .background(.black)
+        // 岛固定是深色：强调色按深色那一档取
+        .environment(\.colorScheme, .dark),
+        size: NSSize(width: 360, height: 158), dark: true,
+        to: "\(out)/island-media-card-scrub.png")
+    }
     // 黄色强调色：信息 / 进行中的底是强调色，上面的符号要换深色（Style.onBrand）才看得见——岛垫的圆底、自带圆底的各一张。
     // 只换内存里的颜色，不写偏好
     Accent.shared.select(.yellow, persists: false)
@@ -1451,12 +1692,11 @@ struct SnapshotProbeTests {
     try snapshot(
       root(list), size: NSSize(width: 780, height: 1000), dark: false,
       to: "\(out)/settings-status-hotkeys.png")
-    // 关于页的「未来计划」（2026-10-18）：品牌区下面、更新日志上面那一节，拉高看全（roadmap.json 空了时没有这一节：
-    // 2026-10-23 起都做完了，图里是品牌区接着更新日志）
+    // 关于页拉高看全：品牌区接着更新日志
     for dark in [false, true] {
       try snapshot(
         AboutTab(), size: NSSize(width: 590, height: 900), dark: dark,
-        to: "\(out)/settings-about-roadmap\(dark ? "-dark" : "").png")
+        to: "\(out)/settings-about-tall\(dark ? "-dark" : "").png")
     }
     // 关于页最底下那行素材出处：滚到底再拍
     for dark in [false, true] {
@@ -1479,8 +1719,9 @@ struct SnapshotProbeTests {
 
   /// 主界面（Shell/HomePanel.swift，2026-10-29 拍板）。单独一个测试函数，几秒：
   ///   -only-testing:'KittyToolsTests/SnapshotProbeTests/home()'
-  /// 面板的大小取模型算出来的（和真面板一样）。出：全开浅 / 深色（键盘选中「截图」、鼠标停在「启动器」上）、开关都开着
-  /// 而且在录屏、有钉图（深色）、关掉便签和录制（多一行「2 个功能关着 · 管理…」）、增强对比度（选中描边、发丝线）、
+  /// 面板的大小取模型算出来的（和真面板一样）。出：全开浅 / 深色（键盘选中「截图」、鼠标停在「启动器」上；插件收在最后
+  /// 一节）、新装默认的四个功能（没有「插件」一节，多一行「1 个功能关着 · 管理…」）、只添加了一个插件（「插件」一节里一格）、
+  /// 在录屏、有钉图（深色；两个开关开着也不占格子）、没添加便签、关掉录制、增强对比度（选中描边、发丝线）、
   /// 有新版本（底栏左边「更新到 x」，Updater 从环境给）
   @Test(.enabled(if: directory != nil)) func home() throws {
     let out = try #require(Self.directory)
@@ -1505,8 +1746,14 @@ struct SnapshotProbeTests {
     var state = LauncherItem.ActionState()
     state.features = all
     for dark in [false, true] {
-      let home = model(state, selection: 8, hovered: 1)
+      let home = model(state, selection: 6, hovered: 1)
       try shot("home\(dark ? "-dark" : "")", HomeView(model: home), home, dark: dark)
+    }
+    for (name, plugins) in [("home-default", Set<Feature>()), ("home-plugin-one", [.reminders])] {
+      var fresh = state
+      fresh.features = Feature.core.union(plugins)
+      let home = model(fresh, off: Home.offCount(enabled: fresh.features, available: all))
+      try shot(name, HomeView(model: home), home)
     }
     var busy = LauncherItem.ActionState(
       recordingPaused: true, copyToTranslate: true, pinsHidden: false, recording: .screenRecord)
@@ -4377,6 +4624,7 @@ struct SnapshotProbeTests {
       SettingsRoot(navigation: navigation) { page in
         switch page {
         case .clipboard: AnyView(ClipboardTab(store: store).defaultAppStorage(prefs))
+        case .island: AnyView(IslandTab().defaultAppStorage(prefs))
         case .launchpad: AnyView(LaunchpadTab().defaultAppStorage(prefs))
         default: AnyView(GeneralTab().defaultAppStorage(prefs))
         }
@@ -4406,6 +4654,35 @@ struct SnapshotProbeTests {
     try snapshot(
       root(), size: NSSize(width: 780, height: 1120), dark: false,
       to: "\(out)/features-launchpad-off.png")
+  }
+
+  /// 插件（2026-11-12）：设置 › 通用 › 功能 下面的插件卡片（没添加、添加了、启动器带过来时描着强调色那一圈，浅 / 深）、
+  /// 几秒，图以 plugins- 开头：-only-testing:'KittyToolsTests/SnapshotProbeTests/plugins()'。开关读临时偏好域
+  @Test(.enabled(if: directory != nil)) func plugins() throws {
+    let out = try #require(Self.directory)
+    try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+    Prefs.registerDefaults()
+    let name = "kitty-snapshot-plugins-\(UUID().uuidString)"
+    let prefs = try #require(UserDefaults(suiteName: name))
+    defer { prefs.removePersistentDomain(forName: name) }
+    let navigation = SettingsNavigation(defaults: nil)
+    func features() -> some View {
+      NavigationStack { FeaturesPage() }.environment(navigation).defaultAppStorage(prefs)
+    }
+    for dark in [false, true] {
+      try snapshot(
+        features(), size: NSSize(width: 600, height: 1000), dark: dark,
+        to: "\(out)/plugins-features\(dark ? "-dark" : "").png")
+    }
+    navigation.focusedPlugin = .finderMenu
+    try snapshot(
+      features(), size: NSSize(width: 600, height: 1000), dark: false,
+      to: "\(out)/plugins-features-focused.png")
+    navigation.focusedPlugin = nil
+    prefs.set(true, forKey: Feature.finderMenu.prefsKey)
+    try snapshot(
+      features(), size: NSSize(width: 600, height: 1000), dark: false,
+      to: "\(out)/plugins-features-added.png")
   }
 
   /// 新功能标记（Shell/WhatsNew.swift，2026-11-05）：设置窗停在通用页、提醒和「功能」那一节都标着（侧栏行尾的「新」、页里那一节
@@ -4527,6 +4804,54 @@ struct SnapshotProbeTests {
           section(prepare), size: size, dark: dark,
           to: "\(out)/sync-\(state)\(dark ? "-dark" : "").png")
       }
+    }
+    // 连 WebDAV 服务器（issue #18）：服务器那一行、还有几个没拿下来 / 没传上去、请求太多、密码不对；连接的表单
+    prefs.set(
+      "https://dav.example.com/dav/Kitty%20Tools%20%E5%90%8C%E6%AD%A5/", forKey: Prefs.syncServer)
+    prefs.set("kitty@example.com", forKey: Prefs.syncServerUser)
+    let pc = NoteSyncDisk.Peer(id: "3", name: "DESKTOP-KITTY", seen: now.addingTimeInterval(-90))
+    let servers: [(String, (NoteSyncer) -> Void)] = [
+      (
+        "server-idle",
+        {
+          $0.status = .idle
+          $0.lastSync = now.addingTimeInterval(-50)
+          $0.downloading = 5
+          $0.uploading = 2
+          $0.peers = [air, pc]
+        }
+      ),
+      (
+        "server-busy",
+        {
+          $0.status = .stopped(.busy(now.addingTimeInterval(600)))
+          $0.lastSync = now.addingTimeInterval(-900)
+          $0.peers = [pc]
+        }
+      ),
+      (
+        "server-failed",
+        {
+          $0.status = .stopped(.failed(WebDAV.Failure.unauthorized.message))
+          $0.lastSync = now.addingTimeInterval(-3600)
+          $0.peers = [pc]
+        }
+      ),
+    ]
+    for (state, prepare) in servers {
+      for dark in state == "server-idle" ? [false, true] : [false] {
+        try snapshot(
+          section(prepare), size: size, dark: dark,
+          to: "\(out)/sync-\(state)\(dark ? "-dark" : "").png")
+      }
+    }
+    prefs.removeObject(forKey: Prefs.syncServer)
+    prefs.removeObject(forKey: Prefs.syncServerUser)
+    for dark in [false, true] {
+      try snapshot(
+        SyncServerForm(syncer: NoteSyncer(store: store, defaults: prefs)) {},
+        size: NSSize(width: 460, height: 400), dark: dark,
+        to: "\(out)/sync-server-form\(dark ? "-dark" : "").png")
     }
     // 从只同步便签的版本升上来：新加的几类没勾、文件夹那一行多一句（第三轮体检 R1）
     prefs.removeObject(forKey: Prefs.syncSkipped)

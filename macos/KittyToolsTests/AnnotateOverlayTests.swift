@@ -131,7 +131,7 @@ struct AnnotateOverlayTests {
     let caret = try #require(bar.button(for: .saveMenu))
     #expect(caret.toolTip == ScreenshotOutput.saveTitle + " / 另存为…")
     caret.performClick(nil)
-    let menu = try #require(editor.saveMenu)
+    let menu = try #require(editor.menu)
     #expect(actions.isEmpty && !closed)
     func all(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + all($0) } }
     let rows = all(menu).filter { $0.accessibilityRole() == .button }
@@ -143,13 +143,13 @@ struct AnnotateOverlayTests {
         windowNumber: editor.panel.windowNumber, context: nil, characters: "\u{1b}",
         charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: UInt16(kVK_Escape)))
     editor.panel.sendEvent(escape)
-    #expect(editor.saveMenu == nil && menu.superview == nil)
+    #expect(editor.menu == nil && menu.superview == nil)
     #expect(actions.isEmpty && !closed)
     // 再点 ▾ 开、再点一下收
     caret.performClick(nil)
-    #expect(editor.saveMenu != nil)
+    #expect(editor.menu != nil)
     caret.performClick(nil)
-    #expect(editor.saveMenu == nil)
+    #expect(editor.menu == nil)
     // 点在暗底上：只收菜单，这一下吃掉
     caret.performClick(nil)
     let click = try #require(
@@ -158,12 +158,71 @@ struct AnnotateOverlayTests {
         windowNumber: editor.panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
         pressure: 1))
     #expect(editor.panel.intercept(click))
-    #expect(editor.saveMenu == nil && !closed)
+    #expect(editor.menu == nil && !closed)
     // 菜单里的「另存为…」
     caret.performClick(nil)
-    let again = try #require(editor.saveMenu)
+    let again = try #require(editor.menu)
     _ = all(again).filter { $0.accessibilityRole() == .button }.last?.accessibilityPerformPress()
     #expect(actions == [.saveAs] && closed)
+  }
+
+  /// 字号（2026-11-12 拍板 A1 A2）：输入时 ⌘= 换字号、不缩放，没在输入时 ⌘= 照旧缩放；托盘上点字号的数字开菜单，
+  /// 再点一下收起；存储菜单开着时点数字换成字号菜单，点托盘别处先收菜单
+  @Test func fontSizeKeysAndMenu() throws {
+    let editor = AnnotateOverlay(image: image(width: 400, height: 600), scale: 2) { _, _, _, _ in }
+    defer { editor.close() }
+    let content = try #require(editor.panel.contentView as? AnnotateOverlayView)
+    let scroll = try #require(content.subviews.compactMap { $0 as? NSScrollView }.first)
+    let canvas = try #require(scroll.documentView as? ScrollCanvas)
+    // 每次一个新的临时偏好域：记住的字号会留在域里，下次从 24 起就不对了
+    let suite = "font-size-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    canvas.styleDefaults = defaults
+    defer { defaults.removePersistentDomain(forName: suite) }
+    func commandEqual() throws -> NSEvent {
+      try #require(
+        NSEvent.keyEvent(
+          with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+          windowNumber: editor.panel.windowNumber, context: nil, characters: "=",
+          charactersIgnoringModifiers: "=", isARepeat: false, keyCode: UInt16(kVK_ANSI_Equal)))
+    }
+    canvas.choose(.text)
+    canvas.beginEditing(at: CGPoint(x: 40, y: 200))
+    let field = try #require(canvas.subviews.compactMap { $0 as? EditorField }.first)
+    let zoom = scroll.magnification
+    #expect(content.performKeyEquivalent(with: try commandEqual()))
+    #expect(field.font?.pointSize == 24 && scroll.magnification == zoom)
+    canvas.endEditing()
+    #expect(content.performKeyEquivalent(with: try commandEqual()))
+    #expect(scroll.magnification > zoom)
+    // 托盘上的字号数字（工具还是文字；再 choose(.text) 就收起了）
+    #expect(canvas.tool == .text)
+    func all(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + all($0) } }
+    let styleBar = try #require(content.subviews.compactMap { $0 as? StyleBar }.first)
+    let size = try #require(
+      all(styleBar).compactMap { $0 as? NSButton }.first { $0.accessibilityLabel() == "字号" })
+    size.performClick(nil)
+    #expect(editor.menu?.accessibilityLabel() == HUDMenu.fontMenuLabel)
+    size.performClick(nil)
+    #expect(editor.menu == nil)
+    let bar = try #require(content.subviews.compactMap { $0 as? EditorToolbar }.first)
+    try #require(bar.button(for: .saveMenu)).performClick(nil)
+    let center = size.convert(CGPoint(x: size.bounds.midX, y: size.bounds.midY), to: content)
+    func click(_ point: CGPoint) throws -> NSEvent {
+      try #require(
+        NSEvent.mouseEvent(
+          with: .leftMouseDown, location: content.convert(point, to: nil), modifierFlags: [],
+          timestamp: 0, windowNumber: editor.panel.windowNumber, context: nil, eventNumber: 0,
+          clickCount: 1, pressure: 1))
+    }
+    #expect(!editor.panel.intercept(try click(center)))  // 交给数字自己：换成字号菜单
+    size.performClick(nil)
+    #expect(editor.menu?.accessibilityLabel() == HUDMenu.fontMenuLabel)
+    // 托盘别处（左边的色点那头的边上）：先收菜单，这一下照常
+    #expect(
+      !editor.panel.intercept(
+        try click(CGPoint(x: styleBar.frame.minX + 2, y: styleBar.frame.midY))))
+    #expect(editor.menu == nil)
   }
 
   /// 输入文字时的编辑键交给输入框（第三轮体检 R5）：⌘S / ⌘C 不再出图关窗，⌘Z 撤的是框里打的字、不是整条标注
@@ -303,13 +362,13 @@ struct AnnotateOverlayTests {
     try drag(canvas, from: CGPoint(x: 60, y: 900), to: CGPoint(x: 260, y: 1000))
     try press(canvas, kVK_ANSI_1, "1")  // 收起工具，免得下一下又画一个
     let drawn = try #require(canvas.annotations.first)
-    // 空心矩形点中间不算命中（同遮罩里的标注）：拖它的边
-    let onEdge = CGPoint(x: 160, y: 900)
-    try drag(canvas, from: onEdge, to: CGPoint(x: 200, y: 900))
+    // 空心矩形点中间不算命中（同遮罩里的标注）：拖它的边（避开边中点的手柄，那里是改大小）
+    let onEdge = CGPoint(x: 100, y: 900)
+    try drag(canvas, from: onEdge, to: CGPoint(x: 140, y: 900))
     #expect(canvas.annotations.count == 1)
     #expect(canvas.annotations[0].bounds.minX > drawn.bounds.minX)
     // ⌥ 拖：多一份（序号类还会换号），选中的是副本
-    try drag(canvas, from: CGPoint(x: 200, y: 900), to: CGPoint(x: 300, y: 900), flags: .option)
+    try drag(canvas, from: CGPoint(x: 140, y: 900), to: CGPoint(x: 240, y: 900), flags: .option)
     #expect(canvas.annotations.count == 2)
     #expect(canvas.selectedAnnotation != drawn.id)
     try press(canvas, kVK_ANSI_D, "d", .command)
@@ -319,6 +378,36 @@ struct AnnotateOverlayTests {
     #expect(canvas.annotations.last?.bounds.minX == before + 1)
     try press(canvas, kVK_Delete, "\u{8}")
     #expect(canvas.annotations.count == 2 && canvas.selectedAnnotation == nil)
+  }
+
+  /// 吸管（拍板 O10）：长图 2 倍、原点左下，单击取光标那一点；换工具就不取了
+  @Test func eyedropperPicksTheRightPixel() throws {
+    let context = CGContext(
+      data: nil, width: 800, height: 2400, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    context.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 800, height: 1200))
+    context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+    context.fill(CGRect(x: 0, y: 1200, width: 800, height: 1200))  // 上半（图的前 1200 行）
+    let canvas = ScrollCanvas(image: context.makeImage()!, scale: 2)
+    let suite = "eyedropper-tests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    canvas.styleDefaults = defaults
+    let window = NSWindow(
+      contentRect: CGRect(origin: CGPoint(x: -20000, y: -20000), size: canvas.bounds.size),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = canvas
+    defer { window.orderOut(nil) }
+    canvas.choose(.rectangle)
+    canvas.beginPickingColor()
+    try drag(canvas, from: CGPoint(x: 100, y: 1000), to: CGPoint(x: 100, y: 1000))  // 点坐标的上半
+    #expect(canvas.style.custom == 0xFF0000 && canvas.annotations.isEmpty)
+    canvas.beginPickingColor()
+    canvas.choose(.ellipse)
+    #expect(!canvas.pickingColor)
   }
 
   /// 文字：单击放输入框，收下时变成一条标注；空的不留下

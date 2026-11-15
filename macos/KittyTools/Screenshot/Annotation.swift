@@ -7,6 +7,7 @@
 // 每个工具记住自己上次的样式（Style.remembered / remember，存 Prefs.screenshotToolStyles）。
 
 import AppKit
+import CoreImage
 
 /// Codable 是给截图历史用的（2026-10-26 拍板 A1：原图和标注分开存，才能回头接着改）：
 /// 自动合成的格式拿 case 名和成员名当键，**这些名字进了磁盘，改名要连旧数据一起想清楚**（加 case、加带默认值的成员没问题）。
@@ -26,7 +27,7 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
       case .highlighter: "荧光笔"
       case .text: "文字"
       case .counter: "序号"
-      case .mosaic: "马赛克"
+      case .mosaic: "打码"  // 2026-11-12 拍板 C1：马赛克和模糊合成一个工具（case 名进了磁盘，不改）
       case .spotlight: "聚光灯"
       }
     }
@@ -50,20 +51,27 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     /// 马赛克、聚光灯没有颜色（托盘不出色点）
     var hasColor: Bool { self != .mosaic && self != .spotlight }
 
-    /// 样式托盘的选项分段（Style.option 是下标）；空 = 没有选项
+    /// 样式托盘的选项分段（Style.option 是下标，存进了磁盘，不能换顺序）；空 = 没有选项
     var optionTitles: [String] {
       switch self {
       case .rectangle, .ellipse: ["空心", "实心"]
+      case .arrow: ["单头", "双头"]  // 2026-11-12 拍板 O4
       case .text: ["无底", "描边", "底色"]
       case .mosaic: ["像素", "模糊"]
       default: []
       }
     }
 
+    /// 托盘上选项从左到右的顺序（optionTitles 的下标）：打码把模糊排前面（拍板 C1），别的照下标
+    var optionOrder: [Int] {
+      self == .mosaic ? [1, 0] : Array(optionTitles.indices)
+    }
+
     var weightTitles: [String] {
       switch self {
       case .text: ["小", "中", "大"]
       case .spotlight: ["浅", "中", "深"]
+      case .mosaic: ["弱", "中", "强"]
       default: ["细", "中", "粗"]
       }
     }
@@ -119,7 +127,7 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
       }
     }
 
-    private static func srgb(_ rgb: Int) -> NSColor {
+    static func srgb(_ rgb: Int) -> NSColor {
       NSColor(
         srgbRed: CGFloat(rgb >> 16 & 0xFF) / 255, green: CGFloat(rgb >> 8 & 0xFF) / 255,
         blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
@@ -137,22 +145,89 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     var fontSize: CGFloat { [14, 20, 28][rawValue] }
     /// 马赛克每格的边长（点）
     var mosaicBlock: CGFloat { [6, 10, 16][rawValue] }
+    /// 打码「模糊」的半径（点，高斯的 2σ；拍板 C3：弱档也要让 14 pt 的正文认不出）
+    var blurRadius: CGFloat { [8, 12, 18][rawValue] }
     var counterDiameter: CGFloat { [20, 26, 34][rawValue] }
     var highlighterHeight: CGFloat { [12, 18, 26][rawValue] }
     /// 聚光灯外面压暗的程度
     var spotlightDim: CGFloat { [0.35, 0.5, 0.65][rawValue] }
   }
 
-  /// 第一次用是红色中号（荧光笔黄色）；option 是 Tool.optionTitles 的下标
+  /// 第一次用是红色中号（荧光笔黄色，打码是模糊）；option 是 Tool.optionTitles 的下标
   struct Style: Equatable, Codable, Sendable {
     var color = Palette.red
     var weight = Weight.medium
     var option = 0
+    /// 文字的字号（pt，2026-11-12 拍板 A1）；nil = 按三档（weight.fontSize：14 / 20 / 28，之前存的文字标注、截图历史、
+    /// 记住的样式都是这样）。可选的才能读旧数据：合成的 Codable 碰到缺的键只对可选成员不报错
+    var fontSize: CGFloat?
+
+    /// 吸管取的颜色（0xRRGGBB，sRGB；2026-11-12 拍板 O10）；nil = 用 color 那个预设色。可选的才能读旧数据（同 fontSize）
+    var custom: Int?
+
+    /// 画出来的颜色：取过色就是取的那个，否则是预设色
+    var paint: NSColor {
+      custom.map { Palette.srgb($0) } ?? color.color
+    }
+
+    /// 压在这个颜色上的字（底色文字、序号）：预设色同 Palette.ink；取的颜色按亮度，亮的用黑字
+    var ink: NSColor {
+      custom.map { Self.luminance($0) > 0.6 ? .black : .white } ?? color.ink
+    }
+
+    /// 「描边」文字的外描边用黑的（白字、很亮的取色）；别的用白的
+    var outlinesDark: Bool {
+      custom.map { Self.luminance($0) > 0.85 } ?? (color == .white)
+    }
+
+    private static func luminance(_ rgb: Int) -> CGFloat {
+      (0.299 * CGFloat(rgb >> 16 & 0xFF) + 0.587 * CGFloat(rgb >> 8 & 0xFF)
+        + 0.114 * CGFloat(rgb & 0xFF)) / 255
+    }
+
+    /// 文字托盘里的字号档位（A− / A+ 走相邻的，数字弹出的菜单列这些）
+    static let fontSizes: [CGFloat] = [12, 14, 16, 20, 24, 32, 40, 56, 72]
+
+    /// 文字实际用的字号
+    var textSize: CGFloat { fontSize ?? weight.fontSize }
+
+    /// 拖角改过的序号直径（点，2026-11-12 用户要的：序号像矩形一样能拖着改大小）；nil = 按三档（weight.counterDiameter
+    /// 20 / 26 / 34）。可选的才能读旧数据（同 fontSize）；点托盘上的三档会清掉它
+    var diameter: CGFloat?
+
+    /// 序号拖角能改到的大小
+    static let diameterRange: ClosedRange<CGFloat> = 14...160
+
+    /// 序号实际的直径
+    var counterDiameter: CGFloat { diameter ?? weight.counterDiameter }
+
+    /// 往大（step > 0）/ 往小换一档：文字换字号（不在档位上的旧字号先落到相邻的那档），别的工具换三档（到头不动）。
+    /// A− / A+、⌘+ / ⌘−、滚轮都走这里（拍板 A2、O1）
+    func stepped(_ step: Int, for tool: Tool) -> Style {
+      var next = self
+      if tool == .text {
+        let sizes = Self.fontSizes
+        let size = textSize
+        next.fontSize =
+          step > 0
+          ? sizes.first { $0 > size } ?? sizes.last! : sizes.last { $0 < size } ?? sizes.first!
+      } else if tool == .counter, let diameter {
+        // 拖角改过大小的序号：滚轮按 1.25 倍一档放大缩小（三档不管用了）
+        next.diameter = min(
+          max(
+            (diameter * pow(1.25, CGFloat(step.signum()))).rounded(), Self.diameterRange.lowerBound),
+          Self.diameterRange.upperBound)
+      } else {
+        next.weight = Weight(rawValue: min(max(weight.rawValue + step.signum(), 0), 2))!
+      }
+      return next
+    }
 
     /// 这个工具上次用的样式
     static func remembered(for tool: Tool, in defaults: UserDefaults = .standard) -> Style {
       saved(in: defaults)[String(tool.rawValue)]
-        ?? (tool == .highlighter ? Style(color: .yellow) : Style())
+        ?? (tool == .highlighter
+          ? Style(color: .yellow) : tool == .mosaic ? Style(option: 1) : Style())
     }
 
     static func remember(_ style: Style, for tool: Tool, in defaults: UserDefaults = .standard) {
@@ -169,8 +244,28 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     }
   }
 
-  /// 选中标注的调整手柄：矩形类四角，线类两端，箭头、直线还有弧线中点（bend，拖它弯曲）
-  enum Handle { case start, end, bend, topLeft, topRight, bottomLeft, bottomRight }
+  /// 选中标注的调整手柄：矩形类四角 + 四条边的中点，线类两端，箭头、直线还有弧线中点（bend，拖它弯曲）
+  enum Handle {
+    case start, end, bend, topLeft, topRight, bottomLeft, bottomRight, top, bottom, left, right
+
+    /// 矩形类的手柄对应选区的哪个手柄（改大小复用选区那套几何）；线类的 nil
+    var box: RegionSelector.Handle? {
+      switch self {
+      case .topLeft: .topLeft
+      case .topRight: .topRight
+      case .bottomLeft: .bottomLeft
+      case .bottomRight: .bottomRight
+      case .top: .top
+      case .bottom: .bottom
+      case .left: .left
+      case .right: .right
+      case .start, .end, .bend: nil
+      }
+    }
+  }
+
+  /// 边短于它时不给那条边的中点手柄（和两头的角挤在一起，点不准）
+  static let edgeHandleMinimum: CGFloat = 24
 
   var id = UUID()
   var shape: Shape
@@ -217,11 +312,11 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
         .insetBy(dx: -width / 2, dy: -width / 2)
     case .text(let string, let origin):
       // 有的字形（泰文声调、斜体）会画出文字框：按字号留边（至少盖住底色块），局部重画不留残影、不被裁掉
-      let pad = max(style.weight.fontSize / 3, Self.platePadding.width)
-      return Self.textFrame(string, origin: origin, weight: style.weight).insetBy(
+      let pad = max(style.textSize / 3, Self.platePadding.width)
+      return Self.textFrame(string, origin: origin, size: style.textSize).insetBy(
         dx: -pad, dy: -pad)
     case .counter(_, let center):
-      let radius = style.weight.counterDiameter / 2 + 1  // 白描边一半在圆外
+      let radius = style.counterDiameter / 2 + 1  // 白描边一半在圆外
       return CGRect(
         x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
     case .mosaic(let rect), .spotlight(let rect):
@@ -317,7 +412,9 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
         Self.distance(from: point, toSegment: $0, $1) <= width / 2 + tolerance
       }
         || tool == .arrow
-          && Self.arrowPath(from: from, to: to, width: width, bend: bend)?.contains(point) == true
+          && (style.option == 1
+            ? Self.doubleArrowContains(point, from: from, to: to, width: width, bend: bend)
+            : Self.arrowPath(from: from, to: to, width: width, bend: bend)?.contains(point) == true)
     case .highlighter(let from, let to):
       return Self.distance(from: point, toSegment: from, to)
         <= style.weight.highlighterHeight / 2 + tolerance
@@ -330,7 +427,7 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
         }
     case .counter(_, let center):
       return hypot(point.x - center.x, point.y - center.y)
-        <= style.weight.counterDiameter / 2 + tolerance
+        <= style.counterDiameter / 2 + tolerance
     case .text, .mosaic:
       return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
     }
@@ -374,48 +471,82 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     return copy
   }
 
-  /// 选中时的调整手柄：矩形类四角，线类两端；箭头、直线还有弧线中点（弯曲手柄，直的在弦中点：CleanShot 也是直的就给，
+  /// 选中时的调整手柄：矩形类四角 + 边中点（边短于 edgeHandleMinimum 的不给，2026-11-12 拍板 B1），序号四角，线类两端；箭头、直线还有弧线中点（弯曲手柄，直的在弦中点：CleanShot 也是直的就给，
   /// 看得见才知道能弯），弦短于 32 点的不给（直的中点离两端不到 16 点，和端点手柄挤在一起）。只看弦、不看弧线中点离两端
-  /// 多远：拖着弯曲手柄往一端靠时它不会在光标下消失；荧光笔不弯；文字、序号、画笔只能拖动（空）
-  var handles: [(Handle, CGPoint)] {
+  /// 多远：拖着弯曲手柄往一端靠时它不会在光标下消失；荧光笔不弯；文字、画笔只能拖动（空）
+  var handles: [(Handle, CGPoint)] { handles(zoom: 1) }
+
+  /// 同 handles；zoom：屏幕上每点画多大（长图缩小着看时边中点按屏幕上的边长判断给不给，不然和角挤成一团）
+  func handles(zoom: CGFloat) -> [(Handle, CGPoint)] {
     switch shape {
     case .rectangle(let rect), .ellipse(let rect), .mosaic(let rect), .spotlight(let rect):
+      let minimum = Self.edgeHandleMinimum / max(zoom, 0.01)
+      let wide = rect.width >= minimum
+      let tall = rect.height >= minimum
       return [
         (.topLeft, CGPoint(x: rect.minX, y: rect.maxY)),
         (.topRight, CGPoint(x: rect.maxX, y: rect.maxY)),
         (.bottomLeft, CGPoint(x: rect.minX, y: rect.minY)),
         (.bottomRight, CGPoint(x: rect.maxX, y: rect.minY)),
       ]
+        + (wide
+          ? [
+            (.top, CGPoint(x: rect.midX, y: rect.maxY)),
+            (.bottom, CGPoint(x: rect.midX, y: rect.minY)),
+          ]
+          : [])
+        + (tall
+          ? [
+            (.left, CGPoint(x: rect.minX, y: rect.midY)),
+            (.right, CGPoint(x: rect.maxX, y: rect.midY)),
+          ]
+          : [])
     case .arrow(let from, let to, let bend), .line(let from, let to, let bend):
       let roomy = hypot(to.x - from.x, to.y - from.y) >= 32
       return [(.start, from), (.end, to)]
         + (roomy ? [(.bend, Self.curveMidpoint(from: from, to: to, bend: bend))] : [])
     case .highlighter(let from, let to):
       return [(.start, from), (.end, to)]
-    case .pen, .text, .counter: return []
+    case .counter(_, let center):
+      // 外切正方形的四个角：拖哪个角都是以圆心为准改直径（同矩形的角手柄、光标）
+      let radius = style.counterDiameter / 2
+      return [
+        (.topLeft, CGPoint(x: center.x - radius, y: center.y + radius)),
+        (.topRight, CGPoint(x: center.x + radius, y: center.y + radius)),
+        (.bottomLeft, CGPoint(x: center.x - radius, y: center.y - radius)),
+        (.bottomRight, CGPoint(x: center.x + radius, y: center.y - radius)),
+      ]
+    case .pen, .text: return []
     }
   }
 
-  /// 拖手柄改大小：矩形类对角不动（拖过头会翻过去）、⇧ 正方形；线类另一端不动、⇧ 吸 45°（箭头、直线的弯度跟着弦等比变）；
-  /// 弯曲手柄见 curveBend（⇧ 对称的弧）。不认的手柄原样返回
-  func resized(_ handle: Handle, to point: CGPoint, constrained: Bool) -> Annotation {
+  /// 拖手柄改大小：矩形类同选区的手柄（RegionSelector.resized）——角改宽高、边中点只改那条边，对边不动（拖过头会翻过去）；
+  /// ⇧ 拖角保持原来的长宽比（拖边时不管 ⇧），⌥（fromCenter）中心不动、对边反向一起动（2026-11-12 拍板 B2 B3）。
+  /// 线类另一端不动、⇧ 吸 45°（箭头、直线的弯度跟着弦等比变）；弯曲手柄见 curveBend（⇧ 对称的弧）。不认的手柄原样返回
+  func resized(_ handle: Handle, to point: CGPoint, constrained: Bool, fromCenter: Bool = false)
+    -> Annotation
+  {
     var next = self
     switch (shape, handle) {
     case (.rectangle(let rect), _), (.ellipse(let rect), _), (.mosaic(let rect), _),
       (.spotlight(let rect), _):
-      let fixed: CGPoint
-      switch handle {
-      case .topLeft: fixed = CGPoint(x: rect.maxX, y: rect.minY)
-      case .topRight: fixed = CGPoint(x: rect.minX, y: rect.minY)
-      case .bottomLeft: fixed = CGPoint(x: rect.maxX, y: rect.maxY)
-      case .bottomRight: fixed = CGPoint(x: rect.minX, y: rect.maxY)
-      case .start, .end, .bend: return self
-      }
-      next.shape = Self.shape(for: tool, from: fixed, to: point, constrained: constrained) ?? shape
+      guard let box = handle.box else { return self }
+      let corner = (box.movesMinX || box.movesMaxX) && (box.movesMinY || box.movesMaxY)
+      let ratio = constrained && corner && rect.height > 0 ? rect.width / rect.height : nil
+      next.shape = Self.boxed(
+        tool,
+        RegionSelector.resized(
+          rect, box, to: point, within: .infinite, ratio: ratio, fromCenter: fromCenter))
     case (.arrow(let from, let to, _), .bend), (.line(let from, let to, _), .bend):
       next.shape = Self.segment(
         tool, from: from, to: to,
         bend: Self.curveBend(from: from, to: to, through: point, constrained: constrained))
+    case (.counter(_, let center), .topLeft), (.counter(_, let center), .topRight),
+      (.counter(_, let center), .bottomLeft), (.counter(_, let center), .bottomRight):
+      // 圆心不动，直径 = 拖到的点离圆心横竖较远的那个 × 2（角跟着光标走），夹在 diameterRange 里
+      let reach = max(abs(point.x - center.x), abs(point.y - center.y))
+      next.style.diameter = min(
+        max((reach * 2).rounded(), Style.diameterRange.lowerBound), Style.diameterRange.upperBound)
     case (.arrow(_, let to, _), .start), (.line(_, let to, _), .start),
       (.highlighter(_, let to), .start):
       next.shape = Self.segment(
@@ -450,25 +581,32 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
   }
 
   /// 拖动画出的形状（文字、序号是单击放置，返回 nil；画笔先给起止两点，由调用方累点）。
-  /// constrained（按住 ⇧）：矩形类变正方形 / 正圆，线类吸附到 45° 的倍数
-  static func shape(for tool: Tool, from start: CGPoint, to end: CGPoint, constrained: Bool)
-    -> Shape?
-  {
+  /// constrained（按住 ⇧）：矩形类变正方形 / 正圆，线类吸附到 45° 的倍数；fromCenter（按住 ⌥）：矩形类以起点为中心
+  /// （同选区，RegionSelector.drawn），线类不管它
+  static func shape(
+    for tool: Tool, from start: CGPoint, to end: CGPoint, constrained: Bool,
+    fromCenter: Bool = false
+  ) -> Shape? {
     switch tool {
     case .rectangle, .ellipse, .mosaic, .spotlight:
-      var end = end
-      if constrained {
-        let dx = end.x - start.x
-        let dy = end.y - start.y
-        let side = max(abs(dx), abs(dy))
-        end = CGPoint(x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side))
-      }
-      return boxed(tool, box(start, end))
+      return boxed(
+        tool,
+        RegionSelector.drawn(
+          from: start, to: end, ratio: constrained ? 1 : nil, fromCenter: fromCenter,
+          within: .infinite))
     case .arrow, .line, .highlighter:
       return segment(tool, from: start, to: constrained ? snapped(start, end) : end)
     case .pen: return .pen([start, end])
     case .text, .counter: return nil
     }
+  }
+
+  /// 序号换成 number（选中序号时托盘上的 − / +，拍板 O2；1–99）；别的工具原样返回
+  func renumbered(_ number: Int) -> Annotation {
+    guard case .counter(_, let center) = shape else { return self }
+    var next = self
+    next.shape = .counter(min(max(number, 1), 99), center: center)
+    return next
   }
 
   /// 下一个序号：现有最大的 + 1
@@ -520,8 +658,8 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
   // MARK: 文字
 
   /// SF Pro Rounded semibold（中文回退到苹方，没有圆体）
-  static func font(_ weight: Weight) -> NSFont {
-    rounded(size: weight.fontSize, weight: .semibold)
+  static func font(size: CGFloat) -> NSFont {
+    rounded(size: size, weight: .semibold)
   }
 
   /// SF Pro Rounded（文字标注、录屏的按键胶囊 InputOverlay 共用）
@@ -532,9 +670,9 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
   }
 
   /// 文字框（origin 是左上角）。空串和末尾换行也留出一行的高度（输入框里光标要有地方）
-  static func textFrame(_ string: String, origin: CGPoint, weight: Weight) -> CGRect {
+  static func textFrame(_ string: String, origin: CGPoint, size fontSize: CGFloat) -> CGRect {
     let measured = string.isEmpty || string.hasSuffix("\n") ? string + " " : string
-    let size = NSAttributedString(string: measured, attributes: [.font: font(weight)])
+    let size = NSAttributedString(string: measured, attributes: [.font: font(size: fontSize)])
       .boundingRect(
         with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude),
         options: [.usesLineFragmentOrigin, .usesFontLeading]
@@ -547,8 +685,8 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
   /// 「描边」样式的外描边：字宽 1/7（一半压在字里，随后填上的字把它盖住），白色（白字用黑）。输入框所见即所得也用它
   static func outlineAttributes(_ style: Style) -> [NSAttributedString.Key: Any] {
     [
-      .font: font(style.weight), .strokeWidth: 100.0 / 7,
-      .strokeColor: style.color == .white ? NSColor.black : NSColor.white,
+      .font: font(size: style.textSize), .strokeWidth: 100.0 / 7,
+      .strokeColor: style.outlinesDark ? NSColor.black : NSColor.white,
     ]
   }
 
@@ -634,7 +772,7 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
   private func draw(in context: CGContext, image: CGImage, viewSize: CGSize, shadowScale: CGFloat) {
     // 实心矩形 / 椭圆：先铺 0.28 的底（不带阴影，免得底下透出一片灰；铺满整块，不切条），再描带阴影的边
     if style.option == 1, let path = boxPath {
-      context.setFillColor(style.color.color.withAlphaComponent(0.28).cgColor)
+      context.setFillColor(style.paint.withAlphaComponent(0.28).cgColor)
       context.addPath(path)
       context.fillPath()
     }
@@ -644,7 +782,7 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     let ink: CGPath? =
       switch shape {
       case .arrow(let from, let to, let bend):
-        Self.arrowPath(from: from, to: to, width: width, bend: bend)
+        Self.arrowInk(from: from, to: to, width: width, bend: bend, double: style.option == 1)
       case .line(let from, let to, let bend) where bend != .zero:
         Self.curvedLinePath(from: from, to: to, width: width, bend: bend)
       default: nil
@@ -774,7 +912,7 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
   private func drawInk(
     in context: CGContext, image: CGImage, viewSize: CGSize, shadowScale: CGFloat, ink: CGPath?
   ) {
-    let color = style.color.color
+    let color = style.paint
     let width = style.weight.lineWidth
     context.saveGState()
     defer { context.restoreGState() }
@@ -823,8 +961,8 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
       context.setLineCap(.butt)
       context.strokeLineSegments(between: [from, to])
     case .text(let string, let origin):
-      let frame = Self.textFrame(string, origin: origin, weight: style.weight)
-      let font = Self.font(style.weight)
+      let frame = Self.textFrame(string, origin: origin, size: style.textSize)
+      let font = Self.font(size: style.textSize)
       var ink = color
       NSGraphicsContext.saveGraphicsState()
       defer { NSGraphicsContext.restoreGraphicsState() }
@@ -844,14 +982,14 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
         context.addPath(CGPath(roundedRect: plate, cornerWidth: 6, cornerHeight: 6, transform: nil))
         context.fillPath()
         noShadow()
-        ink = style.color.ink
+        ink = style.ink
       default:
         break
       }
       NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: ink])
         .draw(in: frame)
     case .counter(let number, let center):
-      let diameter = style.weight.counterDiameter
+      let diameter = style.counterDiameter
       let circle = CGRect(
         x: center.x - diameter / 2, y: center.y - diameter / 2, width: diameter, height: diameter)
       shadow()
@@ -862,7 +1000,7 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
       context.setLineWidth(1.5)
       context.strokeEllipse(in: circle)
       Self.drawNumber(
-        number, centeredAt: center, diameter: diameter, color: style.color.ink, in: context)
+        number, centeredAt: center, diameter: diameter, color: style.ink, in: context)
     case .mosaic(let rect):
       drawMosaic(rect, in: context, image: image, viewSize: viewSize)
     case .spotlight:
@@ -1013,8 +1151,10 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     context.draw(crop, in: frame)
   }
 
-  /// 马赛克：冻结帧这一块缩小到每格一个像素，再放大回去。像素 = 不插值放大；
-  /// 模糊（option 1）= 格子放大到 1.5 倍、再平滑插值放大（信息已经在缩小时丢掉，不像高斯模糊还能反卷积还原）
+  /// 打码：冻结帧这一块缩小到每格一个像素，再放大回去。像素 = 不插值放大；
+  /// 模糊（option 1，2026-11-12 拍板 C2）= 缩到每格「半径 / 2」、在这张小图上做高斯模糊（σ 1 格 = 半径的一半），
+  /// 再平滑插值放大：看起来就是高斯模糊，格子比高斯能留住的最细笔画还粗，信息在缩小时已经丢掉。格子再细（半径 / 3）
+  /// 就和直接高斯差不多了：评审实测 28 pt 的字弱档反锐化一下就认出大半张卡号（直接对原图高斯模糊也一样能这样还原）
   private func drawMosaic(_ rect: CGRect, in context: CGContext, image: CGImage, viewSize: CGSize) {
     let blurred = style.option == 1
     guard let (blocks, frame) = mosaicBlocks(rect, image: image, viewSize: viewSize) else { return }
@@ -1050,7 +1190,8 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     }
     let blurred = style.option == 1
     let cell =
-      style.weight.mosaicBlock * (blurred ? 1.5 : 1) * CGFloat(image.width) / viewSize.width
+      (blurred ? style.weight.blurRadius / 2 : style.weight.mosaicBlock) * CGFloat(image.width)
+      / viewSize.width
     let columns = max(1, Int((CGFloat(crop.width) / cell).rounded(.up)))
     let rows = max(1, Int((CGFloat(crop.height) / cell).rounded(.up)))
     guard
@@ -1062,10 +1203,33 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     else { return nil }
     small.interpolationQuality = blurred ? .high : .medium
     small.draw(crop, in: CGRect(x: 0, y: 0, width: columns, height: rows))
-    guard let blocks = small.makeImage() else { return nil }
+    guard let shrunk = small.makeImage() else { return nil }
+    // 模糊不成（Core Image 出错）就用缩小的块图平滑放大：宁可不那么柔和，也不能什么都不画、把字露出来
+    let blocks = blurred ? Self.gaussian(shrunk) ?? shrunk : shrunk
     Self.mosaicCache.append((key, blocks, frame))
     if Self.mosaicCache.count > 8 { Self.mosaicCache.removeFirst() }
     return (blocks, frame)
+  }
+
+  /// 小图上的高斯模糊（σ 1 像素）：边缘先往外延（clampedToExtent，只延这块自己的像素），不然四边会被透明的外面拖淡；
+  /// 照原图的色彩空间出图（P3 屏截的鲜艳颜色不被截进 sRGB）
+  private static func gaussian(_ image: CGImage) -> CGImage? {
+    let input = CIImage(cgImage: image)
+    let output = input.clampedToExtent().applyingGaussianBlur(sigma: 1).cropped(to: input.extent)
+    if blurContext == nil { blurContext = CIContext(options: [.cacheIntermediates: false]) }
+    return blurContext?.createCGImage(
+      output, from: input.extent, format: .BGRA8,
+      colorSpace: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB))
+  }
+
+  /// 打码模糊用的 Core Image 上下文：用到时才建、闲下来放掉（releaseCaches）。建一个热的约 4 ms、冷的 30–60 ms，
+  /// 拖着改打码的范围时每下都要模糊一遍，不能每次新建；常驻着又要攥住约 45 MB（评审独立小程序实测）
+  private static var blurContext: CIContext?
+
+  /// 闲下来放掉打码的缓存和 Core Image 上下文（AppDelegate.reclaimIdleMemory：面板都收起两分钟后）
+  static func releaseCaches() {
+    mosaicCache = []
+    blurContext = nil
   }
 
   /// 冻结帧里 rect（视图坐标）那块像素，和这块像素换回视图坐标的位置（取整后可能比 rect 大一点，调用方自己 clip）
@@ -1110,12 +1274,70 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     return context.makeImage()
   }
 
+  /// 箭头画出来的样子：单头见 arrowPath；双头（option 1，拍板 O4）= 从弧线中点分成两半，各画一支从中点朝外、
+  /// 杆不收细的箭头再合起来：两头的尖都是尖的（杆停在各自的底边），很短时两头箭头各占一半、合成菱形而不是蝴蝶结。
+  /// 零长度返回 nil
+  static func arrowInk(
+    from: CGPoint, to: CGPoint, width: CGFloat, bend: CGVector = .zero, double: Bool
+  ) -> CGPath? {
+    guard double else { return arrowPath(from: from, to: to, width: width, bend: bend) }
+    guard let pair = doubleArrowHalves(from: from, to: to, width: width, bend: bend) else {
+      return nil
+    }
+    return pair.forward.union(pair.backward)
+  }
+
+  /// 点中双头箭头：两半各问一次（比先合成一个轮廓省，鼠标每动一下都要问）
+  static func doubleArrowContains(
+    _ point: CGPoint, from: CGPoint, to: CGPoint, width: CGFloat, bend: CGVector
+  ) -> Bool {
+    guard let pair = doubleArrowHalves(from: from, to: to, width: width, bend: bend) else {
+      return false
+    }
+    return pair.forward.contains(point) || pair.backward.contains(point)
+  }
+
+  /// 双头箭头的两半：弧线在 t = 0.5 处切开（de Casteljau），两段各是一条二次曲线，从中点出发各画一支杆不收细的箭头。
+  /// 两段在中点切线相同、杆一样粗，接得上
+  private static func doubleArrowHalves(
+    from: CGPoint, to: CGPoint, width: CGFloat, bend: CGVector
+  ) -> (forward: CGPath, backward: CGPath)? {
+    let control = curveControl(from: from, to: to, bend: bend)
+    let middle = quad(from, control, to, 0.5)
+    func half(_ end: CGPoint, _ inner: CGPoint) -> CGPath? {
+      arrowPath(
+        from: middle, to: end, width: width,
+        bend: bend == .zero ? .zero : bendThrough(from: middle, control: inner, to: end),
+        tapered: false)
+    }
+    guard
+      let forward = half(to, CGPoint(x: (control.x + to.x) / 2, y: (control.y + to.y) / 2)),
+      let backward = half(from, CGPoint(x: (control.x + from.x) / 2, y: (control.y + from.y) / 2))
+    else { return nil }
+    return (forward, backward)
+  }
+
+  /// 控制点是 control 的那条二次曲线换成弯度（curveMidpoint 的反算：弧线中点离弦中点的偏移按弦分解）
+  private static func bendThrough(from: CGPoint, control: CGPoint, to: CGPoint) -> CGVector {
+    let d = CGVector(dx: to.x - from.x, dy: to.y - from.y)
+    let lengthSquared = d.dx * d.dx + d.dy * d.dy
+    guard lengthSquared > 0 else { return .zero }
+    let mid = quad(from, control, to, 0.5)
+    let v = CGVector(dx: mid.x - (from.x + to.x) / 2, dy: mid.y - (from.y + to.y) / 2)
+    return CGVector(
+      dx: (v.dx * d.dx + v.dy * d.dy) / lengthSquared,
+      dy: (v.dy * d.dx - v.dx * d.dy) / lengthSquared)
+  }
+
   /// 锥形实心箭头：一个填充多边形，杆从尾部 0.3 × 线宽渐粗到箭头处 1.2 × 线宽；箭头长 4 × 线宽、半角 28°
-  /// （比这还短的箭头只剩箭头）。弯的见 curvedArrowPath（直的还是这个多边形，一个像素都不变）。零长度返回 nil
-  static func arrowPath(from: CGPoint, to: CGPoint, width: CGFloat, bend: CGVector = .zero)
-    -> CGPath?
-  {
-    if bend != .zero { return curvedArrowPath(from: from, to: to, width: width, bend: bend) }
+  /// （比这还短的箭头只剩箭头）。弯的见 curvedArrowPath（直的还是这个多边形，一个像素都不变）。零长度返回 nil。
+  /// tapered = false：杆从头到尾都是 1.2 × 线宽（双头箭头用）
+  static func arrowPath(
+    from: CGPoint, to: CGPoint, width: CGFloat, bend: CGVector = .zero, tapered: Bool = true
+  ) -> CGPath? {
+    if bend != .zero {
+      return curvedArrowPath(from: from, to: to, width: width, bend: bend, tapered: tapered)
+    }
     let length = hypot(to.x - from.x, to.y - from.y)
     guard length > 0 else { return nil }
     let head = min(length, width * 4)
@@ -1126,8 +1348,8 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     func beside(_ point: CGPoint, _ side: CGFloat) -> CGPoint {
       CGPoint(x: point.x - unit.y * side, y: point.y + unit.x * side)
     }
-    let tail = width * 0.15
     let neck = min(width * 0.6, wing)
+    let tail = tapered ? width * 0.15 : neck
     let path = CGMutablePath()
     path.addLines(between: [
       beside(from, tail), beside(base, neck), beside(base, wing), to, beside(base, -wing),
@@ -1270,7 +1492,7 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
   /// 以内后弧线不会拐过端点折回来，剩下只有弦很短、弯得很深的 U 形顶点会这么尖（顶点半径 = 弦² / (8 × 深度)，
   /// 弦 32、深 40 才 3.2 点）；真碰到再改成逐段取并集
   private static func curvedArrowPath(
-    from: CGPoint, to: CGPoint, width: CGFloat, bend: CGVector
+    from: CGPoint, to: CGPoint, width: CGFloat, bend: CGVector, tapered: Bool = true
   ) -> CGPath? {
     let control = curveControl(from: from, to: to, bend: bend)
     let samples = curve(from, control, to)
@@ -1309,8 +1531,8 @@ struct Annotation: Identifiable, Equatable, Codable, Sendable {
     }
     let total = max(run.last ?? 0, .ulpOfOne)
     let wing = head * tan(28 * .pi / 180)
-    let tail = width * 0.15
     let neck = min(width * 0.6, wing)
+    let tail = tapered ? width * 0.15 : neck
     var left: [CGPoint] = []
     var right: [CGPoint] = []
     for (index, point) in body.enumerated().dropLast() {

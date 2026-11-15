@@ -168,22 +168,39 @@ final class ScrollCapture {
     // 第一帧先摆进预览（原来要等拼上第二段才有，开头预览是空的）；预览按自己的大小出图，先布局
     panel.layoutIfNeeded()
     refreshPreview(force: true)
+    // 手动滚时静止睡着的那一觉，选区里一滚就叫醒（滚轮落在别的 App 上，global 监听收得到；落在自家面板上是往回看预览，
+    // 不管）。自动滚动自己发的滚轮这里也收得到，那时的 160 ms 一帧不能被它叫醒
+    wheelMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self, !self.isAutoScrolling else { return }
+        self.nap?.cancel()
+      }
+    }
     // 任务持有会话，直到结束（finish 清掉 continuation）循环才退出
     loop = Task { await run() }
   }
 
   /// 一直截选区：手动滚时尽量密（两帧之间滚得越少越容易对上），自动滚时每截一帧滚一步、等画面画完；
   /// 画面停着不动时放慢（interval）。拷像素、逐行哈希这些在主线程外算（ScrollStitcher.frame，第四轮体检 F1），
-  /// 接到长图上仍在主线程、一帧接一帧按顺序来
+  /// 接到长图上仍在主线程、一帧接一帧按顺序来。
+  /// 手动滚、画面在动时：这一帧一截完就开截下一帧，和算这一帧叠着做，算完不睡（2026-11-12 用户：选区大了大部分时候
+  /// 「对不上」）。两帧之间滚了多远 = 滚的速度 × 一轮的时间；原来一轮是「截 35 ms + 算 35 ms + 睡 40 ms」（整窗口
+  /// 3420 × 1982 像素、Release、本机），触控板一甩每秒几千点，慢一倍的机器上一甩就滚过一整屏，之后往前怎么滚都接不上
+  /// （只和上次接上的那帧比）。实录 Chrome 的帧序列回放：原来慢一倍就对不上，现在慢五倍还一路接上
   private func run() async {
+    /// 正在截的下一帧和它开截时 posted 是多少
+    var next: Task<(image: CGImage, posted: CGFloat), any Error>?
+    defer { next?.cancel() }
     while continuation != nil {
       do {
-        postedAtPreviousCapture = postedAtCapture
-        postedAtCapture = posted
-        let image = try await SCScreenshotManager.captureImage(
-          contentFilter: filter, configuration: configuration)
+        let shot = try await (next ?? capture()).value
+        next = nil
         guard continuation != nil else { return }
-        let frame = await ScrollStitcher.frame(image, layout: stitcher.layout)
+        // 手动滚、上一帧画面在动：先开截下一帧，再算这一帧
+        if !isAutoScrolling, quietFrames == 0 { next = capture() }
+        postedAtPreviousCapture = postedAtCapture
+        postedAtCapture = shot.posted
+        let frame = await ScrollStitcher.frame(shot.image, layout: stitcher.layout)
         guard continuation != nil else { return }
         let outcome = stitcher.add(frame)
         quietFrames = outcome == .unchanged ? quietFrames + 1 : 0
@@ -196,18 +213,41 @@ final class ScrollCapture {
         updateStatus()
         return refreshPreview(force: true)
       }
-      try? await Task.sleep(
-        for: Self.interval(isAutoScrolling: isAutoScrolling, quietFrames: quietFrames))
+      // 下一帧已经在截了（画面在动）就不睡
+      guard next == nil,
+        let interval = Self.interval(isAutoScrolling: isAutoScrolling, quietFrames: quietFrames)
+      else { continue }
+      // 静止时睡得久，滚轮一来就醒（不然停了一会儿再一甩，第一帧要等满 200 ms 才截、已经滚过头了）
+      let nap = Task { _ = try? await Task.sleep(for: interval) }
+      self.nap = nap
+      await nap.value
+      self.nap = nil
+    }
+  }
+
+  /// 开截一帧（记下开截时发了多少滚轮，自动滚动拿它和画面实际滚的比）
+  private func capture() -> Task<(image: CGImage, posted: CGFloat), any Error> {
+    let (posted, filter, configuration) = (self.posted, self.filter, self.configuration)
+    return Task {
+      (
+        try await SCScreenshotManager.captureImage(
+          contentFilter: filter, configuration: configuration), posted
+      )
     }
   }
 
   /// 连着几帧画面没变
   private var quietFrames = 0
+  /// 静止时两帧之间在睡的那一觉：选区外的滚轮（global 监听）把它叫醒
+  private var nap: Task<Void, Never>?
+  private var wheelMonitor: Any?
 
-  /// 下一帧隔多久截（纯函数，配单测）：自动滚动 160 ms（边滚边截，每帧滚出一两成选区高）；手动时 40 ms，连着 5 帧没变化（停着看、去拿鼠标）
-  /// 放宽到 200 ms，一有变化就回到 40 ms（第四轮体检 F1：静止时原来也每秒在主线程上算 25 帧）
-  static func interval(isAutoScrolling: Bool, quietFrames: Int) -> Duration {
+  /// 截完一帧后隔多久截下一帧（纯函数，配单测）：自动滚动 160 ms（边滚边截，每帧滚出一两成选区高）；手动时画面在动
+  /// 不等（nil：下一帧已经和这一帧叠着在截了），没变化 40 ms，连着 5 帧没变化（停着看、去拿鼠标）放宽到 200 ms、
+  /// 滚轮一来就醒（第四轮体检 F1：静止时原来也每秒在主线程上算 25 帧）
+  static func interval(isAutoScrolling: Bool, quietFrames: Int) -> Duration? {
     if isAutoScrolling { return .milliseconds(160) }
+    if quietFrames == 0 { return nil }
     return .milliseconds(quietFrames >= 5 ? 200 : 40)
   }
 
@@ -331,6 +371,13 @@ final class ScrollCapture {
 
   // MARK: 自动滚动
 
+  /// 选区里真正在动的那一块有多高（点）：自动滚动的领先上限按它算，不按选区高（2026-11-13 用户：页面里某个小的
+  /// 滚动区域长截图一直「对不上」——选区比这块大时，两帧之间能接上的位移只和这块有关）。还没量出来时是整个选区
+  private var band: CGFloat {
+    let rows = stitcher.movingRows
+    return rows.isEmpty ? region.height : min(region.height, CGFloat(rows.count) / scale)
+  }
+
   private func toggleAutoScroll() {
     if isAutoScrolling { return stopAutoScroll() }
     guard !captureStopped else { return NSSound.beep() }
@@ -338,12 +385,6 @@ final class ScrollCapture {
       Permissions.requestAccessibility()
       notice = Status(text: "自动滚动需要「辅助功能」授权，授权后点 ▶ 开始", tone: .warning)
       return updateStatus()
-    }
-    // 滚轮事件交给光标下的窗口：光标不在选区里、或停在自家面板上，就挪到选区中间
-    let mouse = NSEvent.mouseLocation
-    if !NSMouseInRect(mouse, region, false) || NSMouseInRect(mouse, panel.frame, false) {
-      let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-      CGWarpMouseCursorPosition(CGPoint(x: region.midX, y: primaryHeight - region.midY))
     }
     direction = stitcher.isGrowingUp ? -1 : 1
     stalls = 0
@@ -353,8 +394,10 @@ final class ScrollCapture {
     velocity = Self.velocity(speed: speed, height: region.height, scale: scale, gain: gain)
     notice = nil
     isAutoScrolling = true
+    stitcher.tracksColumns = true  // 要它的左右边界才能把滚轮对准在动那一块
     panel.hudView.isAutoScrolling = true
     panel.hudView.onFrame = { [unowned self] in tick($0) }
+    aimAtBand()
     updateStatus()
   }
 
@@ -368,9 +411,52 @@ final class ScrollCapture {
   private func stopAutoScroll() {
     guard isAutoScrolling else { return }
     isAutoScrolling = false
+    stitcher.tracksColumns = false
     panel.hudView.onFrame = nil
     panel.hudView.isAutoScrolling = false
     updateStatus()
+  }
+
+  /// 选区里在动的那一块在屏幕上的位置（点，全局坐标）
+  private var bandRect: CGRect {
+    Self.bandRect(
+      region: region, scale: scale, rows: stitcher.movingRows, columns: stitcher.movingColumns)
+  }
+
+  /// 同上（纯函数配单测）：rows / columns 是帧里的像素行、像素列，换算成屏幕上的点。还不知道是哪些行时是整个选区；
+  /// 知道列时只取那几列（选区比这块宽时，滚轮落在两边照样滚到外层页面）
+  static func bandRect(region: CGRect, scale: CGFloat, rows: Range<Int>, columns: Range<Int>)
+    -> CGRect
+  {
+    guard !rows.isEmpty else { return region }
+    let top = region.maxY - CGFloat(rows.lowerBound) / scale
+    let bottom = region.maxY - CGFloat(rows.upperBound) / scale
+    var rect = CGRect(
+      x: region.minX, y: bottom, width: region.width, height: max(top - bottom, 1))
+    if !columns.isEmpty {
+      let left = region.minX + CGFloat(columns.lowerBound) / scale
+      let right = min(region.minX + CGFloat(columns.upperBound) / scale, region.maxX)
+      if right > left {
+        rect = CGRect(x: left, y: rect.minY, width: right - left, height: rect.height)
+      }
+    }
+    return rect
+  }
+
+  /// 把光标放到在动那一块的中间：滚轮事件交给光标下的窗口，光标停在选区里别的地方（外层页面）就滚错了对象，
+  /// 画面不动、怎么滚都「对不上」（2026-11-13）。光标已经在那一块上就不动；停在自家面板上（刚点了 ▶）也挪进去
+  private func aimAtBand() {
+    guard isAutoScrolling else { return }
+    let mouse = NSEvent.mouseLocation
+    let rect = bandRect
+    guard !rect.contains(mouse) || NSMouseInRect(mouse, panel.frame, false) else { return }
+    warpCursor(to: CGPoint(x: rect.midX, y: rect.midY))
+  }
+
+  /// 把光标挪到屏幕上的某一点（点，全局坐标、原点左下）：C 接口用的是原点在左上的那块主屏坐标
+  private func warpCursor(to point: CGPoint) {
+    let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+    CGWarpMouseCursorPosition(CGPoint(x: point.x, y: primaryHeight - point.y))
   }
 
   /// 屏幕每刷新一帧（自动滚动时）：按速度发这一帧的那一小段。光标在面板附近（去点 ⏸、看预览）先不发（滚轮会落到
@@ -383,7 +469,7 @@ final class ScrollCapture {
     let next = Self.tickPoints(
       velocity: velocity, seconds: seconds, carry: carry,
       room: Self.room(
-        lead: posted - postedAtReference, height: region.height, scale: scale, gain: gain))
+        lead: posted - postedAtReference, band: band, scale: scale, gain: gain))
     carry = next.carry
     if next.points != 0 { postScroll(next.points) }
   }
@@ -410,7 +496,12 @@ final class ScrollCapture {
         notice = Status(text: "对不上，已停止自动滚动", tone: .lost)
         return stopAutoScroll()
       }
-      let back = ((posted - postedAtReference) / 2).rounded()
+      // 也许是滚轮根本没落在在动的那一块上（光标停在选区里的外层页面上）：先把它挪进去
+      aimAtBand()
+      let lead = posted - postedAtReference
+      // 退回自上次接上以来发的一半；领先得比在动那块还多时退到这块的一半以内（只退一半还是接不上）
+      let allowed = Self.room(lead: 0, band: band, scale: scale, gain: gain)
+      let back = max(lead / 2, lead - allowed / 2).rounded()
       if back > 0 { postScroll(-back) }
       velocity /= 2
     case .full:
@@ -454,16 +545,19 @@ final class ScrollCapture {
     return (whole, amount - whole)
   }
 
-  /// 自上次接上的那一帧开截以来，滚出去的最多占选区高的这么多：两帧之间要有重叠才拼得上（离线实测大小选区都能接上
-  /// 八成高的位移，留出吸顶栏、页脚和 App 画得慢的余量）
+  /// 自上次接上的那一帧开截以来，滚出去的最多占「在动的那一块」高的这么多：两帧之间要有重叠才拼得上（离线实测
+  /// 整屏都在滚时能接上八成高的位移，留出吸顶栏、页脚和 App 画得慢的余量；只看一小块在滚时七成还接得上、八成就不行，
+  /// 见 `ScrollStitcherTests`）
   static let maxLead: CGFloat = 0.5
 
   /// 还能再发几点（纯函数配单测）：lead 是自上次接上的那一帧开截以来发了多少点（往回退过可以是负数）。
   /// 匀速滚动不等抓帧，两帧之间滚了多远 = 速度 × 抓帧、算帧、拼接的时间，后者跟着选区面积涨（2026-11-06 用户：选区框大了
   /// 反复「对不上」；实测整屏一帧 Debug 构建要 2 秒多、Release 约 0.3 秒，小选区 0.2 秒），不封顶时选区越大越容易
-  /// 两帧之间滚过一整屏，退回、接上、再全速又滚过头，反反复复。到顶就停发，下一帧接上了再接着滚
-  static func room(lead: CGFloat, height: CGFloat, scale: CGFloat, gain: CGFloat) -> CGFloat {
-    max(maxLead * height * scale / max(gain, 0.01) - lead, 0)
+  /// 两帧之间滚过一整屏，退回、接上、再全速又滚过头，反反复复。到顶就停发，下一帧接上了再接着滚。
+  /// band 是画面里真正在动的那一块的高（点），不是选区高：选区里只嵌着一个小滚动区在滚时，能接上的位移只和它有关
+  /// （2026-11-13 用户：页面里的小滚动区域一直「对不上」）
+  static func room(lead: CGFloat, band: CGFloat, scale: CGFloat, gain: CGFloat) -> CGFloat {
+    max(maxLead * band * scale / max(gain, 0.01) - lead, 0)
   }
 
   /// 按方向滚 points 点（负数往回滚）。像素级滚动事件，发到 HID 层：和真滚轮一样交给光标下的窗口
@@ -487,6 +581,8 @@ final class ScrollCapture {
     guard let continuation else { return }
     self.continuation = nil
     loop?.cancel()
+    wheelMonitor.map(NSEvent.removeMonitor)
+    wheelMonitor = nil
     isAutoScrolling = false
     panel.hudView.onFrame = nil
     border.orderOut(nil)

@@ -8,8 +8,8 @@
 // 拖出或单击后进入调整：整条边和四角都能拖（悬停的边加粗、手柄放大）、拖动平移、方向键微调（⇧ 10 点）、
 // ⌘ / ⌥ + 方向键推 / 收那条边；尺寸胶囊点数字输入像素宽高、比例菜单锁比例；右键没有标注时回到待选，有标注时只提示；
 // 放大镜显示中心像素的色值（C 复制），按住 ⌘ 出整屏十字准线；S 长截图、T 钉图、O 识字；
-// 标注 1–0（矩形、椭圆、箭头、直线、画笔、荧光笔、文字、序号、马赛克、聚光灯，⇧ 画正方形 / 45° 线，再按一次收起；
-// 序号单击放、画笔一路累点），画完自动选中（工具保持）：粉色虚线框 + 手柄，拖手柄改大小（⇧ 约束）、拖箭头中间的手柄弯曲
+// 标注 1–0（矩形、椭圆、箭头、直线、画笔、荧光笔、文字、序号、打码（模糊 / 像素）、聚光灯，⇧ 画正方形 / 45° 线，再按一次收起；
+// 序号单击放、画笔一路累点），画完自动选中（工具保持）：粉色虚线框 + 手柄，拖手柄改大小（矩形类四角 + 边中点；⇧ 约束、⌥ 从中心）、拖箭头中间的手柄弯曲
 // （⇧ 对称、拖回弦上拉直、双击拉直）、拖本体移动（⇧ 锁轴）、⌥ 拖动复制、⌘D 复制、改颜色粗细、⌫ 删除、双击文字重新编辑，
 // ⌘Z 撤销、⇧⌘Z 重做（拖着标注时这几个键不响应）。
 // 录屏（录屏第 1 批）：悬停、单击窗口 / 整屏、拖框、调整、尺寸胶囊、D、放大镜都同截图，没有标注和出图键；调整时选区下方是
@@ -45,6 +45,10 @@ final class SelectionView: NSView, NSTextViewDelegate {
   var autoTranslates = false
   /// 正在就地翻译：选区上出脉冲、框选和工具栏暂时不动
   private var translating = false
+  /// 一键打码正在识字（再点「自动」不重复跑）
+  private var redacting = false
+  /// 托盘上点了吸管：下一下单击取放大镜中心的颜色（拍板 O10）；Esc 取消
+  private var pickingColor = false
   /// 正在跑的就地翻译（Esc / 换屏框选时取消：不然剩下的段会继续打翻译服务）
   private var translateTask: Task<Void, Never>?
   /// 就地翻译之前的冻结帧，和译文贴在哪个选区上（2026-11-06 用户：翻完再框别处，上次的译文还留在「屏幕」上，像是
@@ -527,6 +531,7 @@ final class SelectionView: NSView, NSTextViewDelegate {
 
   /// 回到待选（别的屏开始操作、右键重新框时）：标注一起清掉
   func reset() {
+    pickingColor = false
     cancelTranslation()
     hudMenu?.dismiss()
     finishSizeEditing(commit: false)
@@ -964,8 +969,8 @@ final class SelectionView: NSView, NSTextViewDelegate {
     return Self.handle(at: mouse, in: rect)
   }
 
-  /// 选中的标注：1 pt 粉色虚线框 [4, 3]（箭头、直线、荧光笔不画）+ 手柄（白 9 pt 圆 + 1.5 pt 粉环；矩形类四角、线类两端，
-  /// 箭头、直线的弧线中点是小一号的 7 pt 弯曲手柄；文字、序号、画笔没有）。输入文字时不画（输入框自己有边框，大小跟着输入变）
+  /// 选中的标注：1 pt 粉色虚线框 [4, 3]（箭头、直线、荧光笔不画）+ 手柄（白 9 pt 圆 + 1.5 pt 粉环；矩形类四角和边中点、线类两端，
+  /// 箭头、直线的弧线中点是小一号的 7 pt 弯曲手柄；序号是外切正方形的四角；文字、画笔没有）。输入文字时不画（输入框自己有边框，大小跟着输入变）
   private func updateAnnotationChrome() {
     guard editor == nil, let selected else {
       annotationOutline.path = nil
@@ -1162,7 +1167,7 @@ final class SelectionView: NSView, NSTextViewDelegate {
     switch drag {
     case .move?, .annotate?, .moveAnnotation?, .resizeAnnotation?: return false
     case .pending?, .draw?, .resize?: return true
-    case nil: return !isAdjusting
+    case nil: return !isAdjusting || pickingColor
     }
   }
 
@@ -1251,9 +1256,24 @@ final class SelectionView: NSView, NSTextViewDelegate {
       }
     }
     let styleBar = StyleBar()
-    styleBar.onColor = { [unowned self] color in restyle { $0.color = color } }
-    styleBar.onWeight = { [unowned self] weight in restyle { $0.weight = weight } }
+    styleBar.onColor = { [unowned self] color in
+      restyle {
+        $0.color = color
+        $0.custom = nil
+      }
+    }
+    styleBar.onEyedropper = { [unowned self] in beginPickingColor() }
+    styleBar.onWeight = { [unowned self] weight in
+      restyle {
+        $0.weight = weight
+        $0.diameter = nil  // 序号拖角改过的大小：点了三档就回到三档
+      }
+    }
     styleBar.onOption = { [unowned self] option in restyle { $0.option = option } }
+    styleBar.onFontStep = { [unowned self] step in restyle { $0 = $0.stepped(step, for: .text) } }
+    styleBar.onFontMenu = { [unowned self] button in toggleFontMenu(from: button) }
+    styleBar.onNumber = { [unowned self] delta in renumberSelected(by: delta) }
+    styleBar.onAutoRedact = { [unowned self] in autoRedact() }
     // ponytail: macOS 26 上工具栏（两段已在同一个玻璃容器里）、样式托盘、HUD 菜单、尺寸胶囊是各自独立的玻璃兄弟视图，
     // 违反「相邻的玻璃放进同一个 NSGlassEffectContainerView」（玻璃互相取样不到，托盘离工具栏只有 6 pt，颜色会不一致）。
     // 升级路径：SelectionView 里建一个铺满的容器，四者都挂进它的 contentView（改挂载层级和 z 序，要 26 实机验证）
@@ -1317,7 +1337,7 @@ final class SelectionView: NSView, NSTextViewDelegate {
     toolbar.grow(true, from: edge, anchorX: anchorX)
     let owner: Annotation.Tool? = editor != nil ? .text : selected?.tool ?? tool
     guard let owner else { return styleBar.setShown(false) }
-    styleBar.update(tool: owner, style: shownStyle)
+    styleBar.update(tool: owner, style: shownStyle, number: selectedCounterNumber)
     let button = toolbar.toolButtonFrame(owner).offsetBy(dx: origin.x, dy: origin.y)
     let size = styleBar.preferredSize
     // 栏放进了选区里（上下都放不下）：托盘也夹在选区里、离四边 8 pt，不压能拖的边；否则夹在屏内 10 pt
@@ -1498,6 +1518,118 @@ final class SelectionView: NSView, NSTextViewDelegate {
   }
   private static let ratioMenuLabel = "比例"
 
+  /// 托盘上字号的数字：HUD 菜单列字号档位（勾着现在的），锚在数字下方；开着时再点一下收起
+  private func toggleFontMenu(from button: NSView) {
+    if closesMenu(HUDMenu.fontMenuLabel) { return }
+    present(
+      .fontSizes(current: shownStyle.textSize) { [weak self] size in
+        self?.restyle { $0.fontSize = size }
+      }, anchor: button.convert(button.bounds, to: self))
+  }
+
+  /// 吸管：放大镜跟着鼠标出来（中心像素的色值在信息卡上），单击取色
+  private func beginPickingColor() {
+    hudMenu?.dismiss()
+    guard annotates, isAdjusting, !isDraggingAnnotation else { return }
+    endEditing()
+    pickingColor = true
+    flashHint(["单击取色", "Esc 取消"])
+    announce("单击取色")
+    refresh()
+    refreshCursor()
+  }
+
+  /// 取放大镜中心那一点的颜色，作用于选中的标注 / 当前工具（同点色点）
+  private func pickColor() {
+    pickingColor = false
+    if let sampled, let rgb = Int(sampled.hex.dropFirst(), radix: 16) {
+      restyle { $0.custom = rgb }
+      announce("已取色 \(sampled.hex)")
+    }
+    refresh()
+    refreshCursor()
+  }
+
+  /// 选中的序号的编号（托盘出「编号 − n +」）；选中的不是序号、正在输入文字时 nil
+  private var selectedCounterNumber: Int? {
+    guard editor == nil, case .counter(let number, _)? = selected?.shape else { return nil }
+    return number
+  }
+
+  /// 一键打码（拍板 C5）：选区里识字，手机号、邮箱、银行卡号、身份证号各加一块打码（托盘上打码现在的样式），
+  /// 一起记一步撤销。识字在主线程外（0.2–0.6 s），回来时选区变了就作废
+  private func autoRedact() {
+    hudMenu?.dismiss()
+    guard annotates, isAdjusting, !redacting, !translating, !isDraggingAnnotation, let selection
+    else { return }
+    let source = image
+    let pixels = RegionSelector.pixelRect(
+      selection, viewSize: bounds.size,
+      imageSize: CGSize(width: source.width, height: source.height))
+    guard let crop = source.cropping(to: pixels) else { return }
+    let style = shownStyle
+    redacting = true
+    announce("正在找要打码的内容")
+    Task { [weak self] in
+      let boxes = await OCR.redactionBoxes(in: crop)
+      // 正拖着标注就等松手再落：中途改了列表，松手记的那一步撤销会把打码一起撤掉（⌥ 单击没拖开还会整个丢掉）
+      while self?.isDraggingAnnotation == true { try? await Task.sleep(for: .milliseconds(50)) }
+      guard let self else { return }
+      redacting = false
+      // 选区挪了、会话结束了、图换成了译文图：位置对不上，作废
+      guard isAdjusting, self.selection == selection, image === source else { return }
+      let areas = Redaction.areas(boxes ?? [], in: selection, existing: annotations)
+      guard !areas.isEmpty else {
+        let reason = boxes == nil ? "识字失败，没有打码" : "没找到要打码的内容"
+        flashHint([reason])
+        announce(reason)
+        return
+      }
+      commit(annotations + areas.map { Annotation(shape: .mosaic($0), style: style) })
+      selectedAnnotation = nil
+      refresh()
+      announce("已打码 \(areas.count) 处")
+    }
+  }
+
+  /// 选中的序号编号加减 delta（记一步撤销；之后新放的照旧是现有最大 + 1）
+  private func renumberSelected(by delta: Int) {
+    hudMenu?.dismiss()
+    guard !isDraggingAnnotation, let number = selectedCounterNumber, let selected,
+      let index = annotations.firstIndex(where: { $0.id == selected.id })
+    else { return }
+    var next = annotations
+    next[index] = selected.renumbered(number + delta)
+    commit(next)
+    refresh()
+    if let shown = selectedCounterNumber { announce("编号 \(shown)") }
+  }
+
+  /// 滚轮换档（拍板 O1）：调整阶段鼠标在选中的标注上（或正在输入的文字上）滚，往上大一档、往下小一档——文字是字号，
+  /// 别的是三档（粗细、打码强度、聚光灯深浅）。触控板的细碎滚动攒够一格才换（同悬停认元素的 ElementFinder.step）。
+  /// ponytail: 每换一档记一步撤销，触控板一甩换几档就要按几下 ⌘Z；要合成一步就在滚动停下（phase .ended）时再记
+  private func wheelRestyle(_ event: NSEvent) -> Bool {
+    guard annotates, isAdjusting, drag == nil, !sizeField.isEditing, let mouse,
+      !isOverControls(mouse)
+    else { return false }
+    let owner: Annotation.Tool
+    if let editor, editor.field.frame.contains(mouse) {
+      owner = .text
+    } else if editor == nil, let selected, selected.contains(mouse) {
+      owner = selected.tool
+    } else {
+      return false
+    }
+    guard event.momentumPhase.isEmpty else { return true }
+    if event.phase == .began { scrollPending = 0 }
+    let (step, pending) = ElementFinder.step(
+      deltaY: event.scrollingDeltaY, inverted: event.isDirectionInvertedFromDevice,
+      precise: event.hasPreciseScrollingDeltas, pending: scrollPending)
+    scrollPending = pending
+    if step != 0 { restyle { $0 = $0.stepped(step, for: owner) } }
+    return true
+  }
+
   /// 开着的正是这个菜单就收起（再点一下同一个按钮）；开着的是另一个时不收，由 present 换成新的（一下就开，不用点两次）
   private func closesMenu(_ label: String) -> Bool {
     guard let hudMenu, hudMenu.accessibilityLabel() == label else { return false }
@@ -1579,6 +1711,10 @@ final class SelectionView: NSView, NSTextViewDelegate {
   private func escape() {
     if let hudMenu {
       hudMenu.dismiss()
+    } else if pickingColor {
+      pickingColor = false
+      refresh()
+      refreshCursor()
     } else if let translationCard, !translationCard.leftovers.isEmpty {
       // 列着放不下的段的卡片先收；只有一条窄栏时不拦 Esc，照常往下走（退出截图）
       closeTranslationCard()
@@ -1708,6 +1844,7 @@ final class SelectionView: NSView, NSTextViewDelegate {
   /// 再按一次同一个工具就收起（回到拖动平移选区）；选上时读这个工具上次的样式
   private func choose(_ next: Annotation.Tool) {
     endEditing()
+    pickingColor = false  // 换工具就不取色了
     let chosen = tool == next ? nil : next
     // 先换样式再换工具：托盘换工具那一下拿到的就是这个工具的样式（反过来色点先显示旧样式、再弹一下）
     if let chosen { style = Annotation.Style.remembered(for: chosen, in: styleDefaults) }
@@ -1845,8 +1982,8 @@ final class SelectionView: NSView, NSTextViewDelegate {
   /// 再画不带阴影的字；底色 = 输入框的底就是带阴影的圆角色块（圆角 6），字用压在色块上的颜色（黄 / 白底黑字）
   private func apply(_ style: Annotation.Style, to field: EditorField) {
     let plate = style.option == 2
-    let ink = plate ? style.color.ink : style.color.color
-    field.font = Annotation.font(style.weight)
+    let ink = plate ? style.ink : style.paint
+    field.font = Annotation.font(size: style.textSize)
     field.textColor = ink
     field.insertionPointColor = Style.Shot.accent  // 光标是强调色的位置（§1.2），截图家族用品牌粉
     field.ringRadius = plate ? 6 : 3
@@ -1860,7 +1997,7 @@ final class SelectionView: NSView, NSTextViewDelegate {
     }
     field.outline = style.option == 1 ? Annotation.outlineAttributes(style) : nil
     guard let layer = field.layer else { return }
-    layer.backgroundColor = plate ? style.color.color.cgColor : nil
+    layer.backgroundColor = plate ? style.paint.cgColor : nil
     layer.cornerRadius = plate ? 6 : 0
     // 色块的阴影同 Annotation.textShadow（black 0.28、模糊 3）
     layer.shadowColor = NSColor.black.cgColor
@@ -1874,7 +2011,7 @@ final class SelectionView: NSView, NSTextViewDelegate {
   private func layoutEditor() {
     guard let editor else { return }
     let frame = Annotation.textFrame(
-      editor.field.string, origin: editor.origin, weight: editor.style.weight)
+      editor.field.string, origin: editor.origin, size: editor.style.textSize)
     let pad = editor.style.option == 2 ? Annotation.platePadding : CGSize(width: 3, height: 3)
     if editor.field.textContainerInset != pad { editor.field.textContainerInset = pad }
     editor.field.frame = frame.insetBy(dx: -pad.width, dy: -pad.height)
@@ -1901,6 +2038,11 @@ final class SelectionView: NSView, NSTextViewDelegate {
   private func output(_ action: RegionSelector.Action) {
     // 开着「把译文盖回截图上」（设置 › 翻译，有 translateHandler）时留在截图页里翻：选区上扫光、翻完把译文贴回选区，
     // 不像其它出图键那样收起遮罩；关着时照旧交出去、走翻译浮窗
+    // 一键打码还在识字：等它落下再出图，不然号码跟着图出去了
+    if redacting {
+      NSSound.beep()
+      return flashHint(["正在打码，稍等再出图"])
+    }
     if case .translate = action, translateHandler != nil { return translateInPlace() }
     endEditing()
     guard let selection, let window else { return }
@@ -2267,6 +2409,7 @@ final class SelectionView: NSView, NSTextViewDelegate {
   /// 滚轮 / 触控板双指：待选、悬停着元素时换层，往上（按手指 / 滚轮的方向，不跟着「自然滚动」反过来）大一层、往下小一层，
   /// 最大到那扇窗口；到头了不动。惯性那一段不算
   override func scrollWheel(with event: NSEvent) {
+    if wheelRestyle(event) { return }
     guard selection == nil, drag == nil, event.momentumPhase.isEmpty, let mouse,
       hoverRect(at: mouse) != nil, var current = stack, current.layers.count > 1
     else { return super.scrollWheel(with: event) }
@@ -2367,6 +2510,8 @@ final class SelectionView: NSView, NSTextViewDelegate {
     // 开着 HUD 菜单时点外面：只收菜单；输入着尺寸时点别处：按输入的改选区，这一下不做别的
     if let hudMenu { return hudMenu.dismiss() }
     if sizeField.isEditing { return finishSizeEditing(commit: true) }
+    // 取色：菜单、尺寸输入先收（上面两行），再取
+    if pickingColor, !isOverControls(point) { return pickColor() }
     // 别的屏上有选区：先记下按下的点，拖开了才算在这块屏开始（见 mouseDragged）
     if !session.hasSelection(besides: self) {
       window?.makeKey()
@@ -2479,7 +2624,7 @@ final class SelectionView: NSView, NSTextViewDelegate {
   }
 
   /// 画标注、拖标注、拖标注的手柄跟到 point。⇧（取自 modifiers，拖动中按下 / 松开时 flagsChanged 也走这里重算）：
-  /// 正方形 / 正圆 / 45° 线，拖本体时锁在移动多的那个方向上
+  /// 正方形 / 正圆 / 45° 线，拖矩形类的角时保持原比例，拖本体时锁在移动多的那个方向上；⌥：矩形类从中心画 / 改大小
   private func dragAnnotation(to point: CGPoint) {
     let constrained = modifiers.contains(.shift)
     switch drag {
@@ -2487,7 +2632,9 @@ final class SelectionView: NSView, NSTextViewDelegate {
       guard let tool else { return }
       guard tool == .pen else {
         guard
-          let shape = Annotation.shape(for: tool, from: start, to: point, constrained: constrained)
+          let shape = Annotation.shape(
+            for: tool, from: start, to: point, constrained: constrained,
+            fromCenter: modifiers.contains(.option))
         else { return }
         draft = Annotation(id: draft?.id ?? UUID(), shape: shape, style: style)
         return
@@ -2506,7 +2653,9 @@ final class SelectionView: NSView, NSTextViewDelegate {
       replace(original.offset(by: delta))
     case .resizeAnnotation(let original, let handle, _, let offset)?:
       let target = CGPoint(x: point.x + offset.dx, y: point.y + offset.dy)
-      replace(original.resized(handle, to: target, constrained: constrained))
+      replace(
+        original.resized(
+          handle, to: target, constrained: constrained, fromCenter: modifiers.contains(.option)))
     default:
       break
     }
@@ -2660,6 +2809,7 @@ final class SelectionView: NSView, NSTextViewDelegate {
       return NSCursor.iBeam.set()
     }
     if isOverControls(point) { return NSCursor.arrow.set() }
+    if pickingColor { return NSCursor.crosshair.set() }
     if let editor {  // 输入框里是文字光标；外面点一下只是收下文字
       return (editor.field.frame.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set()
     }
@@ -2675,15 +2825,10 @@ final class SelectionView: NSView, NSTextViewDelegate {
     (selection.contains(point) ? NSCursor.openHand : NSCursor.crosshair).set()
   }
 
-  /// 标注手柄上的光标：矩形类的角是斜向缩放，线类两端和箭头的弯曲手柄是手指（往哪儿拖都行）
-  private static func cursor(for handle: Annotation.Handle) -> NSCursor {
-    switch handle {
-    case .topLeft: .frameResize(position: .topLeft, directions: .all)
-    case .topRight: .frameResize(position: .topRight, directions: .all)
-    case .bottomLeft: .frameResize(position: .bottomLeft, directions: .all)
-    case .bottomRight: .frameResize(position: .bottomRight, directions: .all)
-    case .start, .end, .bend: .pointingHand
-    }
+  /// 标注手柄上的光标：矩形类的角、边中点同选区的缩放光标，线类两端和箭头的弯曲手柄是手指（往哪儿拖都行）。
+  /// 长图 / 历史的标注遮罩（ScrollCanvas）也用它
+  static func cursor(for handle: Annotation.Handle) -> NSCursor {
+    handle.box.map { .frameResize(position: position(of: $0), directions: .all) } ?? .pointingHand
   }
 
   private static func position(of handle: RegionSelector.Handle) -> NSCursor.FrameResizePosition {
@@ -2787,6 +2932,18 @@ final class SelectionView: NSView, NSTextViewDelegate {
     super.keyDown(with: event)
   }
 
+  /// ⌘+ / ⌘−（⌘=、⇧⌘=、⌘-、小键盘 ⌘+ ⌘-，就是 ShotKeys.isReserved 留出来的那几个，改键改不到它们）是往大 / 往小一档；
+  /// 别的 nil。长图标注遮罩也用它
+  static func fontStep(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Int? {
+    switch (Int(event.keyCode), flags) {
+    case (kVK_ANSI_Equal, .command), (kVK_ANSI_Equal, [.command, .shift]),
+      (kVK_ANSI_KeypadPlus, .command):
+      return 1
+    case (kVK_ANSI_Minus, .command), (kVK_ANSI_KeypadMinus, .command): return -1
+    default: return nil
+    }
+  }
+
   /// 截图时的一个快捷键（ShotKeys）：这个模式用得上就做、返回 true（吃掉这一下）。录屏只认上次区域和取色：
   /// 出图键、工具、撤销、切到录屏都是截图的
   private func perform(_ key: ShotKey) -> Bool {
@@ -2795,6 +2952,11 @@ final class SelectionView: NSView, NSTextViewDelegate {
       if !session.selectLastRegion() { refuseWipe("有标注时不跳到别的屏") }
       return true
     case .pickColor:
+      // 吸管取色时 C 也是取色（放大镜的信息卡上亮着 C），不能结束截图把选区和标注丢掉
+      if pickingColor {
+        pickColor()
+        return true
+      }
       if showsMagnifier, let sampled { session.finish(.color(sampled.hex)) }
       return true
     case .record where !Feature.record.isOn:
@@ -2866,6 +3028,14 @@ final class SelectionView: NSView, NSTextViewDelegate {
     }
     // 输入文字 / 尺寸时：⌘C / ⌘V / ⌘X / ⌘A 发给输入框（本 App 不激活，主菜单收不到）；⌘Z / ⇧⌘Z 直接动输入框自己的
     // 撤销栈（NSWindow.undoFocusedText，第三轮体检：原来发 undo: / redo: 动作，顺着响应链到头是窗口接、字不变）
+    // ⌘+ / ⌘−：正在输入或选中文字时换一档字号（拍板 A2）；⌘= 不按 ⇧ 也算 +
+    if annotates, !sizeField.isEditing, editor != nil || selected?.tool == .text,
+      let step = Self.fontStep(event, flags: flags)
+    {
+      // 拖着标注时吞掉不做：中途改了列表，松手记的那一步撤销就对不上（同 ⌘Z / ⌫）
+      if !isDraggingAnnotation { restyle { $0 = $0.stepped(step, for: .text) } }
+      return true
+    }
     if editor != nil || sizeField.isEditing {
       if key == "z", flags.subtracting(.shift) == .command {
         if window?.undoFocusedText(redo: flags.contains(.shift)) != true { NSSound.beep() }
@@ -3088,7 +3258,7 @@ final class AnnotationCanvas: NSView {
     context.setFillColor(NSColor.white.cgColor)
     context.setStrokeColor(pink)
     context.setLineWidth(1.5 * thin)
-    for (handle, point) in selected.handles {
+    for (handle, point) in selected.handles(zoom: zoom) {
       let radius = (handle == .bend ? 3.5 : 4.5) * thin
       let dot = CGRect(
         x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)

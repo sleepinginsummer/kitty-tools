@@ -93,6 +93,26 @@ struct AnnotationEditingTests {
     #expect(annotation(h, id)?.shape == .rectangle(CGRect(x: 350, y: 250, width: 100, height: 100)))
   }
 
+  // 边中点的手柄只动那条边；⌥ 画 / 拖手柄以中心为准（2026-11-12 拍板 B1 B3）
+  @Test func edgeHandleAndOptionFromCenter() {
+    let h = harness(tool: .rectangle)
+    h.drag(CGPoint(x: 350, y: 250), CGPoint(x: 450, y: 350))
+    let id = h.view.selectedAnnotation
+    // 右边中点 (450, 300) 拖到 (500, 330)：只变宽
+    h.drag(CGPoint(x: 451, y: 302), CGPoint(x: 500, y: 330))
+    #expect(annotation(h, id)?.shape == .rectangle(CGRect(x: 350, y: 250, width: 150, height: 100)))
+    // ⌥ 拖上边中点 (425, 350) 到 (425, 370)：上下各长 20
+    h.begin(CGPoint(x: 425, y: 350), to: CGPoint(x: 425, y: 370), flags: .option)
+    h.release(CGPoint(x: 425, y: 370), flags: .option)
+    #expect(annotation(h, id)?.shape == .rectangle(CGRect(x: 350, y: 230, width: 150, height: 140)))
+    // ⌥ 画椭圆：按下的点是中心
+    h.view.tool = .ellipse
+    h.begin(CGPoint(x: 600, y: 300), to: CGPoint(x: 640, y: 320), flags: .option)
+    h.release(CGPoint(x: 640, y: 320), flags: .option)
+    #expect(
+      h.view.annotations.last?.shape == .ellipse(CGRect(x: 560, y: 280, width: 80, height: 40)))
+  }
+
   @Test func collapsingByAHandleRestoresTheAnnotation() {
     let h = harness(tool: .rectangle)
     h.drag(CGPoint(x: 350, y: 250), CGPoint(x: 450, y: 350))
@@ -269,7 +289,7 @@ struct AnnotationEditingTests {
     let h = harness(tool: nil)
     let original = Annotation(shape: .rectangle(CGRect(x: 350, y: 250, width: 100, height: 100)))
     h.view.annotations = [original]
-    // 按在左边线中间（不在手柄上），⌥ 往右拖 30
+    // 按在左边线上（原件没选中，没有手柄），⌥ 往右拖 30
     h.drag(CGPoint(x: 350, y: 300), CGPoint(x: 380, y: 300), flags: .option)
     #expect(h.view.annotations.count == 2)
     #expect(h.view.annotations.first == original)
@@ -279,10 +299,11 @@ struct AnnotationEditingTests {
     #expect(h.view.selectedAnnotation == copy.id)
     h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
     #expect(h.view.annotations == [original])
-    // ⌥ 单击没拖开：不留叠在原处的副本，选中原件
-    h.click(CGPoint(x: 350, y: 300))
-    h.down(CGPoint(x: 350, y: 300), flags: .option)
-    h.release(CGPoint(x: 350, y: 300), flags: .option)
+    // ⌥ 单击没拖开：不留叠在原处的副本，选中原件（选中后边中点是手柄，按在避开它的边线上）
+    h.click(CGPoint(x: 350, y: 280))
+    h.down(CGPoint(x: 350, y: 280), flags: .option)
+    #expect(h.view.annotations.count == 2)
+    h.release(CGPoint(x: 350, y: 280), flags: .option)
     #expect(h.view.annotations == [original])
     #expect(h.view.selectedAnnotation == original.id)
   }
@@ -296,10 +317,11 @@ struct AnnotationEditingTests {
     h.begin(CGPoint(x: 350, y: 300), to: CGPoint(x: 380, y: 300), flags: .option)
     #expect(NSCursor.current.image.tiffRepresentation == NSCursor.dragCopy.image.tiffRepresentation)
     h.release(CGPoint(x: 380, y: 300), flags: .option)
-    h.begin(CGPoint(x: 380, y: 300), to: CGPoint(x: 400, y: 300))
+    // 按在边线上、避开边中点的手柄（那里是改大小）
+    h.begin(CGPoint(x: 380, y: 280), to: CGPoint(x: 400, y: 280))
     #expect(
       NSCursor.current.image.tiffRepresentation == NSCursor.closedHand.image.tiffRepresentation)
-    h.release(CGPoint(x: 400, y: 300))
+    h.release(CGPoint(x: 400, y: 280))
   }
 
   // 拖着标注（画、挪、改大小）时 ⌘Z / ⇧⌘Z / ⌫ / ⌘D 不响应：不然松手时记的那一步撤销和标注列表对不上
@@ -312,15 +334,15 @@ struct AnnotationEditingTests {
     h.release(CGPoint(x: 560, y: 300))
     #expect(h.view.annotations.count == 2)
     let first = h.view.annotations.first
-    // 按住第二个（空心矩形认边线）挪的途中按 ⌫ / ⌘D / ⇧⌘Z：都不动
-    h.begin(CGPoint(x: 530, y: 250), to: CGPoint(x: 540, y: 260))
+    // 按住第二个（空心矩形认边线，避开边中点的手柄）挪的途中按 ⌫ / ⌘D / ⇧⌘Z：都不动
+    h.begin(CGPoint(x: 515, y: 250), to: CGPoint(x: 525, y: 260))
     h.key(kVK_Delete, "\u{7f}")
     h.keyEquivalent(kVK_ANSI_D, "d", flags: .command)
     h.keyEquivalent(kVK_ANSI_Z, "z", flags: [.command, .shift])
     #expect(h.view.annotations.count == 2)
     #expect(
       h.view.annotations.last?.shape == .rectangle(CGRect(x: 510, y: 260, width: 60, height: 50)))
-    h.release(CGPoint(x: 540, y: 260))
+    h.release(CGPoint(x: 525, y: 260))
     // 撤销依次是：挪 → 画第二个 → 画第一个
     h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
     #expect(
@@ -432,6 +454,192 @@ struct AnnotationEditingTests {
       return
     }
     #expect(capture.action == .copy)
+  }
+
+  // 字号：输入时 ⌘+ / 托盘 A− A+ / 选中后 ⌘− / 滚轮，都记撤销、记住给下一条（拍板 A1 A2 O1）
+  @Test func fontSizeByKeysTrayAndWheel() throws {
+    let h = harness(tool: .text)
+    let origin = CGPoint(x: 400, y: 400)
+    h.view.beginEditing(at: origin)
+    let field = try #require(h.fieldEditor)
+    field.insertText("字", replacementRange: NSRange(location: NSNotFound, length: 0))
+    let styleBar = try #require(h.view.subviews.lazy.compactMap { $0 as? StyleBar }.first)
+    #expect(h.keyEquivalent(kVK_ANSI_Equal, "=", flags: .command))
+    #expect(field.font?.pointSize == 24)
+    styleBar.onFontStep(-1)
+    styleBar.onFontStep(-1)
+    #expect(field.font?.pointSize == 16)
+    h.key(kVK_Escape, "\u{1b}")
+    let text = try #require(h.view.annotations.first)
+    #expect(text.style.fontSize == 16 && h.view.selectedAnnotation == text.id)
+    // 选中文字时 ⌘−；下一条文字用记住的字号
+    #expect(h.keyEquivalent(kVK_ANSI_Minus, "-", flags: .command))
+    #expect(h.view.annotations.first?.style.fontSize == 14)
+    #expect(h.view.style.fontSize == 14)
+    // 鼠标在选中的文字上滚轮往上：大一档；不在它上面不动
+    let inside = CGPoint(x: text.bounds.midX, y: text.bounds.midY)
+    h.move(inside)
+    h.scroll(up: true)
+    #expect(h.view.annotations.first?.style.fontSize == 16)
+    h.move(CGPoint(x: 600, y: 250))
+    h.scroll(up: true)
+    #expect(h.view.annotations.first?.style.fontSize == 16)
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
+    #expect(h.view.annotations.first?.style.fontSize == 14)
+    // 输入时那几次改字号不单独记步：再撤两步是「选中后 ⌘−」之前、再之前是没有这条文字
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
+    #expect(h.view.annotations.first?.style.fontSize == 16)
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
+    #expect(h.view.annotations.isEmpty)
+    // ⇧⌘- 不是字号键（留给改键）
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: [.command, .shift])
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: [.command, .shift])
+    #expect(!h.keyEquivalent(kVK_ANSI_Minus, "-", flags: [.command, .shift]))
+    #expect(h.view.annotations.first?.style.fontSize == 14)
+  }
+
+  // 拖着文字时按 ⌘+：吞掉不改，松手只记挪动那一步（不然撤销栈里多一个拖到一半的样子）
+  @Test func fontKeysIgnoredWhileDragging() throws {
+    let h = harness(tool: nil)
+    let text = Annotation(shape: .text("字", origin: CGPoint(x: 400, y: 400)))
+    h.view.annotations = [text]
+    let inside = CGPoint(x: text.bounds.midX, y: text.bounds.midY)
+    h.begin(inside, to: CGPoint(x: inside.x + 30, y: inside.y))
+    #expect(h.keyEquivalent(kVK_ANSI_Equal, "=", flags: .command))
+    h.release(CGPoint(x: inside.x + 30, y: inside.y))
+    let moved = try #require(h.view.annotations.first)
+    #expect(
+      moved.style.fontSize == nil && moved.shape == .text("字", origin: CGPoint(x: 430, y: 400)))
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
+    #expect(h.view.annotations == [text])
+  }
+
+  // 滚轮在选中的矩形上换粗细；选中序号时托盘改编号，之后新放的照旧是最大 + 1（拍板 O1 O2）
+  @Test func wheelChangesWeightAndTrayRenumbersCounter() throws {
+    let h = harness(tool: .rectangle)
+    h.drag(CGPoint(x: 350, y: 250), CGPoint(x: 450, y: 350))
+    h.move(CGPoint(x: 350, y: 280))  // 空心矩形认边线
+    h.scroll(up: true)
+    #expect(h.view.annotations.first?.style.weight == .large)
+    h.scroll(up: false)
+    h.scroll(up: false)
+    #expect(h.view.annotations.first?.style.weight == .small)
+    h.view.tool = .counter
+    h.click(CGPoint(x: 550, y: 300))
+    let styleBar = try #require(h.view.subviews.lazy.compactMap { $0 as? StyleBar }.first)
+    styleBar.onNumber(1)
+    styleBar.onNumber(1)
+    #expect(h.view.annotations.last?.shape == .counter(3, center: CGPoint(x: 550, y: 300)))
+    h.click(CGPoint(x: 600, y: 300))
+    #expect(h.view.annotations.last?.shape == .counter(4, center: CGPoint(x: 600, y: 300)))
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
+    #expect(h.view.annotations.last?.shape == .counter(2, center: CGPoint(x: 550, y: 300)))
+  }
+
+  // 序号拖右上角放大（用户反馈：序号要能像矩形一样改大小），⌘Z 回去；点托盘的三档回到三档
+  @Test func counterCornerResizesThenUndo() throws {
+    let h = harness(tool: .counter)
+    h.click(CGPoint(x: 500, y: 300))
+    let id = try #require(h.view.selectedAnnotation)
+    h.drag(CGPoint(x: 513, y: 313), CGPoint(x: 540, y: 320))  // 中号 26 的右上角
+    #expect(annotation(h, id)?.style.diameter == 80)
+    #expect(annotation(h, id)?.shape == .counter(1, center: CGPoint(x: 500, y: 300)))
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
+    #expect(annotation(h, id)?.style.diameter == nil)
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: [.command, .shift])
+    let styleBar = try #require(h.view.subviews.lazy.compactMap { $0 as? StyleBar }.first)
+    styleBar.onWeight(.large)
+    #expect(annotation(h, id)?.style.diameter == nil && annotation(h, id)?.style.weight == .large)
+  }
+
+  // 一键打码（拍板 C5）：选区里的电话号码加一块打码（第一次用是模糊），一起记一步撤销；选区外的不管
+  @Test func autoRedactCoversNumbersInTheSelection() async throws {
+    let context = try #require(
+      CGContext(
+        data: nil, width: 1200, height: 800, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.setFillColor(CGColor(gray: 1, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 1200, height: 800))
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+    let font: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 28)]
+    NSAttributedString(string: "电话 138 0013 8000", attributes: font).draw(
+      at: CGPoint(x: 330, y: 400))
+    NSAttributedString(string: "选区外 139 1234 5678", attributes: font).draw(
+      at: CGPoint(x: 760, y: 400))
+    NSGraphicsContext.restoreGraphicsState()
+    let h = Harness(image: try #require(context.makeImage()))
+    h.makeSelection()  // (300, 200)–(700, 500)
+    h.key(kVK_ANSI_9, "9")  // 选打码工具（照记住的样式：第一次是模糊）
+    #expect(h.view.tool == .mosaic)
+    let box = Annotation(shape: .rectangle(CGRect(x: 320, y: 220, width: 60, height: 60)))
+    h.view.annotations = [box]
+    let styleBar = try #require(h.view.subviews.lazy.compactMap { $0 as? StyleBar }.first)
+    styleBar.onAutoRedact()
+    // 识字还没回来时按 ⌘C：不出图（不然号码跟着图出去了）
+    let early = await h.outcome { _ = h.keyEquivalent(kVK_ANSI_C, "c", flags: .command) }
+    if case .color(let note)? = early { #expect(note == "没交回结果") } else { Issue.record("出图了") }
+    // 拖着矩形时识字回来：等松手再落，撤销一步只撤打码、矩形留在挪过的地方
+    h.begin(CGPoint(x: 335, y: 220), to: CGPoint(x: 345, y: 220))
+    try await Task.sleep(for: .seconds(1.5))
+    #expect(h.view.annotations.count == 1)
+    h.release(CGPoint(x: 345, y: 220))
+    for _ in 0..<500 where h.view.annotations.count < 2 {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(h.view.annotations.count == 2)
+    let added = try #require(h.view.annotations.last)
+    #expect(added.style.option == 1)
+    guard case .mosaic(let rect) = added.shape else {
+      Issue.record("不是打码")
+      return
+    }
+    #expect(rect.minX > 380 && rect.maxX < 700 && rect.minY < 410 && rect.maxY > 420, "\(rect)")
+    h.keyEquivalent(kVK_ANSI_Z, "z", flags: .command)
+    #expect(h.view.annotations.map(\.shape) == [box.offset(by: CGSize(width: 10, height: 0)).shape])
+  }
+
+  // 吸管（拍板 O10）：点了之后放大镜出来，单击取中心像素的颜色给当前工具；点预设色作废；Esc 取消
+  @Test func eyedropperPicksColorFromTheShot() async throws {
+    // 上半红、下半蓝（上下翻了就取错）
+    let context = try #require(
+      CGContext(
+        data: nil, width: 1200, height: 800, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 1200, height: 400))
+    context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+    context.fill(CGRect(x: 0, y: 400, width: 1200, height: 400))
+    let h = Harness(image: try #require(context.makeImage()))
+    h.makeSelection()
+    h.view.tool = .rectangle
+    let styleBar = try #require(h.view.subviews.lazy.compactMap { $0 as? StyleBar }.first)
+    styleBar.onEyedropper()
+    h.move(CGPoint(x: 500, y: 450))  // 上半
+    #expect(h.view.showsMagnifier)
+    h.click(CGPoint(x: 500, y: 450))
+    #expect(h.view.annotations.isEmpty)  // 这一下只取色，不画
+    let custom = try #require(h.view.style.custom)
+    #expect(custom == 0xFF0000)
+    // 取色时按 C 也是取色，不结束截图
+    styleBar.onEyedropper()
+    h.move(CGPoint(x: 500, y: 300))  // 下半
+    let viaKey = await h.outcome { h.key(kVK_ANSI_C, "c") }
+    if case .color(let note)? = viaKey { #expect(note == "没交回结果") } else { Issue.record("截图结束了") }
+    #expect(h.view.style.custom == 0x0000FF)
+    h.drag(CGPoint(x: 350, y: 250), CGPoint(x: 450, y: 350))
+    #expect(h.view.annotations.first?.style.custom == 0x0000FF)
+    styleBar.onColor(.red)
+    #expect(h.view.annotations.first?.style.custom == nil && h.view.style.custom == nil)
+    // Esc 取消：再单击不取色
+    styleBar.onEyedropper()
+    h.key(kVK_Escape, "\u{1b}")
+    h.move(CGPoint(x: 600, y: 300))
+    h.click(CGPoint(x: 600, y: 300))
+    #expect(h.view.style.custom == nil)
   }
 
   @Test func textEditorShowsStylesLive() throws {

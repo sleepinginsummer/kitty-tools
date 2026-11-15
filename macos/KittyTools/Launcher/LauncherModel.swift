@@ -229,6 +229,8 @@ import UniformTypeIdentifiers
   @ObservationIgnored var createReminder: (Reminder) -> Void = { _ in }
   @ObservationIgnored var toggleReminder: (String) -> Void = { _ in }
   @ObservationIgnored var openReminder: (String) -> Void = { _ in }
+  /// 「添加…插件」（2026-11-12 拍板 A4）：打开 设置 › 通用 › 功能 那张卡（AppDelegate 给）
+  @ObservationIgnored var offerPlugin: (Feature) -> Void = { _ in }
   /// 全局热键动作当前生效的组合（选中的内置动作右侧显示键帽）；AppDelegate 接 HotKeyCenter 注册上的那份
   @ObservationIgnored var boundHotKey: (HotKeyAction) -> HotKey? = { $0.hotKey }
   /// 文件搜索的授权提示 ↩：没问过就逐个弹系统框，问过就打开系统设置
@@ -886,6 +888,8 @@ import UniformTypeIdentifiers
     let currency = ExchangeRates.promptItems(for: typed)
     // 「新建提醒…」提示排在本地结果后面：输「提醒」想打开系统「提醒事项」的，↩ 照旧打开它
     let tx = features.contains(.reminders) ? labeled(Self.reminderPrompts(for: typed)) : []
+    // 没添加的插件：打到它的名字或关键词时，本地结果后面、兜底前面一行「添加…插件」（A4）
+    let offers = Self.pluginOffers(for: typed, added: features)
     let exactPrompts: [LauncherItem] =
       prompts.exact + labeled(filePrompts.exact + systemPrompts.exact)
     let partialPrompts: [LauncherItem] =
@@ -941,7 +945,7 @@ import UniformTypeIdentifiers
     }
     results =
       (leading + aliasedApps + aliased + ordered + trailing + tx + history + partialPrompts
-      + fallback)
+      + offers + fallback)
       .filter { seen.insert($0.id).inserted }
     if let invocation { startList(invocation) }
   }
@@ -1195,6 +1199,39 @@ import UniformTypeIdentifiers
 
   /// 「提醒 …」认不出时那一行提示的目标（↩ 什么都不做，只响提示音）
   static let reminderHint = "reminder-hint"
+
+  /// 「添加…插件」那一行的目标前缀（后面是 Feature.rawValue）
+  static let pluginPrefix = "plugin-"
+
+  /// 没添加的插件里，打的字对得上名字或关键词的（纯函数）：整个词打全了（后面还可以接别的，「awake 2小时」），
+  /// 或者打了一个词的开头——英文至少 4 个字母、中文至少 2 个字（「ca」不该冒出「添加保持唤醒插件」）
+  static func pluginOffers(for typed: String, added: Set<Feature>) -> [LauncherItem] {
+    let text = LauncherMatch.fold(typed.trimmingCharacters(in: .whitespaces))
+    let head = String(text.prefix { !$0.isWhitespace })
+    let least = head.allSatisfy(\.isASCII) ? 4 : 2
+    guard head.count >= 2 else { return [] }
+    return Feature.allCases.filter { $0.isPlugin && $0.isAvailable && !added.contains($0) }
+      .compactMap { plugin in
+        let words = ([plugin.page.title] + plugin.pluginWords).map(LauncherMatch.fold)
+        // 中文常不打空格（「保持唤醒2小时」）：打的字以这个词开头也算。英文的词后面不能紧跟着字母、数字
+        // （评审 6：dock、note 这些短词，打 docker、notebook 不该冒出「添加…插件」）
+        guard
+          words.contains(where: { word in
+            (head.hasPrefix(word)
+              && (!word.allSatisfy(\.isASCII)
+                || head.dropFirst(word.count).first.map {
+                  !($0.isASCII && ($0.isLetter || $0.isNumber))
+                }
+                  ?? true))
+              || (word.hasPrefix(head) && head.count >= least)
+          })
+        else { return nil }
+        return LauncherItem(
+          kind: .prompt, target: pluginPrefix + plugin.rawValue,
+          title: "添加「\(plugin.page.title)」插件",
+          subtitle: plugin.blurb)
+      }
+  }
   /// 下拉参数的一个选项那一行（第三轮 C1）：目标是「前缀 脚本路径⏎第几个参数⏎第几个选项」
   static let choicePrefix = "script-choice\n"
 
@@ -1443,6 +1480,11 @@ import UniformTypeIdentifiers
       requestFolderAccess()
     case .prompt where item.target == Self.reminderHint:
       NSSound.beep()
+    case .prompt where item.target.hasPrefix(Self.pluginPrefix):
+      guard let plugin = Feature(rawValue: String(item.target.dropFirst(Self.pluginPrefix.count)))
+      else { return NSSound.beep() }
+      close()
+      offerPlugin(plugin)
     case .prompt:
       if let completion = item.completion { query = completion }
     case .search:
@@ -2269,6 +2311,7 @@ import UniformTypeIdentifiers
     case .url: ("打开网址", "safari")
     case .search: ("搜索", "magnifyingglass")
     case .prompt where item.target == Self.reminderHint: ("改一下再建", "pencil")
+    case .prompt where item.target.hasPrefix(Self.pluginPrefix): ("去设置里添加", "puzzlepiece.extension")
     case .prompt where item.target.hasPrefix(Self.choicePrefix): ("选这个", "text.cursor")
     case .prompt:
       item.target == FileSearch.accessTarget

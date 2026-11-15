@@ -103,6 +103,79 @@ import Testing
     #expect(try names(in: root) == ["资料", "资料 2", "资料.zip"])
   }
 
+  /// 压缩时跳过（2026-11-13 拍板 Z1 Z2）：逗号（全角半角）隔开、去空白去重、带「/」的不收；交给 find 时 [ ] \ 转义、
+  /// 交给 tar -X 的确切路径 * ? [ ] \ 都转义（评审：bsdtar 的 --exclude 跨「/」匹配，不能直接交名单）
+  @Test func skipNames() {
+    #expect(
+      Archives.skipNames(" node_modules, .git，*.log ,, .git") == ["node_modules", ".git", "*.log"])
+    #expect(Archives.skipNames("build/out, a") == ["a"])
+    #expect(Archives.rejectedSkipNames("build/out, a, /tmp") == ["build/out", "/tmp"])
+    #expect(
+      Archives.skipNames((0..<80).map(String.init).joined(separator: ",")).count == 50)
+    let find = Archives.skipFindArguments(["[old]", "*.log"], roots: ["./a"])
+    #expect(find.prefix(4) == ["./a", "(", "-depth", "+0"])
+    #expect(find.contains("\\[old\\]") && find.contains("*.log") && find.contains("*.app"))
+    #expect(Archives.escapedForTar("./a/[x]*?.log") == "./a/\\[x\\]\\*\\?.log")
+    let arguments = Archives.compressArguments(
+      [URL(filePath: "/x/a")], format: .zip, to: URL(filePath: "/x/a.zip"),
+      excludes: URL(filePath: "/tmp/list"))
+    #expect(arguments[arguments.firstIndex(of: "-X")! + 1] == "/tmp/list")
+  }
+
+  /// 真压一遍（zip、7z）：任意一层叫这个名字的都不进包；通配不跨文件夹（Screenshot*.png 不扔 Screenshots/ 里的）；
+  /// [old] 只认字面；.app 里面不跳；选中的那一样自己叫这个名字时照压、它里面同名的照跳；跳掉的确切路径和大小
+  @Test func skipWhileCompressing() async throws {
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let project = root.appending(path: "项目")
+    try write("main", to: project.appending(path: "src/main.js"))
+    try write(
+      String(repeating: "x", count: 1000), to: project.appending(path: "node_modules/a/b.js"))
+    try write("log", to: project.appending(path: "src/run.log"))
+    try write("png", to: project.appending(path: "Screenshot1.png"))
+    try write("keep", to: project.appending(path: "Screenshots/2024/a.png"))
+    try write("old", to: project.appending(path: "[old]/e.txt"))
+    try write("o", to: project.appending(path: "o"))
+    try write("js", to: project.appending(path: "X.app/Contents/node_modules/d.js"))
+    let names = ["node_modules", "*.log", "Screenshot*.png", "[old]"]
+    let skipped = await Archives.skipped([project], names: names)
+    #expect(
+      Set(skipped.map(\.relative)) == [
+        "./项目/node_modules", "./项目/src/run.log", "./项目/Screenshot1.png", "./项目/[old]",
+      ])
+    #expect(await ByteMeter.sizes(of: skipped.map(\.url)).reduce(0, +) == 1000 + 3 + 3 + 3)
+    for format in [Archives.Format.zip, .sevenZip] {
+      let packed = await Archives.pack(
+        [project], format: format, to: root.appending(path: "项目.\(format.rawValue)"), skip: names)
+      let archive = try #require(packed.url)
+      let listing = try await Subprocess.run(
+        "/usr/bin/tar", ["-tf", archive.path(percentEncoded: false)], captures: true,
+        environment: ByteMeter.utf8Environment)
+      let lines = Set(listing.output.split(whereSeparator: \.isNewline).map(String.init))
+      for kept in [
+        "项目/src/main.js", "项目/Screenshots/2024/a.png", "项目/o",
+        "项目/X.app/Contents/node_modules/d.js",
+      ] {
+        #expect(lines.contains(kept), "\(format) \(kept)")
+      }
+      for gone in [
+        "项目/node_modules/a/b.js", "项目/src/run.log", "项目/Screenshot1.png", "项目/[old]/e.txt",
+      ] {
+        #expect(!lines.contains(gone), "\(format) \(gone)")
+      }
+    }
+    // 选中的就是 node_modules：它自己照压，里面再套的 node_modules 照跳
+    let modules = project.appending(path: "node_modules")
+    try write("nested", to: modules.appending(path: "a/node_modules/n.js"))
+    let packed = await Archives.pack(
+      [modules], format: .zip, to: root.appending(path: "node_modules.zip"), skip: ["node_modules"])
+    let whole = try #require(packed.url)
+    let entries = try #require(ZipNames.entries(of: whole))
+    let inside = entries.map { String(decoding: $0.name, as: UTF8.self) }
+    #expect(inside.contains("node_modules/a/b.js"))
+    #expect(!inside.contains { $0.contains("a/node_modules") })
+  }
+
   /// 7z：两样东西打成「归档」，解回来放进和包同名的文件夹
   @Test func sevenZipRoundTrip() async throws {
     let root = try makeRoot()
@@ -304,6 +377,54 @@ import Testing
     #expect(outcome.url == nil)
     #expect(outcome != .wrongPassword)
     #expect(try names(in: root) == ["坏.zip"])
+  }
+
+  /// RAR：系统 tar 解得开（手搓的最小 RAR4，不压缩，里面一个 hello.txt）；主头标着分卷的认出来（RAR4 / RAR5 的头，
+  /// RAR5 的取自本机一个真包、只改了分卷那一位）；认不出来的失败原因带上「有密码」
+  @Test func rar() async throws {
+    let hello: [UInt8] = [
+      0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00, 0xCF, 0x90, 0x73, 0x00, 0x00, 0x0D, 0x00, 0x00,
+      0x00,
+      0x00, 0x00, 0x00, 0x00, 0x08, 0x29, 0x74, 0x00, 0x80, 0x29, 0x00, 0x0A, 0x00, 0x00, 0x00,
+      0x0A,
+      0x00, 0x00, 0x00, 0x03, 0x9D, 0xD2, 0x80, 0xB1, 0x00, 0x00, 0x6E, 0x5B, 0x14, 0x30, 0x09,
+      0x00,
+      0xA4, 0x81, 0x00, 0x00, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x2E, 0x74, 0x78, 0x74, 0x68, 0x65,
+      0x6C,
+      0x6C, 0x6F, 0x20, 0x72, 0x61, 0x72, 0x0A, 0xC4, 0x3D, 0x7B, 0x00, 0x40, 0x07, 0x00,
+    ]
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let archive = root.appending(path: "问候.RAR")
+    try Data(hello).write(to: archive)
+    #expect(Archives.isArchive(archive))
+    let outcome = await Archives.unpack(archive, password: nil, gbk: false)
+    #expect(outcome.url?.lastPathComponent == "hello.txt")
+    #expect(
+      try String(contentsOf: root.appending(path: "hello.txt"), encoding: .utf8) == "hello rar\n")
+
+    #expect(!Archives.isRARVolume(Data(hello)))
+    var volume4 = hello
+    volume4[10] |= 0x01
+    #expect(Archives.isRARVolume(Data(volume4)))
+    let rar5: [UInt8] = [
+      0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00, 0x36, 0x17, 0x44, 0xD8, 0x0C, 0x01, 0x05,
+      0x08,
+      0x00, 0x07, 0x01, 0x01, 0xD8, 0xB2, 0x84, 0x80,
+    ]
+    #expect(!Archives.isRARVolume(Data(rar5)))
+    var volume5 = rar5
+    volume5[16] = 0x01
+    #expect(Archives.isRARVolume(Data(volume5)))
+    #expect(!Archives.isRARVolume(Data(rar5.prefix(14))))  // 截短的不算
+    #expect(!Archives.isRARVolume(Data("PK\u{3}\u{4}".utf8)))
+
+    #expect(
+      Archives.outcome(ofFailure: "x: Bad RAR file data", password: false, rar: true)
+        == .failed("压缩包可能坏了，或者加了密码（RAR 的密码这里解不开）"))
+    #expect(
+      Archives.outcome(ofFailure: "Encryption is not supported", password: false, rar: true)
+        == .failed("这个包加了密码，这里只解得开 zip 的密码"))
   }
 }
 

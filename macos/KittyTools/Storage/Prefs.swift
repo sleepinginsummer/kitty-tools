@@ -11,6 +11,8 @@ enum Prefs {
   static let accent = "accent"
   /// 在菜单栏显示图标（第 9 批 M1，默认开）；关掉后再打开一次本 App（访达 / 启动器）打开主界面，快捷键照常
   static let statusItemVisible = "statusItemVisible"
+  /// macOS 26 上程序坞 / ⌘⇥ 里一直留着图标（PR #1，2026-11-12；只在 26 上有这一项，见 NSApplication.keepsDockIcon）
+  static let dockIconOnTahoe = "dockIconOnTahoe"
   /// 菜单栏图标样式（StatusItem.IconStyle.rawValue）：template 单色剪影（默认）/ color 彩色 App 图标（第 9 批 M2）
   static let statusItemStyle = "statusItemStyle"
   /// 剪贴板面板点外即关；底栏图钉 / ⌘P = 把它关掉（固定）。设置页不再有这个开关（体检 A9），只存图钉状态
@@ -250,6 +252,7 @@ enum Prefs {
   nonisolated static let reminders = "reminders"
   /// 每条提醒处理到哪一刻、「稍后」推到几点（ReminderState 的 JSON）。这台电脑自己的状态：不注册默认值、不导出
   nonisolated static let remindersState = "remindersState"
+
   /// 点「稍后」推几分钟（设置 › 提醒，默认 5，C8）
   static let remindersSnoozeMinutes = "remindersSnoozeMinutes"
   /// 挑的系统表情有动画版时自动下载（EmojiPack，2026-11-05，默认开；设置 › 状态屏 / 提醒两页各一行）
@@ -319,6 +322,10 @@ enum Prefs {
   /// 这台电脑自己的状态、**不注册默认值**——别人给的导出文件不该改你同步到哪；没有 = 没开同步（A2 默认关）
   nonisolated static let notesSyncFolder = "notesSyncFolder"
   nonisolated static let notesSyncLibrary = "notesSyncLibrary"
+  /// 连 WebDAV 服务器同步时（issue #18，2026-11-13；NoteSyncer / NoteSyncServer）：服务器上那个文件夹的网址、用户名（密码在
+  /// 钥匙串 NoteSyncer.passwordKey）。这时 notesSyncFolder 是数据目录里的镜像。同样是这台电脑自己的状态、**不注册默认值**
+  nonisolated static let syncServer = "syncServer"
+  nonisolated static let syncServerUser = "syncServerUser"
   /// 这台电脑上不同步的几部分（全局同步 A3：设置页每类一个勾；"notes" 和 SyncRecords.Kind 的名字），同样是这台电脑自己的
   /// 状态、不注册默认值（没有 = 都同步）
   nonisolated static let syncSkipped = "syncSkipped"
@@ -375,6 +382,9 @@ enum Prefs {
   /// 访达右键把我们的项都收进一个「Kitty Tools ▸」子菜单（默认关、平铺在第一层；设置 › 访达右键，2026-11-08 用户同意的建议）。
   /// 扩展读同一个键，键名和默认值在 KittyToolsFinder/FinderMenu 里抄了一份
   nonisolated static let finderMenuGrouped = "finderMenuGrouped"
+  /// 访达右键压缩时另外跳过的名字（设置 › 访达右键「压缩时跳过」，2026-11-13 拍板 Z1）：逗号隔开，* ? 通配，只认名字不认路径，
+  /// 默认空 = 和原来一样（Mac 杂文件照旧总跳过）。只有 App 读，扩展不读；注册了默认值，跟着导出、同步（Z4）
+  nonisolated static let finderCompressSkip = "finderCompressSkip"
   /// 访达右键里每一项显示不显示：键是「finderMenu<名字>」，见 FinderMenu/FinderMenuItem（默认值按项，下面 defaults 里一起注册）。
   /// 访达右键「移动到」「复制到」的常用文件夹（~ 开头的写法；设置 › 访达右键，没存过是桌面、文稿、下载）。这台电脑自己的、
   /// **不注册默认值**（同截图的存储文件夹：别人给的设置文件不该能往右键菜单里加一个文件夹）。扩展读同一个键（键名和默认值
@@ -414,6 +424,40 @@ enum Prefs {
   static let settingsCollapsedGroups = "settingsCollapsedGroups"
   /// 设置侧栏底下「已关闭」那组展开着没有（默认收起；SettingsRoot）。这台电脑自己的界面状态：不注册默认值、不导出不同步
   static let settingsShowsOffFeatures = "settingsShowsOffFeatures"
+  /// 刘海岛那一张（点刘海、快捷键「打开刘海岛」叫出来的）上快捷动作的先后、关掉的几个（设置 › 刘海岛，2026-11-12 PR #17）：
+  /// 一行一个 HotKeyAction 的 rawValue，读的时候过 HotKeyAction.islandOrder / islandOff；空着 = 照原来的先后、全开。
+  /// 跟着设置导出、同步
+  static let islandActionOrder = "islandActionOrder"
+  static let islandActionsOff = "islandActionsOff"
+  /// 那一张上列不列最近的提示（2026-11-14 起默认不列：各家刘海 App 都不在刘海里放提示历史；这个开关是 0.9.0 加的，那一版默认列）
+  static let islandShowsHistory = "islandShowsHistory"
+  /// 那一张上显示月历（默认关；2026-11-14，Shell/IslandCalendar.swift）。日期网格不要授权，所以它照常导出、同步；
+  /// 旁边今天的日程看这台 Mac 给没给「日历」授权
+  static let islandCalendar = "islandCalendar"
+  /// 点刘海、停在刘海上、两指往下滑打开（有活动是它的卡片，没有是那一张；设置里叫「点刘海打开」。默认开；刘海岛扩展 G2：装了别的刘海 App 的人关掉）
+  static let islandNotchClicks = "islandNotchClicks"
+  /// 刘海岛上的系统一瞬提示（刘海岛扩展 D1，Shell/SystemNotices.swift）：接上 / 拔掉电源、低电量、耳机连上、断网 / 恢复，
+  /// 每种一个开关，默认都关（不开就不监听）
+  static let islandNoticePower = "islandNoticePower"
+  static let islandNoticeBattery = "islandNoticeBattery"
+  static let islandNoticeHeadphones = "islandNoticeHeadphones"
+  static let islandNoticeNetwork = "islandNoticeNetwork"
+  /// 刘海岛上的「正在播放」（刘海岛扩展第 2 期，Shell/NowPlaying.swift）：默认关（2026-11-13 拍板：归刘海岛插件、一组开关）；
+  /// 关着时不连正在播放服务、服务不起
+  static let islandNowPlaying = "islandNowPlaying"
+  /// 刘海岛上的「下一个日程」（Shell/NextEvent.swift，2026-11-14）：没存过 = 关；要「日历」授权，只在设置里打开它时问。
+  /// 跟着这台 Mac 的授权走：**不注册默认值**——不导出、不同步（导入到没授权的 Mac 上只会是一个开着却读不了的开关）
+  static let islandNextEvent = "islandNextEvent"
+  /// 按音量键、亮度键时在刘海岛上显示、系统自己的提示不出（Shell/MediaKeys.swift，2026-11-14）：没存过 = 关；要「辅助功能」
+  /// 授权。跟着这台 Mac 的授权和键盘走：**不注册默认值**——不导出、不同步（同 islandNextEvent）
+  static let islandKeyLevels = "islandKeyLevels"
+  /// 以 Alcove 为准的那一轮（2026-11-13，都默认开）：换歌时从耳朵垂下一小条歌名（Island.glance）、停在刘海 / 耳朵上
+  /// 自动展开活动的卡片、触感反馈
+  static let islandTrackPeek = "islandTrackPeek"
+  static let islandHoverExpands = "islandHoverExpands"
+  static let islandHaptics = "islandHaptics"
+  /// 岛展开成卡片 / 那一张时四周渐进模糊（默认开；2026-11-14，Shell/IslandBackdrop.swift）
+  static let islandBlur = "islandBlur"
   /// 新功能标记（Shell/WhatsNew.swift，2026-11-05）的账：各版本在这台 Mac 上第一次打开的时刻（版本号 → Date，从这一刻起挂 30 天）、
   /// 碰过哪几个（WhatsNew.Entry.id 的数组）。这台电脑自己的状态：不注册默认值、不导出不同步
   static let whatsNewStarted = "whatsNewStarted"
@@ -441,6 +485,7 @@ enum Prefs {
       appearance: AppAppearance.system.rawValue,
       accent: AccentChoice.system.rawValue,
       statusItemVisible: true,
+      dockIconOnTahoe: true,
       statusItemStyle: StatusItem.IconStyle.template.rawValue,
       clipboardHideOnUnfocus: true,
       launcherBrowserBookmarks: defaultBookmarkIDs,
@@ -539,6 +584,22 @@ enum Prefs {
       notesDeckOverFullScreen: false,
       notesDeckNoteSize: NoteDeckOptions.NoteSize.medium.rawValue,
       finderMenuGrouped: false,
+      finderCompressSkip: "",
+      islandActionOrder: "",
+      islandActionsOff: "",
+      islandShowsHistory: false,
+      islandCalendar: false,
+      islandNotchClicks: true,
+      islandNoticePower: false,
+      islandNoticeBattery: false,
+      islandNoticeHeadphones: false,
+      islandNoticeNetwork: false,
+      islandNowPlaying: false,
+      islandTrackPeek: true,
+      // 默认关（2026-11-14，用户：Alcove 是点了才展开；它的实录里指针停 2–5 秒都只是鼓起）。这一项没发布过
+      islandHoverExpands: false,
+      islandHaptics: true,
+      islandBlur: true,
     ].merging(Feature.allCases.map { ($0.prefsKey, $0.defaultOn as Any) }) { current, _ in current }
       .merging(FinderMenuItem.allCases.map { ($0.prefsKey, $0.defaultOn as Any) }) { current, _ in
         current

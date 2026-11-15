@@ -352,6 +352,8 @@ final class ScreenRecorder: NSObject {
   /// 当前过滤器里列进例外的窗口号（每秒和此刻的比，变了换过滤器）
   private var exceptedWindows: Set<CGWindowID> = []
   private var isRefreshingFilter = false
+  /// 录制中重取窗口表、换过滤器的次数（实录探针看）
+  private(set) var filterRefreshes = 0
 
   /// region：选区（点，AppKit 全局坐标）；directory：快速保存目录；defaults：录屏设置从这里读、「进行中」记在这里；
   /// hotKeys：倒数时临时注册 Esc；island：没有麦克风授权时的警告岛（只录声音时还有「正在存储录音…」）；audioOnly：给了就是
@@ -682,6 +684,7 @@ final class ScreenRecorder: NSObject {
     let ids = exceptedOwnWindows()
     guard ids != exceptedWindows, !isRefreshingFilter, let stream else { return }
     isRefreshingFilter = true
+    filterRefreshes += 1
     Task {
       defer { isRefreshingFilter = false }
       do {
@@ -774,12 +777,22 @@ final class ScreenRecorder: NSObject {
     activity = ProcessInfo.processInfo.beginActivity(
       options: [.idleSystemSleepDisabled, .idleDisplaySleepDisabled, .userInitiated],
       reason: "录屏")
+    // 刘海岛的耳朵：左边红色的录制记号、右边计时（刘海岛扩展 C1；岛不进录屏，挂在那里录不进去）。HUD 和停止项照旧
+    island?.setActivity(
+      Island.Activity(
+        id: Self.islandActivity, kind: .record, title: "录屏中", symbol: "record.circle.fill",
+        tone: .error, trailing: .elapsed(since: .now),
+        actions: [Island.Action("停止") { [weak self] in self?.stop() }]))
     Island.announce("开始录屏")
   }
+
+  /// 刘海岛上录屏那个活动的编号（录音的是 AudioRecorder.islandActivity）
+  static let islandActivity = "screen-record"
 
   /// 边框、HUD、点按圈、停止项、计时立刻收掉（停的那一刻；文件还在写）；只录声音时让 AudioRecorder 收它的录音 HUD 和停止项
   private func hideChrome() {
     onHalted()
+    island?.endActivity(Self.islandActivity)
     border?.orderOut(nil)
     border = nil
     hud?.close()

@@ -7,7 +7,7 @@
 **kitty-tools 原生 macOS 版**：Swift 6 + SwiftUI / AppKit 写的纯原生菜单栏工具，替代 Tauri 版的 macOS 端；基本自用，只支持 Apple 芯片（arm64），最低 macOS 15.0。
 
 - **入口**：左键点菜单栏图标是主界面（`Shell/HomePanel.swift`，全部功能一格一格摆着），右键 / ⌃点是菜单（0.7.0，PLAN §10「主界面」）。
-- **功能**（括号里是加进来的版本；每个都能在 设置 › 通用 › 功能 里整个关掉，`Shell/Feature.swift`；新装只开剪贴板、启动器、翻译、截图，侧栏分组、关着的标「已关闭」，PLAN §10「功能管理」）：
+- **功能**（括号里是加进来的版本；每个都能在 设置 › 通用 › 功能 里整个关掉或移除，`Shell/Feature.swift`；新装只开剪贴板、启动器、翻译、截图，侧栏分组、关着的标「已关闭」，PLAN §10「功能管理」；2026-11-13 起只有剪贴板、启动器、翻译、截图、录制是功能，便签、提醒、状态屏、启动台、程序坞预览、访达右键、保持唤醒、刘海岛（点刘海那一张、两边的活动、系统提示；岛上的提示不算）是插件，PLAN §10「插件与保持唤醒」）：
   - 剪贴板历史 `Clipboard/`（0.1.0）
   - 翻译 `Translate/`：划词 / 输入 / 复制即译 / 截图翻译（0.1.0）
   - 启动器 `Launcher/`：⌥Space 的搜索框（0.1.0）；脚本命令（0.8.0，2026-11-07：一个脚本一条命令、9 个自带脚本、设置里「命令」表改别名和开关，PLAN §10「脚本命令」，单测 `ScriptCommandTests`、截图自检 `SnapshotProbeTests/launcherScripts()`）
@@ -18,10 +18,11 @@
   - 程序坞预览 `DockPreview/`：停在程序坞图标上弹出它所有窗口的缩略图，默认关（0.7.0）
   - 晾衣绳 `Screenshot/Clothesline*.swift`：截完图挂到屏幕顶上的绳子，和右下角的缩略图二选一（0.7.0）
   - 提醒 `Reminders/`：一次 / 每天 / 每周 / 每月 / 每隔一阵的定时提醒，刘海岛、边框、全屏或直接进入状态屏，启动器里一句话建（2026-11-04 立项，三批在 `reminder-wip` 做完，PLAN §10「提醒」）
-  - 全局同步（设置 › 通用「同步」）：同步文件夹，便签（0.6.0）之外设置、快捷键、片段和收藏等也能同步（0.7.0）
-  - 刘海岛交互：提示能悬停展开、带按钮，点刘海叫出最近的提示（0.7.0）
+  - 保持唤醒（issue #3，第一个插件）：2026-11-13 用户让它推到 0.9.0 之后，代码在分支 `plugins-wip`（`0ec42986`），0.9.0 里拆掉了、自带的 awake 脚本照旧。**以后新的大模块都做成内置插件**：新装升级都默认不添加，在 设置 › 通用 › 功能 下面的插件卡片里添加（规矩在 mac-native §1「插件」，PLAN §10「插件与保持唤醒」）
+  - 全局同步（设置 › 通用「同步」）：同步文件夹，便签（0.6.0）之外设置、快捷键、片段和收藏等也能同步（0.7.0）；能直接连 WebDAV 服务器（0.9.0，issue #18：本机一份镜像、pull → 照文件夹同步合 → push，`Notes/NoteSyncServer.swift`，PLAN §10「WebDAV 同步」）
+  - 刘海岛交互：提示能悬停展开、带按钮，点刘海叫出最近的提示（0.7.0）；刘海岛扩展（下一版，2026-11-12 立项照 Atoll 拍板、11-13 开工，`island-atoll-wip`，PLAN §10「刘海岛扩展」）：录制计时、长任务、提醒倒数这类「活动」收起时挂在刘海两侧的耳朵上（`Shell/IslandActivity.swift`），没刘海时挂菜单栏，设置 › 刘海岛（PR #17）能调快捷动作、关掉点刘海、开系统提示；新 MacBook Pro 的系统灵动岛上让位
   - 访达右键 `FinderMenu/` + 扩展 target `macos/KittyToolsFinder/`：访达右键第一层的「拷贝路径」「在“X”中打开」「新建文件 ▸」，加上右键扩充的拷贝名称、移动到 / 复制到、剪切 / 粘贴、压缩 / 解压到这里、修复乱码文件名（这几项默认开）和替身到桌面、显示隐藏文件、隐藏 / 扩展名、拷贝哈希、彻底删除（默认关）；整个功能默认关（下一版，2026-11-08 立项，`finder-wip` 分批做；扩展只画菜单、开沙盒、Swift 5 语言模式，规矩在 mac-native §2 §3 §6，PLAN §10「访达右键」）
-- **版本**：已发布到 0.7.1（latest，2026-11-03：第四轮体检；0.7.0 是 2026-10-30：主界面、程序坞预览、全局同步、截图历史和晾衣绳、长图标注、刘海岛交互、第三轮体检、功能图标重画）；`MARKETING_VERSION` 是 0.7.1。各版真机手测都没走完。
+- **版本**：已发布到 0.8.1（latest，2026-11-10；0.8.0 是 2026-11-09、0.7.1 是 2026-11-03）；`MARKETING_VERSION` 是 0.9.0（2026-11-13 起准备，没发布：插件、刘海岛扩展、截图标注等，PLAN §12）。各版真机手测都没走完。
 - 现状、待手测、下一步看 PLAN §12（各族立项日期、批次进度的原文在 §12「各族进度摘要（原 AGENTS 项目概述）」）；发版前走的「真机回归清单」和正在验收的那一轮手测看 `macos/HANDTEST.md`（到 2026-10-30 的发版冒烟清单和各批手测原样归档在 `macos/docs/archive/HANDTEST-2026-10.md`，编号不变，代码注释、规则里「HANDTEST X 第 N 条」都指那里）；拍板和每族的规矩看 PLAN §10 和对应的 `mac-*` 规则。
 - Bundle ID `com.yy.kitty-tools.native`（Debug `com.yy.kitty-tools.native.dev`），不再改（改了会丢偏好、钥匙串和授权）；产品名 / .app 名 `Kitty Tools`（Debug `Kitty Tools Dev`）。和 Tauri 旧版同名：安装前先删掉 /Applications 里旧版的 `Kitty Tools.app`。
 - **规格**：各 `mac-*` 规则（界面与动效按 `mac-whisker`）+ 对标产品（启动器 Alfred / Raycast、翻译 Bob、截图 iShot / CleanShot、录屏 CleanShot / ⌘⇧5、录音 QuickTime / iShot、剪贴板 Paste）。`macos/PLAN.md` 只留仍有效的（§2 技术栈、§4 架构与文件表、§8 打包、§10 约束与决定、§11 实现原则与旧逻辑问题、§12 现状），历史在 `macos/docs/archive/`。
@@ -42,6 +43,7 @@ macos/                       # 本分支唯一开发区
 ├── KittyTools.xcodeproj/    # 共享 scheme：KittyTools
 ├── KittyTools/              # 同步文件夹：App/ Shell/ Storage/ Clipboard/ Translate/ Launcher/ Launchpad/ Screenshot/ StatusScreen/ Notes/ DockPreview/ Reminders/ FinderMenu/ Settings/ Resources/
 ├── KittyToolsFinder/        # 访达扩展 target（2026-11-08，第十一族「访达右键」）：只画菜单，动作用 App 的网址交给 App
+├── KittyToolsNowPlaying/    # 正在播放的 XPC 服务 target（2026-11-13，刘海岛扩展第 2 期）：bundle id com.apple.kittytools.nowplaying，只读 MediaRemote、替 App 发播放命令
 ├── KittyToolsTests/         # 纯函数单测（Swift Testing），M2 起建
 ├── Config/                  # Base/Debug/Release.xcconfig、Info.plist（局部）、Secrets.xcconfig（不入库）
 ├── build-dmg.sh             # 打包：archive → 自检 → DMG + App 内更新用的 zip → notes
@@ -159,6 +161,18 @@ TEST_RUNNER_KITTY_SYNC_PROBE=1 xcodebuild -project macos/KittyTools.xcodeproj -s
 # -only-testing:'KittyToolsTests/DockPreviewMemoryProbeTests/memory()'
 TEST_RUNNER_KITTY_DOCK_PROBE=1 xcodebuild -project macos/KittyTools.xcodeproj -scheme KittyTools \
   test -only-testing:'KittyToolsTests/DockPreviewProbeTests/measure()'
+
+# 刘海岛的正在播放：经包里真的 XPC 服务读回来的实机自检（按需，不到一秒；不出声：测试宿主用 MPNowPlayingInfoCenter 把自己挂成
+# 「正在播放」，系统控制中心里会短暂出现「Kitty 探针曲目」；读、封面、发「切换」、跳到某一秒、暂停都过一遍）。改了 KittyToolsNowPlaying/ 或
+# Shell/NowPlaying.swift 后跑；每个 macOS 大版本也跑一遍（27 上封面的拿法已经变过一次），探针报告在 macos/build/research/now-playing-2026-11-13/
+TEST_RUNNER_KITTY_LIVE_NOW_PLAYING=1 xcodebuild -project macos/KittyTools.xcodeproj -scheme KittyTools \
+  test -only-testing:'KittyToolsTests/NowPlayingTests/liveRoundTrip()'
+
+# 音量 / 亮度键换成刘海岛提示的实机自检（按需，不到一秒，要测试宿主有「辅助功能」授权；不出声）：真的建事件拦截，发一个
+# **合成**的「音量+」，看它被吞掉、只走了我们自己的一格、岛上有那一行；**系统音量会临时变一格，测完恢复**。改了
+# Shell/MediaKeys.swift、OutputVolume、DisplayBrightness 后跑。自检里只发会被吞掉的键（发带 ⌥ 的，系统会真的打开系统设置）
+TEST_RUNNER_KITTY_LIVE_MEDIA_KEYS=1 xcodebuild -project macos/KittyTools.xcodeproj -scheme KittyTools \
+  test -only-testing:'KittyToolsTests/MediaKeysTests/liveSwallowsVolumeKey()'
 
 # 刘海岛动画的掉帧探针（按需；**屏幕顶部正中会出现岛约 8 秒**，不动鼠标、不抢键盘）：measure() 挂显示链量主线程每拍的间隔，
 # 分阶段（出现、悬停展开、收起、开 / 收那一张、进行中换成结果）报掉了几帧，grep「island-frames」；recording() 要 Dev 版有

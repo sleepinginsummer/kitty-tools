@@ -40,6 +40,11 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
   var shownStyle: Annotation.Style { editor?.style ?? selected?.style ?? style }
   /// 样式托盘跟着谁：同上的优先级（都没有就不出托盘）
   var styleOwner: Annotation.Tool? { editor != nil ? .text : selected?.tool ?? tool }
+  /// 选中的序号的编号（托盘出「编号 − n +」）；选中的不是序号、正在输入文字时 nil
+  var selectedCounterNumber: Int? {
+    guard editor == nil, case .counter(let number, _)? = selected?.shape else { return nil }
+    return number
+  }
   var canUndo: Bool { !undoStack.isEmpty }
   var canRedo: Bool { !redoStack.isEmpty }
   var hasAnnotations: Bool { !annotations.isEmpty || editor != nil }
@@ -181,8 +186,10 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
     let distance = { (grip: (Annotation.Handle, CGPoint)) in
       hypot(grip.1.x - point.x, grip.1.y - point.y)
     }
-    return selected.handles.filter { distance($0) <= reach }.min { distance($0) < distance($1) }
-      .map { (selected, $0.0, $0.1) }
+    return selected.handles(zoom: zoom).filter { distance($0) <= reach }.min {
+      distance($0) < distance($1)
+    }
+    .map { (selected, $0.0, $0.1) }
   }
 
   private func replace(_ annotation: Annotation) {
@@ -244,12 +251,81 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
   /// 再按一次同一个工具就收起；选上时读这个工具上次的样式
   func choose(_ next: Annotation.Tool?) {
     endEditing()
+    pickingColor = false  // 换工具就不取色了
     let chosen = tool == next ? nil : next
     if let chosen { style = Annotation.Style.remembered(for: chosen, in: styleDefaults) }
     tool = chosen
     selectedAnnotation = nil
     refreshCursor()
     Island.announce(chosen.map { "\($0.title)工具" } ?? "已收起工具")
+  }
+
+  /// 托盘上点了吸管：下一下单击取那一点的颜色（拍板 O10）；Esc 取消。
+  /// ponytail: 这里没有放大镜，按光标尖上的那个像素取；要准就照截图遮罩把放大镜搬过来
+  private(set) var pickingColor = false
+
+  func beginPickingColor() {
+    guard drag == nil else { return }
+    endEditing()
+    pickingColor = true
+    Island.announce("单击取色，Esc 取消")
+    refreshCursor()
+  }
+
+  /// 图上 point（点坐标）那一个像素的颜色（0xRRGGBB）
+  private func color(at point: CGPoint) -> Int? {
+    let x = min(max(Int(point.x * scale), 0), image.width - 1)
+    let y = min(max(Int((bounds.height - point.y) * scale), 0), image.height - 1)
+    guard let hex = SelectionView.sample(image, x: x, y: y, size: 1)?.hex else { return nil }
+    return Int(hex.dropFirst(), radix: 16)
+  }
+
+  /// 一键打码正在识字（这时不出图：AnnotateOverlay.emit 看它）
+  private(set) var redacting = false
+
+  /// 一键打码（拍板 C5，同截图遮罩）：只识窗口里看得见的那一段（长图最长 30000 像素，整张交给识字既慢、小字又会被
+  /// 缩没），手机号、邮箱、银行卡号、身份证号各加一块打码，一起记一步撤销。
+  /// ponytail: 看不见的那几段要滚过去再点一次；要整张都找就按屏高切段逐段识
+  func autoRedact() {
+    guard drag == nil, editor == nil, !redacting else { return }
+    let area = visibleRect.intersection(bounds)
+    guard !area.isEmpty,
+      let crop = image.cropping(
+        to: RegionSelector.pixelRect(
+          area, viewSize: bounds.size,
+          imageSize: CGSize(width: image.width, height: image.height)))
+    else { return }
+    let style = shownStyle
+    redacting = true
+    Island.announce("正在找要打码的内容")
+    Task { [weak self] in
+      let boxes = await OCR.redactionBoxes(in: crop)
+      // 正拖着标注就等松手再落（同截图遮罩）
+      while self?.drag != nil { try? await Task.sleep(for: .milliseconds(50)) }
+      guard let self else { return }
+      redacting = false
+      let areas = Redaction.areas(boxes ?? [], in: area, existing: annotations)
+      guard !areas.isEmpty else {
+        // 这扇遮罩没有顶部提示：同「再按一次 Esc」，提示音 + 旁白
+        NSSound.beep()
+        return Island.announce(boxes == nil ? "识字失败，没有打码" : "看得见的部分里没找到要打码的内容")
+      }
+      commit(annotations + areas.map { Annotation(shape: .mosaic($0), style: style) })
+      selectedAnnotation = nil
+      onState()
+      Island.announce("已打码 \(areas.count) 处")
+    }
+  }
+
+  /// 选中的序号编号加减 delta（记一步撤销）
+  func renumberSelected(by delta: Int) {
+    guard drag == nil, let number = selectedCounterNumber, let selected,
+      let index = annotations.firstIndex(where: { $0.id == selected.id })
+    else { return }
+    var next = annotations
+    next[index] = selected.renumbered(number + delta)
+    commit(next)
+    onState()
   }
 
   /// 改颜色 / 粗细 / 选项：作用于正在输入的文字、选中的标注或当前工具的新标注，并记成那个工具的样式
@@ -373,8 +449,8 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
   /// 输入框里的文字和收下后画出来的一样（同遮罩里的 apply）
   private func apply(_ style: Annotation.Style, to field: EditorField) {
     let plate = style.option == 2
-    let ink = plate ? style.color.ink : style.color.color
-    field.font = Annotation.font(style.weight)
+    let ink = plate ? style.ink : style.paint
+    field.font = Annotation.font(size: style.textSize)
     field.textColor = ink
     field.insertionPointColor = Style.Shot.accent
     field.ringRadius = plate ? 6 : 3
@@ -388,7 +464,7 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
     }
     field.outline = style.option == 1 ? Annotation.outlineAttributes(style) : nil
     guard let layer = field.layer else { return }
-    layer.backgroundColor = plate ? style.color.color.cgColor : nil
+    layer.backgroundColor = plate ? style.paint.cgColor : nil
     layer.cornerRadius = plate ? 6 : 0
     layer.shadowColor = NSColor.black.cgColor
     layer.shadowOffset = .zero
@@ -399,7 +475,7 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
   private func layoutEditor() {
     guard let editor else { return }
     let frame = Annotation.textFrame(
-      editor.field.string, origin: editor.origin, weight: editor.style.weight)
+      editor.field.string, origin: editor.origin, size: editor.style.textSize)
     let pad = editor.style.option == 2 ? Annotation.platePadding : CGSize(width: 3, height: 3)
     if editor.field.textContainerInset != pad { editor.field.textContainerInset = pad }
     editor.field.frame = frame.insetBy(dx: -pad.width, dy: -pad.height)
@@ -455,6 +531,14 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
       NSCursor.closedHand.set()
       drag = .pan(start: event.locationInWindow)
       return
+    }
+    if pickingColor {
+      pickingColor = false
+      if let rgb = color(at: point) {
+        restyle { $0.custom = rgb }
+        Island.announce(String(format: "已取色 #%06X", rgb))
+      }
+      return refreshCursor()
     }
     // 在输入文字时点了输入框外面：先把文字收下，这一下不做别的
     if endEditing() { return }
@@ -530,7 +614,8 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
     dragAnnotation(to: point)
   }
 
-  /// 画标注、拖标注、拖手柄跟到 point。⇧：正方形 / 正圆 / 45° 线，拖本体时锁轴
+  /// 画标注、拖标注、拖手柄跟到 point。⇧：正方形 / 正圆 / 45° 线，拖矩形类的角时保持原比例，拖本体时锁轴；
+  /// ⌥：矩形类从中心画 / 改大小
   private func dragAnnotation(to point: CGPoint) {
     let constrained = modifiers.contains(.shift)
     switch drag {
@@ -538,7 +623,9 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
       guard let tool else { return }
       guard tool == .pen else {
         guard
-          let shape = Annotation.shape(for: tool, from: start, to: point, constrained: constrained)
+          let shape = Annotation.shape(
+            for: tool, from: start, to: point, constrained: constrained,
+            fromCenter: modifiers.contains(.option))
         else { return }
         draft = Annotation(id: draft?.id ?? UUID(), shape: shape, style: style)
         return
@@ -557,7 +644,9 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
       replace(original.offset(by: delta))
     case .resizeAnnotation(let original, let handle, _, let offset)?:
       let target = CGPoint(x: point.x + offset.dx, y: point.y + offset.dy)
-      replace(original.resized(handle, to: target, constrained: constrained))
+      replace(
+        original.resized(
+          handle, to: target, constrained: constrained, fromCenter: modifiers.contains(.option)))
     default:
       break
     }
@@ -600,6 +689,7 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
   private func refreshCursor() {
     guard let point = mouse else { return }
     if isSpaceDown { return NSCursor.openHand.set() }
+    if pickingColor { return NSCursor.crosshair.set() }
     if let editor {
       return (editor.field.frame.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set()
     }
@@ -608,12 +698,9 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
     (tool == .text ? NSCursor.iBeam : tool == nil ? .arrow : .crosshair).set()
   }
 
-  /// 标注手柄上的光标：矩形类的角是斜向缩放，线类两端和弯曲手柄是手指
+  /// 标注手柄上的光标：同截图遮罩（矩形类的角、边中点是缩放光标，线类两端和弯曲手柄是手指）
   private static func cursor(for handle: Annotation.Handle) -> NSCursor {
-    switch handle {
-    case .start, .end, .bend: .pointingHand
-    default: .crosshair
-    }
+    SelectionView.cursor(for: handle)
   }
 
   // MARK: 键盘
@@ -634,7 +721,11 @@ final class ScrollCanvas: NSView, NSTextViewDelegate {
     guard flags.isEmpty else { return super.keyDown(with: event) }
     switch code {
     case kVK_Escape:
-      // 收下输入中的文字 → 收起工具 → 取消选中；都没有就交给窗口（关掉）
+      // 取色 → 收下输入中的文字 → 收起工具 → 取消选中；都没有就交给窗口（关掉）
+      if pickingColor {
+        pickingColor = false
+        return refreshCursor()
+      }
       if endEditing() { return }
       if tool != nil { return choose(nil) }
       if selectedAnnotation != nil {

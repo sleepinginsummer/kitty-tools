@@ -19,6 +19,7 @@ struct GeneralTab: View {
   var sync: NoteSyncer?
   @AppStorage(Prefs.appearance) private var appearance = AppAppearance.system
   @AppStorage(Prefs.statusItemVisible) private var statusItemVisible = true
+  @AppStorage(Prefs.dockIconOnTahoe) private var dockIconOnTahoe = true
   @AppStorage(Prefs.statusItemStyle) private var statusItemStyle = StatusItem.IconStyle.template
   @AppStorage(Prefs.panelSqueezeEntrance) private var squeezeEntrance = false
   @State private var trusted = Permissions.isAccessibilityTrusted
@@ -63,7 +64,7 @@ struct GeneralTab: View {
         SettingsPushRow(
           title: "功能",
           detail: FeaturesPage.summary(
-            on: enabled, available: Feature.allCases.filter(\.isAvailable)),
+            on: enabled, available: Feature.listed),
           // 新功能标记：0.8.0 加的（WhatsNew），拨过其中一个开关、换页之后才没
           isNew: navigation.map { WhatsNew.marks(section: "功能", of: .general, in: $0.fresh) }
             ?? false
@@ -114,6 +115,13 @@ struct GeneralTab: View {
           Text("图标样式").foregroundStyle(statusItemVisible ? .primary : .tertiary)
         }
         .disabled(!statusItemVisible)
+        // 只在 macOS 26 上有（PR #1）：别的系统没有关掉设置后面板接不到键盘的问题
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26 {
+          Toggle(isOn: $dockIconOnTahoe) {
+            Text("在程序坞显示图标")
+            Text("这一版系统上，收起程序坞图标会让之后弹出的面板接不到键盘（启动台、启动器不能直接打字），所以默认一直留着。关掉后，设置窗口关上时图标跟着收起")
+          }
+        }
       }
       Section {
         Toggle(isOn: launchAtLogin) {

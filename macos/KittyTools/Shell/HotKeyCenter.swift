@@ -330,7 +330,9 @@ enum HotKeyAction: String, CaseIterable {
     case .launchpad: .launchpad
     case .statusScreen: .statusScreen
     case .reminderNew: .reminders
-    case .island, .home: nil
+    // 「打开刘海岛」2026-11-13 起归刘海岛插件（原来 nil、一直在）；岛上的提示不归它
+    case .island: .island
+    case .home: nil
     }
   }
 
@@ -362,9 +364,9 @@ enum HotKeyAction: String, CaseIterable {
     // 启动台（第八族，2026-10-18）：和便签分开一节，菜单栏、启动器、快捷键页、速查表里的名字和设置页同名；
     // 2026-11-04 起排在状态屏后面（和程序坞预览一组）
     ("启动台", [.launchpad]),
-    // 刘海岛（2026-10-26）：不属于哪个功能、一直在
+    // 刘海岛（2026-10-26）：2026-11-13 起归刘海岛插件，没添加时不列
     ("刘海岛", [.island]),
-    // 主界面（2026-10-29）：同刘海岛，一直在；菜单栏菜单里不列（菜单就是图标的另一半），主界面里也不列它自己
+    // 主界面（2026-10-29）：不属于哪个功能、一直在；菜单栏菜单里不列（菜单就是图标的另一半），主界面里也不列它自己
     ("主界面", [.home]),
   ]
 
@@ -372,6 +374,26 @@ enum HotKeyAction: String, CaseIterable {
   static let islandShortcuts: [HotKeyAction] = [
     .screenshot, .recognizeText, .screenshotTranslate, .screenRecord, .audioRecord, .noteCapture,
   ]
+
+  /// 设置 › 刘海岛排的先后（Prefs.islandActionOrder，一行一个 rawValue）：不认识的、重复的丢掉，没排过的（以后新加的）
+  /// 照 islandShortcuts 的先后补在最后。偏好是从导入、同步来的，不信它
+  static func islandOrder(_ stored: String) -> [HotKeyAction] {
+    var list: [HotKeyAction] = []
+    for id in stored.split(separator: "\n") {
+      if let action = HotKeyAction(rawValue: String(id)), islandShortcuts.contains(action),
+        !list.contains(action)
+      {
+        list.append(action)
+      }
+    }
+    return list + islandShortcuts.filter { !list.contains($0) }
+  }
+
+  /// 那一张上关掉的快捷动作（Prefs.islandActionsOff，一行一个 rawValue）
+  static func islandOff(_ stored: String) -> Set<HotKeyAction> {
+    Set(stored.split(separator: "\n").compactMap { HotKeyAction(rawValue: String($0)) })
+      .intersection(islandShortcuts)
+  }
 
   /// 种类色块里的符号：自画的功能图标（2026-10-30 拍板，mac 和 Windows 共用一套，见 SymbolImage）。
   /// 色块、菜单栏菜单、主界面、刘海岛、速查表都用它；截图工具栏、⌘K 里的同名按钮照旧是 SF Symbols（拍板 D2）

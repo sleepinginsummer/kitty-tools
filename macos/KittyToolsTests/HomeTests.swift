@@ -1,4 +1,4 @@
-// 主界面（Shell/HomePanel.swift，2026-10-29 拍板）的纯函数：分节和菜单同一份、单格的节并成一行、关着的功能有几个、
+// 主界面（Shell/HomePanel.swift，2026-10-29 拍板）的纯函数：分节和菜单同一份、插件收成一节、开关不占格子、关着的功能有几个、
 // 面板的高、选中怎么移动、按键对应什么。
 
 import AppKit
@@ -10,30 +10,30 @@ import Testing
 struct HomeTests {
   private let all = Set(Feature.allCases)
 
-  /// 全开：节名和菜单同名同序（「打开主界面」不列它自己）；每节末尾接那一节的开关；提醒、状态屏、启动台、刘海岛几个单格的节
-  /// 不画标题、并成最后一行；快捷键是传进来的那份，没设的空着
+  /// 全开：功能的节名和菜单同名同序（「打开主界面」不列它自己，「钉住剪贴板内容」也不列）；插件（便签、提醒、状态屏、
+  /// 启动台、保持唤醒、刘海岛）按菜单的先后全收进最后一节「插件」；开关（暂停记录剪贴板、复制即译）不占格子；
+  /// 快捷键是传进来的那份，没设的空着
   @Test func sectionsFollowTheMenu() {
     var state = LauncherItem.ActionState(statusPresets: StatusPreset.builtIn)
     state.features = all
     let sections = Home.sections(state: state, keys: [.screenshot: "⌥A"])
-    #expect(sections.map(\.title) == ["剪贴板与启动器", "翻译", "截图与录制", "便签", nil])
+    #expect(sections.map(\.title) == ["剪贴板与启动器", "翻译", "截图与录制", "插件"])
     let tiles = sections.flatMap(\.tiles)
-    #expect(!tiles.contains { $0.target == .action(.home) })
-    #expect(
-      sections[0].tiles.map(\.target) == [
-        .action(.clipboard), .action(.launcher), .extra(.pauseClipboard),
-      ])
-    #expect(sections[1].tiles.last?.target == .extra(.copyToTranslate))
+    #expect(!tiles.contains { $0.target == .action(.home) || $0.target == .action(.pinClipboard) })
+    #expect(sections[0].tiles.map(\.target) == [.action(.clipboard), .action(.launcher)])
+    #expect(sections[1].tiles.last?.target == .action(.screenshotTranslate))
     #expect(
       sections.last?.tiles.map(\.target) == [
-        .action(.reminderNew), .action(.statusScreen), .action(.launchpad), .action(.island),
+        .action(.noteCapture), .action(.noteNew), .action(.noteAll), .action(.reminderNew),
+        .action(.statusScreen), .action(.launchpad), .action(.island),
       ])
     #expect(tiles.first { $0.target == .action(.screenshot) }?.key == "⌥A")
     #expect(tiles.first { $0.target == .action(.clipboard) }?.key == nil)
-    // 开关有状态、画在圆里的符号不带圈；别的不是开关
-    let pause = tiles.first { $0.target == .extra(.pauseClipboard) }
-    #expect(pause?.isOn == false && pause?.symbol == "pause.fill")
-    #expect(tiles.filter { $0.isOn != nil }.count == 2)
+    // 开关不是格子（在右键菜单、启动器里）
+    #expect(
+      !tiles.contains {
+        $0.target == .extra(.pauseClipboard) || $0.target == .extra(.copyToTranslate)
+      })
     // 名字、符号、家族色和菜单 / 启动器同一份（主界面里用的符号都在）
     for tile in tiles {
       #expect(
@@ -47,25 +47,27 @@ struct HomeTests {
       NSImage.symbol(HotKeyAction.home.symbol) != nil)
   }
 
-  /// 开关开着、有钉图、在录屏时：格子跟着现在的样子
+  /// 开关开着、有钉图、在录屏时：格子跟着现在的样子（开关开着也不出现）
   @Test func sectionsFollowState() {
     var state = LauncherItem.ActionState(
       recordingPaused: true, copyToTranslate: true, pinsHidden: true, recording: .screenRecord)
     state.features = all
     let tiles = Home.sections(state: state, keys: [:]).flatMap(\.tiles)
-    #expect(tiles.first { $0.target == .extra(.pauseClipboard) }?.isOn == true)
-    #expect(tiles.first { $0.target == .extra(.copyToTranslate) }?.isOn == true)
+    #expect(
+      !tiles.contains {
+        $0.target == .extra(.pauseClipboard) || $0.target == .extra(.copyToTranslate)
+      })
     #expect(tiles.first { $0.target == .action(.screenRecord) }?.title == "停止录屏")
-    // 钉图两项接在截图那一节末尾，不是开关
+    // 钉图两项（动作）接在截图那一节末尾
     let shot = Home.sections(state: state, keys: [:])[2].tiles
     #expect(shot.suffix(2).map(\.target) == [.extra(.pinsToggle), .extra(.pinsClose)])
-    #expect(shot.last?.isOn == nil && shot.suffix(2).first?.title == "显示全部钉图")
+    #expect(shot.suffix(2).first?.title == "显示全部钉图")
     // 设置、关于、检查更新、退出不是格子（底栏 / 右键菜单里）
     #expect(!tiles.contains { $0.target == .extra(.settings) || $0.target == .extra(.quit) })
   }
 
-  /// 关掉功能：它的格子和那一节的开关都不在；两个功能合一节的只剩一个时节名换成它的；只剩一格的节不画标题、
-  /// 和后面连着的单格并成一行（顺序不变）；全关时只剩刘海岛
+  /// 关掉功能：它的格子不在；两个功能合一节的只剩一个时节名换成它的；功能只剩一格的节不画标题（顺序不变）；
+  /// 插件只添加了一个也是带标题的「插件」一节，一个都没添加就没有这一节
   @Test func sectionsFollowFeatures() {
     var state = LauncherItem.ActionState()
     state.features = all.subtracting([.clipboard, .notes])
@@ -73,16 +75,29 @@ struct HomeTests {
     // 只剩「启动器」一格：不画标题，排在原来的位置
     #expect(
       sections.first?.title == nil && sections.first?.tiles.map(\.target) == [.action(.launcher)])
-    #expect(!sections.flatMap(\.tiles).contains { $0.target == .extra(.pauseClipboard) })
-    #expect(!sections.contains { $0.title == "便签" })
+    #expect(sections.last?.title == Home.pluginsTitle)
+    #expect(!sections.flatMap(\.tiles).contains { $0.target == .action(.noteCapture) })
 
     state.features = all.subtracting([.screenshot])
     #expect(Home.sections(state: state, keys: [:]).contains { $0.title == "录制" })
 
-    state.features = []
-    let none = Home.sections(state: state, keys: [:])
+    // 新装默认（四个功能）：三节，没有「插件」；再添加一个提醒：最后多一节「插件」，里面一格
+    state.features = Feature.core
+    #expect(Home.sections(state: state, keys: [:]).map(\.title) == ["剪贴板与启动器", "翻译", "截图"])
+    state.features = Feature.core.union([.reminders])
+    let one = Home.sections(state: state, keys: [:])
     #expect(
-      none.count == 1 && none[0].title == nil && none[0].tiles.map(\.target) == [.action(.island)])
+      one.count == 4 && one[3].title == Home.pluginsTitle
+        && one[3].tiles.map(\.target) == [.action(.reminderNew)])
+
+    // 只剩刘海岛插件时只有它那一格；全关了一格都没有（打开刘海岛 2026-11-13 起归刘海岛插件）
+    state.features = [.island]
+    let island = Home.sections(state: state, keys: [:])
+    #expect(
+      island.count == 1 && island[0].title == Home.pluginsTitle
+        && island[0].tiles.map(\.target) == [.action(.island)])
+    state.features = []
+    #expect(Home.sections(state: state, keys: [:]).isEmpty)
   }
 
   /// 关着的功能有几个：只算这台系统上有、而且有入口的（程序坞预览、访达右键没有全局动作，关着不算；macOS 15 没有启动台，不算）
@@ -90,7 +105,9 @@ struct HomeTests {
     #expect(Home.offCount(enabled: all, available: all) == 0)
     #expect(
       Home.offCount(enabled: all.subtracting([.dockPreview, .finderMenu]), available: all) == 0)
-    #expect(Home.offCount(enabled: all.subtracting([.notes, .record]), available: all) == 2)
+    #expect(Home.offCount(enabled: all.subtracting([.translate, .record]), available: all) == 2)
+    // 没添加的插件不算「关着的功能」（2026-11-12 拍板 A1；2026-11-13 起便签这些也是插件）
+    #expect(Home.offCount(enabled: all.subtracting([.finderMenu, .notes]), available: all) == 0)
     let noLaunchpad = all.subtracting([.launchpad])
     #expect(Home.offCount(enabled: noLaunchpad, available: noLaunchpad) == 0)
   }
@@ -100,13 +117,13 @@ struct HomeTests {
     var state = LauncherItem.ActionState()
     state.features = all
     let sections = Home.sections(state: state, keys: [:])
-    // 3 / 5 / 8 / 3 / 4（截图与录制 8 格折成 5 + 3；最后一节是新建提醒、状态屏、启动台、刘海岛）
-    #expect(Home.rows(sections).map(\.count) == [3, 5, 5, 3, 3, 4])
-    #expect(Home.rows(sections).flatMap { $0 } == Array(0..<23))
+    // 2 / 4 / 7 / 7（截图与录制 7 格折成 5 + 2；插件 7 格折成 5 + 2：便签三格、新建提醒、状态屏、启动台、刘海岛）
+    #expect(Home.rows(sections).map(\.count) == [2, 4, 5, 2, 5, 2])
+    #expect(Home.rows(sections).flatMap { $0 } == Array(0..<20))
     let rows: CGFloat = 6
     let expected =
-      Home.top + Home.bottom + 4 * Home.titleHeight + Home.untitledGap + rows * Home.tile.height
-      + (rows - 5) * Home.gap + Home.barHeight
+      Home.top + Home.bottom + 4 * Home.titleHeight + rows * Home.tile.height
+      + (rows - 4) * Home.gap + Home.barHeight
     #expect(Home.height(sections, offCount: 0) == expected)
     #expect(Home.height(sections, offCount: 2) == expected + Home.noteHeight)
     #expect(Home.width == 2 * Home.inset + 5 * Home.tile.width + 4 * Home.gap)
@@ -177,7 +194,7 @@ struct HomeTests {
     #expect(Home.command(code: kVK_ANSI_W, modifiers: .command) == nil)
   }
 
-  /// 模型：开关原地切（不收面板）、别的先收面板再做；没选中时 ↩ 什么都不做；刷新时选中留着、超出了落到最后一格
+  /// 模型：点了格子先收面板再做；没选中时 ↩ 什么都不做；刷新时选中留着、超出了落到最后一格
   @Test func modelRunsTiles() {
     var state = LauncherItem.ActionState()
     state.features = all
@@ -189,15 +206,13 @@ struct HomeTests {
     model.perform = { done.append($0) }
     model.handle(.run)
     #expect(done.isEmpty)
-    model.activate(2)
-    #expect(done == [.extra(.pauseClipboard)] && hidden == 0)
     model.activate(0)
     #expect(done.last == .action(.clipboard) && hidden == 1)
     model.handle(.move(.left))
     #expect(model.selection == 0)
     model.handle(.move(.left))
     #expect(model.selection == model.tiles.count - 1)
-    state.features = []
+    state.features = [.island]
     model.update(Home.sections(state: state, keys: [:]), offCount: 0, appearing: false)
     #expect(model.selection == 0)
     model.update(Home.sections(state: state, keys: [:]), offCount: 0, appearing: true)

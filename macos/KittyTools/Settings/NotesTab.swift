@@ -44,10 +44,9 @@ struct NotesTab: View {
   var body: some View {
     // 关着时（Feature）变灰；Markdown 导出、导入管的是已有的便签，照常能用
     Form {
-      Section { FeatureToggle(feature: .notes, inPage: true) }
       Group {
         Section {
-          // 横排单选包进 LabeledContent：贴着右边线（同设置 › 剪贴板「图片最多占用」）
+          // 横排单选包进 LabeledContent：贴着右边线
           radios("正文字号", "全部便签窗口、屏幕边缘和浮在屏幕上的便签里正文的大小", selection: $fontSize) {
             ForEach(Prefs.notesFontSizeChoices, id: \.self) {
               Text(Self.fontTitles[$0] ?? "\($0)").tag($0)
@@ -107,6 +106,7 @@ struct NotesTab: View {
           "便签存在这台 Mac 上，和剪贴板历史分开：清空历史、保留天数都碰不到它。每天自动备份一份，留最近 7 份（正文里的图片跟着一起备）。删掉的便签在「最近删除」里留 \(NoteStore.trashDays) 天。设置 › 通用 里的导出与导入带便签的文字、不带图片；要连图片一起带走、或者拿别的工具看，用上面的 Markdown 导出。在几台 Mac 之间同步到 设置 › 通用「同步」里选文件夹。"
         )
       }
+      PluginRemoveSection(plugin: .notes)
     }
     .formStyle(.grouped)
   }

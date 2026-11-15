@@ -113,6 +113,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let speaker = Speaker()
   /// 刘海岛（全局轻提示）
   private let island = Island()
+  /// 刘海岛上的系统一瞬提示（电源、电量、耳机、网络；设置 › 刘海岛「系统提示」，开着的才监听）
+  private lazy var systemNotices = SystemNotices(island: island)
+  /// 刘海岛的正在播放（刘海岛扩展第 2 期）：开着才连包里的正在播放服务
+  private lazy var nowPlaying = NowPlaying(island: island)
+  /// 刘海岛上的「下一个日程」（设置 › 刘海岛，默认关）
+  private lazy var nextEvent = NextEvent(island: island)
+  /// 音量 / 亮度键换成刘海岛上的提示（设置 › 刘海岛，默认关）
+  private(set) lazy var mediaKeys = MediaKeys(island: island)
   /// 应用内更新（读本仓库的 GitHub release）
   private let updater = Updater()
   /// CleanShot 式常驻缩略图（截图飞入右下角后留在那里）
@@ -256,10 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     model.perform = { [unowned self] target in
       switch target {
       case .action(let action): run(action)
-      // 开关原地切：结果就在格子上，不再弹岛（mac-whisker S2「分工」）
-      case .extra(let extra):
-        run(extra, announcing: false)
-        if builtHomePanel?.isVisible == true { refreshHome(appearing: false) }
+      case .extra(let extra): run(extra)
       }
     }
     builtHomePanel = panel
@@ -382,6 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     clothesline.reclaim()
     ShotThumbnails.shared.keep(only: clothesline.model.pegged)
     LinkPreview.shared.dropHeroes()
+    Annotation.releaseCaches()  // 打码的缩小图和模糊用的 Core Image 上下文（约 45 MB，2026-11-12）
     releaseClosedNotesWindow()
     // 便签正文里解好的图片缩略图（第 7 批：按像素数算 cost，闲下来整块放掉）；浮在屏幕上的那张便签里的图留着
     // （清了它下一次重画先闪一块纸色）
@@ -467,6 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       Reminder.save(list)
     }
     model.openReminder = { [unowned self] in openReminder($0) }
+    model.offerPlugin = { [unowned self] in showPlugin($0) }
     model.openQuickLook = { [unowned self] in
       launcherQuickLook.open().zoom(
         from: launcherRowFrame ?? launcherPanel.frame, to: launcherQuickLookFrame)
@@ -754,6 +761,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sync: noteSyncer
           )
           .environment(island))
+      case .island: AnyView(IslandTab())
       case .clipboard: AnyView(ClipboardTab(store: clipboardStore).environment(island))
       case .launcher:
         AnyView(
@@ -779,7 +787,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cornerChanged: { [unowned self] in launchpad.applySettings() },
             pinchAvailable: { [unowned self] in launchpad.pinchAvailable },
             systemPinchOn: { [unowned self] in launchpad.systemPinchIsOn },
-            openTrackpadSettings: { [unowned self] in openTrackpadSettings() }))
+            openTrackpadSettings: { [unowned self] in openTrackpadSettings() },
+            copyPinchCommand: { [unowned self] in launchpad.copyPinchCommand() }))
       case .screenshot:
         AnyView(
           ScreenshotTab(shots: shotHistory, openHistory: { [unowned self] in showShotHistory() }))
@@ -827,7 +836,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// 到点的提醒要进入状态屏（提醒 C1 / C12）：先把进不去的情况挑出来（进不去时提醒退成全屏，原因写在全屏上——状态屏自己的
   /// 警告岛会被全屏盖住），再真的进。进去了返回 nil
   private func enterStatus(forReminder id: String) -> (reason: String, grants: Bool)? {
-    guard Feature.statusScreen.isOn else { return ("状态屏这个功能关着", false) }
+    guard Feature.statusScreen.isOn else { return ("状态屏插件没添加", false) }
     guard Permissions.isAccessibilityTrusted else { return ("还没给辅助功能授权，进不了状态屏", true) }
     if let blocked = statusScreen.blocker() { return (blocked.title + "，没进状态屏", false) }
     guard !statusScreen.isBusy(), !statusScreen.isActive else { return ("现在进不了状态屏", false) }
@@ -1005,21 +1014,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 有新版本：菜单栏图标右上角出小圆点，常驻到更新为止
     updater.onAvailableChange = { [weak statusItem] in statusItem?.updateVersion = $0?.version }
     updater.start()
-    // 刘海岛：点刘海、快捷键「打开刘海岛」叫出那一张。快捷动作每次打开时现取（关着的功能不出，录着时写「停止录屏」）
+    // 刘海岛：点刘海、快捷键「打开刘海岛」叫出那一张。快捷动作每次打开时现取（照 设置 › 刘海岛 的先后和开关，
+    // 关着的功能不出，录着时写「停止录屏」）
     island.boardActions = { [unowned self] in
       let recording: HotKeyAction? =
         recorder != nil ? .screenRecord : audioRecorder?.isStarted == true ? .audioRecord : nil
-      return HotKeyAction.islandShortcuts.filter(\.isActive).map { action in
-        Island.Action(action.title(recording: recording == action), symbol: action.symbol) {
-          [unowned self] in run(action)
+      let defaults = UserDefaults.standard
+      let off = HotKeyAction.islandOff(defaults.string(forKey: Prefs.islandActionsOff) ?? "")
+      return HotKeyAction.islandOrder(defaults.string(forKey: Prefs.islandActionOrder) ?? "")
+        .filter { $0.isActive && !off.contains($0) }
+        .map { action in
+          Island.Action(action.title(recording: recording == action), symbol: action.symbol) {
+            [unowned self] in run(action)
+          }
         }
-      }
     }
     // 框选截图 / 录屏、启动台、状态屏盖着刘海时，点它、停在它上面都不算
     island.isSuppressed = { [unowned self] in
       isCapturing || launchpad.isOpen || statusScreen.isActive
     }
+    island.hasExtras = Feature.island.isOn
+    island.respondsToNotch = respondsToNotch
+    // 那一张上的月历旁边列今天的日程（没有「日历」授权是 nil；岛自己不碰 EventKit）
+    island.agendaProvider = { [unowned self] in nextEvent.agenda() }
+    applyIslandFeel()
     island.start()
+    systemNotices.apply()
+    nowPlaying.apply()
+    nextEvent.apply()
+    mediaKeys.apply()
     showWelcomeIfNeeded()
     // 有快捷键没注册上（15.0 / 15.1 上只带 ⌥ 的组合）：按了没反应又不知道为什么，启动时说一次
     // （放在「已更新」之后：同一座岛原地换内容，警告不能被盖掉）
@@ -1052,6 +1075,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       MainActor.assumeIsolated {
         guard let self else { return }
         self.applyFeatures()
+        self.island.respondsToNotch = self.respondsToNotch
+        self.applyIslandFeel()
+        self.systemNotices.apply()
+        self.nowPlaying.apply()
+        self.nextEvent.apply()
+        self.mediaKeys.apply()
         // 命令的快捷键跟着「命令和别名」的开关和别名、脚本命令总开关、⌘K「关掉这条命令」走（第 4 批评审：只在那一页的
         // onChange 里跟，别处改的不注销）；没变不动
         self.hotKeys.reloadCommandsIfChanged()
@@ -1067,6 +1096,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 访达右键把 App 冷启动时交过来的动作：剪贴板历史、偏好都起来了再做（拷贝的路径才记得进历史）
     for url in pendingLinks { FinderLink.perform(url, island: island) }
     pendingLinks = []
+  }
+
+  /// 设置 › 刘海岛的「停在刘海上自动展开」「触感反馈」跟上（启动时、偏好变了时）
+  private func applyIslandFeel() {
+    island.hoverExpands = UserDefaults.standard.bool(forKey: Prefs.islandHoverExpands)
+    island.haptics = UserDefaults.standard.bool(forKey: Prefs.islandHaptics)
+    island.blurs = UserDefaults.standard.bool(forKey: Prefs.islandBlur)
+  }
+
+  /// 点刘海、停在刘海上、往下滑打开（有活动是它的卡片，没有是那一张）：刘海岛插件添加着，设置 › 刘海岛「点刘海打开」也开着
+  private var respondsToNotch: Bool {
+    Feature.island.isOn && UserDefaults.standard.bool(forKey: Prefs.islandNotchClicks)
   }
 
   /// 剪贴板历史现在记不记（剪贴板这个功能开着、没在菜单栏暂停）：本 App 自己写剪贴板的几处（Paster.recordText、截图、
@@ -1091,6 +1132,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let turnedOff = (before ?? []).subtracting(now)
     let launching = before == nil
 
+    // 刘海岛插件（2026-11-13）：没添加时活动、常驻的刘海监听都停（Island.hasExtras），提示照常
+    island.hasExtras = now.contains(.island)
     // 剪贴板的轮询：记历史要它，复制即译也要它（剪贴板关着时只为复制即译跑、不入库）
     watcher.records = now.contains(.clipboard)
     if now.contains(.clipboard) || (now.contains(.translate) && copyToTranslate) {
@@ -1461,8 +1504,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     homePanel.present(atTop: icon == nil, below: icon)
   }
 
-  /// 按现在的状态重排主界面（关着的功能、开关、在不在录、钉图、当前生效的快捷键）。appearing：新呼出，直接定大小；
-  /// 开着时（切了开关）高度变了带动画
+  /// 按现在的状态重排主界面（关着的功能、添加的插件、在不在录、钉图、当前生效的快捷键）。appearing：新呼出，直接定大小；
+  /// 开着时再呼出一次，高度变了带动画
   private func refreshHome(appearing: Bool) {
     let fresh = WhatsNew.current()
     homeModel.update(
@@ -1470,7 +1513,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state: menuState, keys: hotKeys.bindings.mapValues(\.display),
         fresh: Set(fresh.flatMap(\.actions))),
       offCount: Home.offCount(
-        enabled: Feature.enabled, available: Set(Feature.allCases.filter(\.isAvailable))),
+        enabled: Feature.enabled, available: Set(Feature.listed)),
       settingsIsNew: WhatsNew.inSettingsOnly(fresh), appearing: appearing)
     if appearing {
       homePanel.setContentSize(homeModel.size)
@@ -1617,13 +1660,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     run(MenuExtra(rawValue: id) ?? .settings)
   }
 
-  /// 菜单栏里不对应全局热键的项：菜单栏、启动器、主界面同一个分发。announcing = false：开关切了不弹岛（主界面里结果就在格子上）
-  private func run(_ extra: MenuExtra, announcing: Bool = true) {
+  /// 菜单栏里不对应全局热键的项：菜单栏、启动器、主界面（钉图两项、设置、退出）同一个分发
+  private func run(_ extra: MenuExtra) {
     // 归关着的功能的那几项（暂停记录、复制即译、钉图）：同 run(action) 的兜底
     if let feature = extra.section?.feature, !feature.isOn { return }
     switch extra {
-    case .pauseClipboard: togglePauseRecording(announcing: announcing)
-    case .copyToTranslate: toggleCopyToTranslate(announcing: announcing)
+    case .pauseClipboard: togglePauseRecording()
+    case .copyToTranslate: toggleCopyToTranslate()
     case .pinsToggle: pins.toggleHidden()
     case .pinsClose: closeAllPins()
     case .settings: showSettings()
@@ -1821,13 +1864,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     .init("勾选同步", opens: true) { [unowned self] in showSettings(page: .general) }
   }
 
-  /// 暂停 / 恢复记录剪贴板（菜单栏、启动器、主界面，D4）：不存盘，重启 App 自动恢复记录（免得忘了关）；
-  /// 菜单一关就看不出开没开，用刘海说（announcing = false：主界面里格子就是开关，不说）
-  private func togglePauseRecording(announcing: Bool = true) {
+  /// 暂停 / 恢复记录剪贴板（菜单栏、启动器，D4；主界面 2026-11-13 起不放开关）：不存盘，重启 App 自动恢复记录（免得忘了关）；
+  /// 菜单一关就看不出开没开，用刘海说（剪贴板面板底栏也写着「已暂停记录」）
+  private func togglePauseRecording() {
     let paused = watcher.isUserPaused
     watcher.isUserPaused = !paused
     clipboardModel.isRecordingPaused = !paused
-    guard announcing else { return }
     island.show(
       paused ? "已恢复记录剪贴板" : "已暂停记录剪贴板",
       detail: paused ? nil : "复制的内容不进历史，再点一次恢复", tone: .info,
@@ -1835,12 +1877,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       actions: [.init("撤销") { [unowned self] in togglePauseRecording() }])
   }
 
-  /// 复制即译开关（菜单栏、启动器、主界面）：开关一关就看不出开没开，这个后台模式会影响之后的每次复制，用刘海说
-  /// （announcing = false：主界面里格子就是开关，不说）
-  private func toggleCopyToTranslate(announcing: Bool = true) {
+  /// 复制即译开关（菜单栏、启动器；另在 设置 › 翻译 和翻译浮窗上）：开关一关就看不出开没开，这个后台模式会影响之后的每次复制，用刘海说
+  private func toggleCopyToTranslate() {
     let wasOn = UserDefaults.standard.bool(forKey: Prefs.translateCopyToTranslate)
     UserDefaults.standard.set(!wasOn, forKey: Prefs.translateCopyToTranslate)
-    guard announcing else { return }
     island.show(
       wasOn ? "已关闭复制即译" : "已开启复制即译", detail: wasOn ? nil : "复制文字后会弹出翻译", tone: .info,
       symbol: wasOn ? "character.bubble" : "character.bubble.fill",
@@ -3319,6 +3359,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     settingsNavigation.path = [id]
   }
 
+  /// 打开 设置 › 通用 › 功能、滚到这个插件的卡（启动器「添加…插件」，拍板 A4）：不直接添加，先看清要什么授权
+  func showPlugin(_ plugin: Feature) {
+    showSettings(page: .general)
+    settingsNavigation.path = [FeaturesPage.route]
+    settingsNavigation.focusedPlugin = plugin
+  }
+
   /// 打开设置窗（page 为 nil 保持上次的页；onboarding 盖上欢迎引导）：先按正常隐藏路径收起浮层
   /// （固定的浮层会盖在设置窗上）
   func showSettings(page: SettingsPage? = nil, onboarding: Bool = false) {
@@ -3412,7 +3459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       for action in section.actions {
         let binding = hotKeys.bindings[action]
         let item = menu.addAction(
-          action.title(recording: state.recording == action), symbol: action.symbol,
+          action.title(recording: state.isRunning(action)), symbol: action.symbol,
           color: NSColor(action.color),
           key: binding?.menuKeyEquivalent ?? "", modifiers: binding?.modifierFlags ?? []
         ) { [unowned self] in run(action) }

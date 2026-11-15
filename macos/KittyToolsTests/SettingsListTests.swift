@@ -12,56 +12,76 @@ import Testing
 @testable import KittyTools
 
 struct SettingsListTests {
+  /// 设置 › 刘海岛的先后和关掉的（PR #17）：偏好从导入、同步来，不认识的、重复的、不是岛上快捷动作的丢掉，
+  /// 没排过的补在最后；空着 = 原来的先后、全开
+  @Test func islandActionPreferencesSanitize() {
+    #expect(HotKeyAction.islandOrder("") == HotKeyAction.islandShortcuts)
+    #expect(
+      HotKeyAction.islandOrder("noteCapture\nunknown\nscreenshot\nnoteCapture\nlauncher\n") == [
+        .noteCapture, .screenshot, .recognizeText, .screenshotTranslate, .screenRecord,
+        .audioRecord,
+      ])
+    #expect(HotKeyAction.islandOff("").isEmpty)
+    #expect(
+      HotKeyAction.islandOff("audioRecord\nunknown\naudioRecord\nscreenshot\nclipboard")
+        == [.audioRecord, .screenshot])
+  }
+
   /// 侧栏顺序和菜单栏、快捷键页、引导同序：翻译在截图前面（体检 B51），录制紧跟截图（2026-10-03 拆出来），
   /// 便签、状态屏排在录制后面（状态屏 Z11，便签 2026-10-12；两页的先后同快捷键页的分节）；
   /// 启动台（第八族，2026-10-18）排在便签后面、状态屏前面（F38；和菜单栏、快捷键页同序）；
   /// 程序坞预览（第九族，2026-10-22）排在状态屏后面（它没有快捷键、菜单栏里没有它，拍板 D1）；
   /// 提醒（2026-11-04）排在状态屏后面、程序坞预览前面；访达右键（2026-11-08）排在程序坞预览后面、同一组。
-  /// 2026-11-04 功能管理拍板 M2 M3：分六组（组之间留空），便签、提醒、状态屏一组，启动台、程序坞预览一组
+  /// 2026-11-04 功能管理拍板 M2 M3：分六组（组之间留空），便签、提醒、状态屏一组，启动台、程序坞预览一组；
+  /// 插件（2026-11-12）自己一组「插件」，排在功能后面、快捷键前面。2026-11-13 插件化（P3）：便签起都是插件，
+  /// 「便签与提醒」「桌面」两组并进插件组，刘海岛从通用旁边挪到插件组最后
   @Test func sidebarOrderMatchesMenu() {
     let pages = SettingsPage.allCases
     #expect(
       pages == [
         .general, .clipboard, .launcher, .translate, .screenshot, .record, .notes, .reminders,
-        .statusScreen, .launchpad, .dockPreview, .finderMenu, .hotkeys, .about,
+        .statusScreen, .launchpad, .dockPreview, .finderMenu, .island, .hotkeys, .about,
       ])
     // 分组盖住每一页、和 allCases 同序
     #expect(SettingsPage.groups.flatMap { $0 } == pages)
-    // 没有启动台（macOS 15）时那一组只剩程序坞预览和访达右键；搜索只剩一组里的页时别的组不画
+    // 没有启动台（macOS 15）时插件组里没有它；搜索只剩一组里的页时别的组不画
     #expect(
       SettingsPage.sidebar(SettingsPage.visible(launchpad: false), off: []).map(\.pages)
         == [
           [.general], [.clipboard, .launcher, .translate], [.screenshot, .record],
-          [.notes, .reminders, .statusScreen], [.dockPreview, .finderMenu], [.hotkeys, .about],
+          [.notes, .reminders, .statusScreen, .dockPreview, .finderMenu, .island],
+          [.hotkeys, .about],
         ])
     #expect(
       SettingsPage.sidebar([.reminders, .about], off: []).map(\.pages) == [[.reminders], [.about]])
     // 关着的功能挪进最底下「已关闭（N）」那组（照侧栏顺序）；整组都关了的组不画；组的标题不因为头一页挪走而丢
-    let closed = SettingsPage.sidebar(
-      SettingsPage.allCases, off: [.notes, .dockPreview, .launchpad, .record])
+    // （只有功能会关着：没添加的插件不在 pages 里，见 SettingsRoot）
+    let closed = SettingsPage.sidebar(SettingsPage.allCases, off: [.translate, .record])
     #expect(
       closed.map(\.pages) == [
-        [.general], [.clipboard, .launcher, .translate], [.screenshot],
-        [.reminders, .statusScreen], [.finderMenu],
-        [.hotkeys, .about], [.record, .notes, .launchpad, .dockPreview],
+        [.general], [.clipboard, .launcher], [.screenshot],
+        [.notes, .reminders, .statusScreen, .launchpad, .dockPreview, .finderMenu, .island],
+        [.hotkeys, .about], [.translate, .record],
       ])
     #expect(
-      closed.map(\.title) == [nil, "文字与搜索", "截图与录制", "便签与提醒", "桌面", nil, "已关闭（4）"])
-    #expect(closed.map(\.isOff) == [false, false, false, false, false, false, true])
+      closed.map(\.title) == [nil, "文字与搜索", "截图与录制", "插件", nil, "已关闭（2）"])
+    #expect(closed.map(\.isOff) == [false, false, false, false, false, true])
     #expect(Set(closed.map(\.id)).count == closed.count)
     // 搜索时只剩对上的：关着的那页照样在「已关闭」里
-    #expect(SettingsPage.sidebar([.notes], off: [.notes]).map(\.title) == ["已关闭（1）"])
-    // 组标题（2026-11-04 真机反馈）：一组里的页同一个标题；功能那四组有，一头一尾两组没有
+    #expect(SettingsPage.sidebar([.record], off: [.record]).map(\.title) == ["已关闭（1）"])
+    // 组标题（2026-11-04 真机反馈）：一组里的页同一个标题；中间三组有，一头一尾两组没有
     for group in SettingsPage.groups {
       #expect(Set(group.map(\.groupTitle)).count == 1, "\(group)")
     }
     #expect(
-      SettingsPage.groups.map(\.first?.groupTitle) == [
-        nil, "文字与搜索", "截图与录制", "便签与提醒", "桌面", nil,
-      ])
-    // 功能页对得上功能，通用 / 快捷键 / 关于不是功能
+      SettingsPage.groups.map(\.first?.groupTitle) == [nil, "文字与搜索", "截图与录制", "插件", nil])
+    // 功能页对得上功能（刘海岛 2026-11-13 起是插件的页），通用 / 快捷键 / 关于不是功能
     #expect(pages.compactMap(\.feature) == Feature.allCases)
-    #expect(SettingsPage.general.feature == nil && SettingsPage.hotkeys.feature == nil)
+    #expect(
+      SettingsPage.general.feature == nil && SettingsPage.island.feature == .island
+        && SettingsPage.hotkeys.feature == nil)
+    // 插件组就是全部插件（按 Feature 的先后）
+    #expect(SettingsPage.groups[3].compactMap(\.feature) == Feature.allCases.filter(\.isPlugin))
     let sections = HotKeyAction.sections.map(\.title)
     #expect(sections.firstIndex(of: "翻译")! < sections.firstIndex(of: "截图与录制")!)
   }
@@ -80,6 +100,9 @@ struct SettingsListTests {
     #expect(SettingsPage.page(for: "录制", current: .clipboard) == .record)
     #expect(SettingsPage.page(for: " 快捷键", current: .general) == .hotkeys)
     #expect(SettingsPage.page(for: "帧率", current: .screenshot) == .record)
+    // 刘海岛页排在前面、列着快捷动作，但搜动作的名字要停在那个功能的页（PR #17 原来把名字放进了关键词）
+    #expect(SettingsPage.page(for: "录屏", current: .general) == .record)
+    #expect(SettingsPage.page(for: "刘海", current: .general) == .island)
     #expect(!SettingsPage.screenshot.matches("录屏") && !SettingsPage.screenshot.matches("麦克风"))
     #expect(SettingsPage.page(for: "文件夹", current: .record) == .record)
     // 「文件夹」：通用页（同步文件夹、数据目录，第四轮体检 U13）和截图页的保存文件夹都有（启动台页改叫「App 文件夹」，

@@ -4,13 +4,23 @@
 //   （zip:hdrcharset=UTF-8；访达和 ditto 打的不标，别的系统解开中文名会乱码，2026-11-08 实测），不带 __MACOSX、._*、.DS_Store
 //   （--no-mac-metadata 加排除）；7z 用 LZMA2。只选了一个包（App 这类）时 zip 改用 ditto（同访达的压缩：带着扩展属性，
 //   签名不坏）。不同文件夹里的同名东西包里只放得下一个，不打。不做带密码的压缩（拍板）。
-// - 解压：zip、7z、tar 一族（.tar、.tar.gz / .tgz、.tar.xz / .txz、.tar.bz2 / .tbz），和只压了一个文件的 .gz / .bz2
-//   （系统的 gunzip / bunzip2，解出来的叫包名去掉 .gz，带上包的隔离标记）。zip 先读一遍中央目录（ZipNames）：
+// - 解压：zip、7z、rar、tar 一族（.tar、.tar.gz / .tgz、.tar.xz / .txz、.tar.bz2 / .tbz），和只压了一个文件的 .gz / .bz2
+//   （系统的 gunzip / bunzip2，解出来的叫包名去掉 .gz，带上包的隔离标记）。RAR（2026-11-12）：系统 tar 是 libarchive 3.7.4，
+//   RAR4、RAR5 都解得开（本机样本实测，字节数和清单一致）；带密码的解不开（libarchive 不解 RAR 的密码：头加了密的 tar 说
+//   「encryption」，只是数据加了密的它不认、当成坏数据报错，所以 RAR 解不开时的原因写「坏了，或者有密码」）；分卷的不解
+//   （RAR5 读到第一卷末尾当成包结束了，没被切开的那几样解出来、tar 照样退出 0，像是解完了）：先读主头的「分卷」标志，标着就不交给 tar。
+//   zip 先读一遍中央目录（ZipNames）：
 //   没标 UTF-8、名字又不是合法 UTF-8 的按 GB18030 解（不说的话 tar 直接报错，ditto 解出来是乱码，实测）；有加密的条目先问密码
 //   （tar 认 ZipCrypto 和 AES；不对再问）：本 App 不在前台时先在刘海岛说「有密码」带「输入密码…」，点了再弹框——直接弹的框
 //   拿不到键盘，打的字会进访达。先解进包旁边一个隐藏的临时文件夹，里面只有一样东西就把它放到包旁边，几样就把
 //   临时文件夹改成包的名字（同归档实用工具），重名加「 2」；出错、停了只删临时文件夹。包带着「从网上下载」的隔离标记时，
 //   系统 tar 自己会给解出来的每样东西也带上（实测），不另外做；它默认也不解绝对路径、带 .. 的路径，不顺着包里的符号链接往外写。
+// - 压缩时另外跳过的名字（2026-11-13 拍板 Z1–Z5，Prefs.finderCompressSkip，默认空）：只认名字（任意一层叫这个名字的都不压，
+//   只有 * ? 是通配），带「/」的不收；选中的那几样自己不跳过；不进 .app 这类包里面跳（跳掉包里的东西签名就坏了，只压一个包走
+//   ditto 时整个不用名单）；解压不受影响。**不能直接交给 tar 的 --exclude**（评审实测 bsdtar 3.5.3：它的匹配能从路径里任意一层
+//   开头、任意一层结尾，* 和 ? 还跨「/」——「Screenshot*.png」会扔掉 Screenshots/2024/a.png；[ ] \ 也被当成通配）：先用 find
+//   按名字找出要跳的确切路径（skipFindArguments：-name 只看名字，最外层 -depth +0 不算，包 -prune 不进去），转义后写进一个
+//   临时文件交给 tar -X（escapedForTar）；进度的总大小 = 全部 − 跳过的那几样（skipped）。
 // - 进度条（ByteMeter）：压缩按读过的字节（tar -v / ditto -V 报做完的文件，加上正读着的那个读到哪了），解压按压缩包读到第几个
 //   字节，刘海岛上「42% · 1.2 GB / 2.9 GB」。
 // - 落到正式名字都用「目标已存在就报错」的改名（FileMoves.land），算完名字到落下之间别人占了也盖不掉；和移动、复制排在同一条队
@@ -47,8 +57,35 @@ import AppKit
   /// 「解压到这里」认的（扩展里抄了一份，FinderLinkTests 比对）
   nonisolated static let suffixes = [
     ".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz", ".tbz2", ".gz",
-    ".bz2",
+    ".bz2", ".rar",
   ]
+
+  /// RAR 的主头标着「分卷」吗（head：包开头的几十个字节）。RAR4：7 字节的签名后是主头（类型 0x73），标志第 0 位；
+  /// RAR5：8 字节的签名后是 CRC32、头大小、头类型（1 = 主头）、头标志（第 0 位：后面跟附加区大小），再是归档标志，第 0 位。
+  /// 都是变长整数。头加了密的 RAR5（主头前是类型 4）读不出来，算不是（tar 会说加了密）
+  nonisolated static func isRARVolume(_ head: Data) -> Bool {
+    let bytes = [UInt8](head.prefix(64))
+    if bytes.starts(with: [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00]) {
+      return bytes.count > 10 && bytes[9] == 0x73 && bytes[10] & 0x01 != 0
+    }
+    guard bytes.starts(with: [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00]) else { return false }
+    var index = 12
+    func number() -> UInt64? {
+      var value: UInt64 = 0
+      var shift: UInt64 = 0
+      while index < bytes.count, shift < 64 {
+        let byte = bytes[index]
+        index += 1
+        value |= UInt64(byte & 0x7F) << shift
+        if byte & 0x80 == 0 { return value }
+        shift += 7
+      }
+      return nil
+    }
+    guard number() != nil, number() == 1, let flags = number() else { return false }
+    if flags & 0x01 != 0, number() == nil { return false }
+    return (number() ?? 0) & 0x01 != 0
+  }
 
   /// 只压了一个文件的 .gz / .bz2（不是 tar 包）交给系统的 gunzip / bunzip2（tar 不认这种，实测）；别的是 nil。
   /// 单文件的 .xz 不认（系统的 gunzip 据说也解得了，但本机造不出样本来验）
@@ -95,11 +132,94 @@ import AppKit
   /// 打包、解包都不要的 Mac 杂文件
   nonisolated static let junk = ["__MACOSX", "._*", ".DS_Store"]
 
+  /// 用户另加的跳过名单（设置里那一行的字）：全角半角逗号隔开、去掉两头空白、去重；带「/」的不收（只认名字，Z2）；
+  /// 最多 50 条、每条 100 个字以内（偏好是导入、同步来的，不信它）
+  nonisolated static func skipNames(_ text: String) -> [String] {
+    var names: [String] = []
+    for part in text.split(whereSeparator: { $0 == "," || $0 == "，" }) {
+      let name = part.trimmingCharacters(in: .whitespaces)
+      guard !name.isEmpty, !name.contains("/"), name.count <= 100, !names.contains(name) else {
+        continue
+      }
+      names.append(name)
+    }
+    return Array(names.prefix(50))
+  }
+
+  /// 设置页标出来的：带「/」的条目（不认，Z2）
+  nonisolated static func rejectedSkipNames(_ text: String) -> [String] {
+    text.split(whereSeparator: { $0 == "," || $0 == "，" })
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { $0.contains("/") }
+  }
+
+  /// 不进去跳的包（扩展名）：App、框架、插件这类带签名的包，跳掉里面的东西就坏了。
+  /// ponytail: 按扩展名认，没列的包（.rtfd、.photoslibrary 之类）里面照样跳；要按访达认的包算得自己走一遍目录，有人碰到再改
+  nonisolated static let packages = [
+    "app", "framework", "bundle", "plugin", "appex", "xpc", "kext", "systemextension",
+  ]
+
+  /// 找要跳的路径的 find 参数（在 roots 所在的文件夹里跑，roots 是「./名字」）：名字对上的打印出来、不进去；最外层（选中的那几样）
+  /// 不算（-depth +0）；包不进去（先看名字：包自己叫名单里的名字照样跳）。名单里的 [ ] \ 转义掉，只有 * ? 是通配
+  nonisolated static func skipFindArguments(_ names: [String], roots: [String]) -> [String] {
+    let either = { (patterns: [String]) in
+      patterns.enumerated().flatMap { ($0 == 0 ? [] : ["-o"]) + ["-name", $1] }
+    }
+    let escaped = names.map {
+      $0.replacing("\\", with: "\\\\").replacing("[", with: "\\[").replacing("]", with: "\\]")
+    }
+    return roots + ["(", "-depth", "+0", "("] + either(escaped) + [
+      ")", ")", "-prune", "-print0", "-o", "(",
+    ]
+      + either(packages.map { "*." + $0 }) + [")", "-type", "d", "-prune"]
+  }
+
+  /// 交给 tar -X 的一行：确切路径（「./名字/…」，同 tar 自己走目录时看到的样子），* ? [ ] \ 前面加反斜杠，不让它当通配
+  nonisolated static func escapedForTar(_ path: String) -> String {
+    var line = ""
+    for character in path {
+      if "\\*?[]".contains(character) { line.append("\\") }
+      line.append(character)
+    }
+    return line
+  }
+
+  /// 这一次要跳的确切路径：每个文件夹里跑一次 find（另起进程），给回「./名字/…」和它的完整路径（量大小用）。名单空时不跑。
+  /// ponytail: 名字里带换行的找到了也写不进 tar -X 的一行，照压不跳
+  static func skipped(_ items: [URL], names: [String]) async -> [(relative: String, url: URL)] {
+    guard !names.isEmpty else { return [] }
+    var groups: [(folder: String, roots: [String])] = []
+    for item in items {
+      let folder = (FileMoves.plainPath(item) as NSString).deletingLastPathComponent
+      let root = "./" + item.lastPathComponent
+      if let index = groups.firstIndex(where: { $0.folder == folder }) {
+        groups[index].roots.append(root)
+      } else {
+        groups.append((folder, [root]))
+      }
+    }
+    var found: [(relative: String, url: URL)] = []
+    for group in groups {
+      guard
+        let result = try? await Subprocess.run(
+          "/usr/bin/find", skipFindArguments(names, roots: group.roots), captures: true,
+          environment: ByteMeter.utf8Environment, quality: .userInitiated,
+          directory: URL(filePath: group.folder, directoryHint: .isDirectory), stopsOnCancel: true)
+      else { continue }
+      for path in result.output.split(separator: "\0").map(String.init)
+      where path.hasPrefix("./") && !path.contains("\n") {
+        found.append((path, URL(filePath: group.folder + "/" + path.dropFirst(2))))
+      }
+    }
+    return found
+  }
+
   /// 压缩用 tar 的参数：按所在的文件夹分组，每组先「-C 文件夹」，再跟「./名字」（./ 开头的名字不会被当成选项，-s 再把它去掉；
   /// S：符号链接指向哪里不改）
-  nonisolated static func compressArguments(_ items: [URL], format: Format, to archive: URL)
-    -> [String]
-  {
+  /// excludes：要跳的确切路径写成的文件（tar -X，见 skipped）
+  nonisolated static func compressArguments(
+    _ items: [URL], format: Format, to archive: URL, excludes: URL? = nil
+  ) -> [String] {
     var arguments = [
       "-c", "-v", "-f", archive.path(percentEncoded: false), "--format",
       format == .zip ? "zip" : "7zip",
@@ -107,6 +227,7 @@ import AppKit
       "--no-mac-metadata", "-s", "|^\\./||S",
     ]
     arguments += junk.flatMap { ["--exclude", $0] }
+    if let excludes { arguments += ["-X", excludes.path(percentEncoded: false)] }
     var folder: String?
     for item in items {
       let parent = (FileMoves.plainPath(item) as NSString).deletingLastPathComponent
@@ -144,8 +265,11 @@ import AppKit
 
   /// 解压失败，给人看的原因（tar 的标准错误里认得的说成中文）。password：给过密码——这时报「密码不对」，或者数据校验不对、
   /// 解不开（ZipCrypto 只校验一个字节，错的密码有 1/256 混过校验、解到一半才报这些，Kitty Box 实测）都算密码不对；
-  /// 包不完整、不是压缩包这类照实说，不然输对了密码也一遍遍问
-  nonisolated static func outcome(ofFailure error: String, password: Bool) -> Outcome {
+  /// 包不完整、不是压缩包这类照实说，不然输对了密码也一遍遍问。rar：只是数据加了密的 RAR，tar 不认密码、当成坏数据报
+  /// （见文件头），认不出来的原因说「坏了，或者有密码」
+  nonisolated static func outcome(ofFailure error: String, password: Bool, rar: Bool = false)
+    -> Outcome
+  {
     if let problem = placeProblem(error) { return .failed(problem) }
     if error.contains("Incorrect passphrase") { return password ? .wrongPassword : .needsPassword }
     if password,
@@ -163,14 +287,16 @@ import AppKit
       ("is not a bzip2 file", "不是压缩包，或者是不支持的格式"),
     ]
     return .failed(
-      damaged.first { error.localizedCaseInsensitiveContains($0.0) }?.1 ?? "压缩包可能坏了")
+      damaged.first { error.localizedCaseInsensitiveContains($0.0) }?.1
+        ?? (rar ? "压缩包可能坏了，或者加了密码（RAR 的密码这里解不开）" : "压缩包可能坏了"))
   }
 
   // MARK: 压缩
 
   /// 打一个包：先写到 archive 旁边的隐藏临时名，打完落到 archive（重名换「 2」）
+  /// skip：另外跳过的名字（skipNames 收拾过的）；只压一个包走 ditto 时不用
   static func pack(
-    _ items: [URL], format: Format, to archive: URL,
+    _ items: [URL], format: Format, to archive: URL, skip: [String] = [],
     report: @escaping FileMoves.Report = { _, _ in }
   ) async -> Outcome {
     let temporary = FileMoves.temporary(in: archive.deletingLastPathComponent())
@@ -179,7 +305,19 @@ import AppKit
       && (try? items[0].resourceValues(forKeys: [.isPackageKey]))?.isPackage == true
     // 进度（ByteMeter）：一共多大先数好；tar -v 每开始一个文件报「a 名字」，名字按它所在的文件夹拼回去看多大；
     // ditto -V 每打完一个报「N bytes for 名字」
-    let meter = ByteMeter(total: await ByteMeter.sizes(of: items).reduce(0, +))
+    let excluded = package ? [] : await skipped(items, names: skip)
+    let excludes =
+      excluded.isEmpty
+      ? nil
+      : FileManager.default.temporaryDirectory.appending(path: "kitty-skip-\(UUID().uuidString)")
+    if let excludes {
+      try? Data(excluded.map { escapedForTar($0.relative) + "\n" }.joined().utf8).write(
+        to: excludes)
+    }
+    defer { if let excludes { try? FileManager.default.removeItem(at: excludes) } }
+    let total = await ByteMeter.sizes(of: items).reduce(0, +)
+    let meter = ByteMeter(
+      total: max(total - (await ByteMeter.sizes(of: excluded.map(\.url)).reduce(0, +)), 0))
     var parents: [String: String] = [:]
     for item in items {
       parents[item.lastPathComponent] =
@@ -202,7 +340,8 @@ import AppKit
           temporary.path(percentEncoded: false),
         ], captures: true, quality: .userInitiated, stopsOnCancel: true, watch: watch)
       : try? await Subprocess.run(
-        "/usr/bin/tar", compressArguments(items, format: format, to: temporary), captures: true,
+        "/usr/bin/tar", compressArguments(items, format: format, to: temporary, excludes: excludes),
+        captures: true,
         environment: ByteMeter.utf8Environment, quality: .userInitiated, stopsOnCancel: true,
         watch: watch)
     let failure: Outcome
@@ -245,10 +384,12 @@ import AppKit
       filePath: (FileMoves.plainPath(first) as NSString).deletingLastPathComponent,
       directoryHint: .isDirectory)
     let name = archiveName(for: items, format: format)
+    let skip = skipNames(UserDefaults.standard.string(forKey: Prefs.finderCompressSkip) ?? "")
     FileMoves.enqueue("正在压缩成「\(name)」…", detail: "准备中", island: island) { report in
       await pack(
         items, format: format,
-        to: folder.appending(path: FileMoves.freeName(name, in: folder, used: [])), report: report)
+        to: folder.appending(path: FileMoves.freeName(name, in: folder, used: [])), skip: skip,
+        report: report)
     } finish: { outcome in
       report(outcome, verb: "压缩", island: island)
     }
@@ -312,7 +453,8 @@ import AppKit
     if Task.isCancelled {
       failure = .stopped
     } else if let result, result.status != 0 {
-      failure = outcome(ofFailure: result.error, password: password != nil)
+      failure = outcome(
+        ofFailure: result.error, password: password != nil, rar: suffix(of: archive) == ".rar")
     } else if result == nil {
       failure = .failed("系统的工具没能运行")
     } else if let placed = settle(work, stem: stem(of: archive), in: parent) {
@@ -368,6 +510,16 @@ import AppKit
     ])
     let offline =
       cloud?.isUbiquitousItem == true && cloud?.ubiquitousItemDownloadingStatus == .notDownloaded
+    // 分卷的 RAR 不交给 tar（见文件头）。同读 zip 的中央目录：在主线程上读几十个字节，还没下载下来的不读
+    if !offline, suffix(of: archive) == ".rar",
+      let handle = try? FileHandle(forReadingFrom: archive),
+      let head = try? handle.read(upToCount: 64), isRARVolume(head)
+    {
+      island?.show(
+        "没有解压「\(archive.lastPathComponent)」", detail: "分卷的 RAR（.part1.rar 这种）这里解不开",
+        tone: .warning)
+      return
+    }
     if !offline, ZipNames.isZip(archive), let entries = ZipNames.entries(of: archive) {
       gbk = ZipNames.charset(for: entries) == .gb18030
       encrypted = encrypted || entries.contains(where: \.encrypted)

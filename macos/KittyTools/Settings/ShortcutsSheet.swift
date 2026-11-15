@@ -245,6 +245,8 @@ struct ShortcutsSheet: View {
     var features: [Feature] = []
     /// 这一组的全局快捷键（排在最前，带「全局」标记）
     var globals: [HotKeyAction] = []
+    /// 功能全关了也列（刘海岛：点刘海那一行归插件，提示怎么停住、收起那一行一直有用）
+    var always = false
     var entries: [Entry]
     var id: String { title }
 
@@ -260,7 +262,9 @@ struct ShortcutsSheet: View {
   static func groups(enabled: Set<Feature>) -> [Group] {
     allGroups.compactMap { group in
       let owners = group.features.isEmpty ? group.globals.compactMap(\.feature) : group.features
-      guard owners.isEmpty || owners.contains(where: enabled.contains) else { return nil }
+      guard group.always || owners.isEmpty || owners.contains(where: enabled.contains) else {
+        return nil
+      }
       var group = group
       group.globals = group.globals.filter { $0.feature.map(enabled.contains) ?? true }
       group.entries = group.entries.filter { $0.needs.map(enabled.contains) ?? true }
@@ -277,7 +281,7 @@ struct ShortcutsSheet: View {
       return [
         Entry(
           "1–0",
-          text: "1 矩形 · 2 椭圆 · 3 箭头 · 4 直线 · 5 画笔 · 6 荧光笔 · 7 文字 · 8 序号 · 9 马赛克 · 0 聚光灯；再按一次收起")
+          text: "1 矩形 · 2 椭圆 · 3 箭头 · 4 直线 · 5 画笔 · 6 荧光笔 · 7 文字 · 8 序号 · 9 打码 · 0 聚光灯；再按一次收起")
       ]
     }
     return ShotKey.tools.map { Entry(key($0), text: $0.title + "（再按一次收起）") }
@@ -429,7 +433,10 @@ struct ShortcutsSheet: View {
         title: "截图 · 标注", symbol: "pencil.tip.crop.circle", color: Style.Family.screenshot,
         features: [.screenshot],
         entries: toolEntries + [
-          Entry("⇧", text: "画正方形、正圆、45° 线"),
+          Entry("⇧", text: "画正方形、正圆、45° 线；拖角时保持比例"),
+          Entry("⌥", text: "从中心画矩形、椭圆，或从中心改大小"),
+          Entry("⌘+", "⌘-", text: "文字大一号 / 小一号（输入时、选中文字时）"),
+          Entry("滚轮", text: "在选中的标注上换粗细、字号"),
           Entry("⌫", text: "删除选中的标注"),
           Entry("⌘D", text: "复制一份选中的标注（按住 ⌥ 拖动同样）"),
           Entry("方向键", text: "移动选中的标注"),
@@ -680,12 +687,14 @@ struct ShortcutsSheet: View {
           Entry("Esc", text: "先清空搜索，再按一次收起；点空白处也收起"),
           Entry("⌘W", text: "收起"),
         ]),
-      // 刘海岛（mac-whisker S2，2026-10-26）：不属于哪个功能，一直列
+      // 刘海岛（mac-whisker S2，2026-10-26）：一直列；2026-11-13 起点刘海那一行和全局键归刘海岛插件，没添加时只剩提示那一行
       Group(
         title: "刘海岛", symbol: HotKeyAction.island.symbol, color: Style.Family.general,
-        globals: [.island],
+        globals: [.island], always: true,
         entries: [
-          Entry(text: "点刘海：打开 / 收起最近的提示和快捷动作（指针停在刘海上时岛会鼓起一点）"),
+          Entry(
+            text: "点刘海或在刘海上两指往下滑：打开——刘海两边挂着东西时是它的卡片，再往下滑一次轮到下一个，最后是快捷动作",
+            needs: .island),
           Entry(text: "鼠标挪到弹出的提示上：停住、展开看全文和按钮；在岛上双指往上滑收起"),
         ]),
       // 主界面（2026-10-29，Shell/HomePanel.swift 的 Home.key / Home.command）：不属于哪个功能，一直列
@@ -694,7 +703,7 @@ struct ShortcutsSheet: View {
         globals: [.home],
         entries: [
           Entry("←→", "↑↓", text: "在格子之间换（Tab、⇧Tab 也行）"),
-          Entry("↩", "空格", text: "执行选中的那一格；开关原地切换"),
+          Entry("↩", "空格", text: "执行选中的那一格"),
           Entry("⌘,", text: "打开设置"),
           Entry("⌘Q", text: "退出 Kitty Tools"),
           Entry("Esc", "⌘W", text: "收起"),

@@ -99,6 +99,9 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
     var statusPresets: [StatusPreset] = []
     var statusEntersFirst = false
     var features = Set(Feature.allCases.filter(\.isAvailable))
+
+    /// 这一项正在进行（标题换成「停止…」）：录屏 / 录音在录
+    func isRunning(_ action: HotKeyAction) -> Bool { recording == action }
   }
 
   /// 内置动作（体检 A26）：和菜单栏同名同序——按 HotKeyAction.sections（只列开着的功能，启动器自己除外），每节末尾接上那一节的
@@ -121,7 +124,7 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
         }
         items.append(
           action(
-            actionID(hotKey), hotKey.title(recording: state.recording == hotKey),
+            actionID(hotKey), hotKey.title(recording: state.isRunning(hotKey)),
             aliases[hotKey] ?? "")
         )
       }
