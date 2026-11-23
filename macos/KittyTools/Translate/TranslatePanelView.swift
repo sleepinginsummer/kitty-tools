@@ -4,7 +4,7 @@
 // （翻译历史 ⌘Y、条数、清空与导出、复制即译、设置 ⌘,）；
 // 原文卡片（15 pt，↩ 就是翻译，⇧↩ / ⌘↩ 换行；只在出乎所选时写一行方向说明）+ 原文操作（收藏、划词来的可「替换原文」），
 // 没有常驻「翻译」按钮（N5）：原文改过还没重译时右下角才弹出品牌粉「翻译 ↩」胶囊（pop），开始翻译就收回（settle）；
-// 下方是各服务结果卡片（折叠状态记住；查单个词时最上面多一张系统词典卡）。翻译历史（N7，HistoryView）整块替换结果区，
+// 下方是各服务结果卡片（折叠状态记住；折叠着的不自动翻译，点开才翻；查单个词时最上面多一张系统词典卡）。翻译历史（N7，HistoryView）整块替换结果区，
 // 开 / 关时只有这块 settle 交叉淡变、原文区不动。高度随内容伸缩（Bob 的做法：只让人拖宽度），结果卡不超过三张时
 // 全放下、多于三张时至少放下前三张，第四张起才在卡片区里滚（2026-10-03 用户要求，panelHeight）；
 // 字号可调（⌘+ / ⌘- / ⌘0）。状态和操作都在 TranslateCoordinator，窗口快捷键见它的 handleKeyEquivalent。
@@ -76,6 +76,13 @@ struct TranslatePanelView: View {
     .padding(.bottom, coordinator.showsHistory ? 0 : 2)
     // 一次操作只重译一次（交换、撞同语言时两个值在同一次更新里一起改）
     .onChange(of: [source, target]) { retranslate() }
+    // 展开了一张没翻的卡（点箭头、折叠着点重新翻译，或者偏好从别处改了）：现在才翻
+    .onChange(of: collapsedServices) {
+      let collapsed = collapsed
+      for card in coordinator.cards where card.state == .idle && !collapsed.contains(card.id) {
+        coordinator.expand(card.id)
+      }
+    }
     // 拖下边改了最高多高（W2）也再量一次：resize 按设置里的上限算
     .onChange(of: [desiredHeight, mustFitHeight, maxHeight], initial: true) {
       resize(desiredHeight, mustFitHeight)
@@ -208,7 +215,7 @@ struct TranslatePanelView: View {
   private func languageMenu(isSource: Bool, showsAutoTags: Bool) -> some View {
     let title = isSource ? sourceTitle : targetTitle
     let isAuto = (isSource ? source : target) == nil
-    let label = isSource ? "源语言" : "目标语言"
+    let label = isSource ? String(localized: "源语言") : String(localized: "目标语言")
     return Menu {
       Picker(
         label,
@@ -227,7 +234,8 @@ struct TranslatePanelView: View {
     } label: {
       LanguageCapsule(
         title: title,
-        showsAutoTag: showsAutoTags && isAuto && title != (isSource ? "自动检测" : "自动"))
+        showsAutoTag: showsAutoTags && isAuto
+          && title != (isSource ? Self.autoDetectTitle : Self.autoTitle))
     }
     .menuStyle(.button)
     .buttonStyle(.plain)
@@ -262,15 +270,19 @@ struct TranslatePanelView: View {
 
   /// 源语言胶囊：自动时显示检测到的语言（还没翻译时写「自动检测」）
   private var sourceTitle: String {
-    if let source, let lang = Lang(rawValue: source) { return lang.title }
-    return (coordinator.fixedSource ?? coordinator.detected)?.title ?? "自动检测"
+    if let source, let lang = Lang(rawValue: source) { return lang.shortTitle }
+    return (coordinator.fixedSource ?? coordinator.detected)?.shortTitle ?? Self.autoDetectTitle
   }
 
   /// 目标语言胶囊：自动时显示这次实际译成的语言（还没翻译时写「自动」，菜单里有「自动（A ⇄ B）」）
   private var targetTitle: String {
-    if let target, let lang = Lang(rawValue: target) { return lang.title }
-    return coordinator.target?.title ?? "自动"
+    if let target, let lang = Lang(rawValue: target) { return lang.shortTitle }
+    return coordinator.target?.shortTitle ?? Self.autoTitle
   }
+
+  /// 胶囊上还没定下语言时的字（显示和「是不是还没定下」的比对用同一份）
+  private static var autoDetectTitle: String { String(localized: "自动检测") }
+  private static var autoTitle: String { String(localized: "自动") }
 
   /// 选成和另一边相同的固定语言时，另一边换成这边原来的值（像交换一样），不会出现「英 → 英」
   private func choose(
@@ -351,7 +363,7 @@ struct TranslatePanelView: View {
             isActive: speaker.speaking == key && !coordinator.sourceText.isEmpty)
           Button("复制原文", systemImage: "doc.on.doc") {
             Paster.write(string: coordinator.sourceText, record: true)
-            island?.show("已复制原文", detail: Island.excerpt(coordinator.sourceText))
+            island?.show("已复制原文", detail: "\(Island.excerpt(coordinator.sourceText))")
           }
           Button("清空", systemImage: "xmark.circle") { coordinator.beginInput() }
         }
@@ -369,8 +381,9 @@ struct TranslatePanelView: View {
         .symbolEffect(.bounce, value: coordinator.isFavorite)
         .disabled(coordinator.primaryResult == nil)
         .help("收藏这次翻译（⌘D），在历史里可以只看收藏")
-        // 查单个词时结果是一段释义，不能拿去替换
-        if coordinator.replaceSource != nil, !coordinator.isWordLookup {
+        // 查单个词时结果是一段释义、讲解卡是一段讲解（issue #35），都不能拿去替换
+        if coordinator.replaceSource != nil, !coordinator.isWordLookup, !coordinator.primaryExplains
+        {
           Button("替换原文", systemImage: "arrow.uturn.backward", action: replaceOriginal)
             .labelStyle(.titleAndIcon)
             .disabled(coordinator.primaryResult == nil)
@@ -408,12 +421,12 @@ struct TranslatePanelView: View {
   /// 只在出乎所选时写一行：固定目标正好是原文语言而改译了另一端；固定源和检测结果对不上（照所选发出，只提示）
   private var directionNote: String? {
     if let abandoned = coordinator.abandonedTarget, let to = coordinator.target {
-      return "原文已是\(abandoned.title)，改译成\(to.title)"
+      return String(localized: "原文已是\(abandoned.title)，改译成\(to.title)")
     }
     if let fixedSource = coordinator.fixedSource, let detected = coordinator.detected,
       !detected.isSameLanguage(as: fixedSource)
     {
-      return "检测到\(detected.title)，仍按\(fixedSource.title)翻译"
+      return String(localized: "检测到\(detected.title)，仍按\(fixedSource.title)翻译")
     }
     return nil
   }
@@ -424,7 +437,7 @@ struct TranslatePanelView: View {
   /// 去设置的两个按钮是主按钮（BrandButtonStyle）：这时面板里该点的就是它
   @ViewBuilder private var results: some View {
     if let notice = coordinator.notice {
-      EmptyState(symbol: "exclamationmark.bubble", title: notice) {
+      EmptyState(symbol: "exclamationmark.bubble", title: "\(notice)") {
         // 只有授权类提示才给按钮（以前任何提示都挂「打开辅助功能设置」）
         if let permission = coordinator.noticePermission {
           Button(permission.settingsTitle, action: permission.openSettings)
@@ -435,6 +448,14 @@ struct TranslatePanelView: View {
     } else if coordinator.services.enabled.isEmpty {
       EmptyState(symbol: "character.bubble", title: "没有启用的翻译服务") {
         Button("打开翻译设置") { coordinator.openSettings(nil) }.buttonStyle(BrandButtonStyle())
+      }
+      .padding(Self.emptyStateInset)
+    } else if coordinator.cards.isEmpty, coordinator.onlyDictionaries {
+      EmptyState(symbol: "character.book.closed", title: "启用的服务只能查单词") {
+        VStack(spacing: 12) {
+          Text("翻译句子要再启用一个翻译服务").foregroundStyle(.secondary)
+          Button("打开翻译设置") { coordinator.openSettings(nil) }.buttonStyle(BrandButtonStyle())
+        }
       }
       .padding(Self.emptyStateInset)
     } else if coordinator.cards.isEmpty {
@@ -476,11 +497,18 @@ struct TranslatePanelView: View {
             ProviderCardView(
               card: card, index: index, language: coordinator.target, speaker: speaker,
               fontScale: fontScale, wordStyle: wordStyle,
+              explains: coordinator.explains(card.service),
               pronounce: wordStyle ? coordinator.translatedSource.flatMap(englishWord) : nil,
               isCollapsed: collapsed.contains(card.id),
               copyTick: coordinator.copiedCard == card.id ? coordinator.copyTick : 0
             ) {
-              coordinator.retry(card.id)
+              // 折叠着点重新翻译 = 展开并翻译（没翻的那张由展开去跑，见 onChange(of: collapsedServices)）
+              if collapsed.contains(card.id) {
+                toggleCollapse(card.id)
+              } else if card.state == .idle {
+                coordinator.expand(card.id)
+              }
+              if card.state != .idle { coordinator.retry(card.id) }
             } onCopy: {
               coordinator.copyCard(card.id)
             } onToggleCollapse: {
@@ -519,7 +547,7 @@ struct TranslatePanelView: View {
   private nonisolated static let resultsSpace = "translateResults"
 
   private var collapsed: Set<String> {
-    Set(collapsedServices.split(separator: "\n").map(String.init))
+    TranslateCoordinator.collapsedIDs(collapsedServices)
   }
 
   private func toggleCollapse(_ id: String) {
@@ -565,8 +593,9 @@ private struct LanguageCapsule: View {
   }
 }
 
-/// 顶栏「⋯」菜单（N6）：翻译历史 ⌘Y、清空历史、导出（体检 C6，和设置 › 翻译、历史 ⌘K 同一个 HistoryMenu.export）
-/// 与条数、复制即译开关、设置 ⌘,。菜单项的键位和 TranslateCoordinator.handleKeyEquivalent 一致（那边先处理，这里只是显示）；
+/// 顶栏「⋯」菜单（N6）：翻译历史 ⌘Y、导出（体检 C6，和设置 › 翻译、历史 ⌘K 同一个 HistoryMenu.export）
+/// 与条数、复制即译开关、设置 ⌘,，「清空历史…」单独一组放在最后（第五轮体检 U4②：HIG 危险命令放最后，找导出时不擦到它）。
+/// 菜单项的键位和 TranslateCoordinator.handleKeyEquivalent 一致（那边先处理，这里只是显示）；
 /// 浮窗快捷键不再塞进按钮 help。清空的确认框挂在根视图上（历史 ⌘K 也开它）
 private struct MoreMenu: View {
   @Bindable var coordinator: TranslateCoordinator
@@ -580,8 +609,6 @@ private struct MoreMenu: View {
     Menu {
       Toggle("翻译历史", isOn: $coordinator.showsHistory)
         .keyboardShortcut("y")
-      Button("清空历史…", role: .destructive) { coordinator.confirmsClearHistory = true }
-        .disabled(counts.total == counts.favorites)
       Menu("导出") { HistoryExportItems(history: history, island: island) }
         .disabled(counts.total == 0)
       Text("共 \(counts.total) 条 · 收藏 \(counts.favorites)")
@@ -590,6 +617,9 @@ private struct MoreMenu: View {
       Divider()
       Button("设置…") { coordinator.openSettings(nil) }
         .keyboardShortcut(",")
+      Divider()
+      Button("清空历史…", role: .destructive) { coordinator.confirmsClearHistory = true }
+        .disabled(counts.total == counts.favorites)
     } label: {
       // 字形贴着点击框的右边：顶栏最右的东西贴外缘（离窗口 12），和左边贴着外缘的语言胶囊对称。
       // −1.5：13 medium 的「⋯」右边有 1.5 的留白，让掉它最右那个点才正好在外缘上
@@ -614,13 +644,17 @@ private struct CopyToTranslateBadge: View {
 
   var body: some View {
     Button(action: turnOff) {
-      Text("复制即译")
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(Style.brandInk)
-        .padding(.horizontal, 10)
-        .frame(height: 22)
-        .background(Style.brand.opacity(0.16), in: .capsule)
-        .contentShape(.capsule)
+      // 英文用短说法（On Copy）：全称把顶栏的语言胶囊挤成「Si…ese」；悬停提示、读屏照旧写全称
+      Text(
+        LocalizedStringResource(
+          "translate.copyBadge", defaultValue: "复制即译", comment: "顶栏的状态胶囊（短说法）：复制即译开着")
+      )
+      .font(.system(size: 12, weight: .medium))
+      .foregroundStyle(Style.brandInk)
+      .padding(.horizontal, 10)
+      .frame(height: 22)
+      .background(Style.brand.opacity(0.16), in: .capsule)
+      .contentShape(.capsule)
     }
     .buttonStyle(PressScale())
     .fixedSize()

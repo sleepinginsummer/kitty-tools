@@ -11,8 +11,11 @@ nonisolated enum Lang: String, CaseIterable, Codable, Sendable {
   case zhHans = "zh-Hans"
   case zhHant = "zh-Hant"
   case en, ja, ko, fr, de, es, ru, pt, it
+  // 第四轮体检 X1（2026-11-17）：常用的 30 种。新的只能加在末尾（浮窗、设置里的列表按这个顺序；原值存进偏好和历史）
+  case vi, th, id, ms, ar, tr, hi, nl, pl, uk, sv, da, fi, nb, cs, el, he, hu, ro
 
-  var title: String {
+  /// 界面上的语言名（跟界面语言）
+  var titleResource: LocalizedStringResource {
     switch self {
     case .zhHans: "简体中文"
     case .zhHant: "繁体中文"
@@ -25,8 +28,44 @@ nonisolated enum Lang: String, CaseIterable, Codable, Sendable {
     case .ru: "俄语"
     case .pt: "葡萄牙语"
     case .it: "意大利语"
+    case .vi: "越南语"
+    case .th: "泰语"
+    case .id: "印尼语"
+    case .ms: "马来语"
+    case .ar: "阿拉伯语"
+    case .tr: "土耳其语"
+    case .hi: "印地语"
+    case .nl: "荷兰语"
+    case .pl: "波兰语"
+    case .uk: "乌克兰语"
+    case .sv: "瑞典语"
+    case .da: "丹麦语"
+    case .fi: "芬兰语"
+    case .nb: "挪威语"
+    case .cs: "捷克语"
+    case .el: "希腊语"
+    case .he: "希伯来语"
+    case .hu: "匈牙利语"
+    case .ro: "罗马尼亚语"
     }
   }
+
+  var title: String { String(localized: titleResource) }
+
+  /// 翻译浮窗顶栏胶囊里的语言名：英文的简繁中文太长（Simplified Chinese 把胶囊挤成「Simplifi…hinese」），用短说法；
+  /// 中文和别的语言同 title
+  var shortTitle: String {
+    switch self {
+    case .zhHans:
+      String(localized: "lang.short.zhHans", defaultValue: "简体中文", comment: "翻译浮窗顶栏胶囊里的语言名（短说法）")
+    case .zhHant:
+      String(localized: "lang.short.zhHant", defaultValue: "繁体中文", comment: "翻译浮窗顶栏胶囊里的语言名（短说法）")
+    default: title
+    }
+  }
+
+  /// 智谱中文提示词里用的语言名：固定中文（中文原文），不跟界面语言变——给大模型的提示词不翻
+  var chineseName: String { titleResource.key }
 
   /// 英文提示词里用的语言名
   var englishName: String {
@@ -42,6 +81,25 @@ nonisolated enum Lang: String, CaseIterable, Codable, Sendable {
     case .ru: "Russian"
     case .pt: "Portuguese"
     case .it: "Italian"
+    case .vi: "Vietnamese"
+    case .th: "Thai"
+    case .id: "Indonesian"
+    case .ms: "Malay"
+    case .ar: "Arabic"
+    case .tr: "Turkish"
+    case .hi: "Hindi"
+    case .nl: "Dutch"
+    case .pl: "Polish"
+    case .uk: "Ukrainian"
+    case .sv: "Swedish"
+    case .da: "Danish"
+    case .fi: "Finnish"
+    case .nb: "Norwegian"
+    case .cs: "Czech"
+    case .el: "Greek"
+    case .he: "Hebrew"
+    case .hu: "Hungarian"
+    case .ro: "Romanian"
     }
   }
 
@@ -59,6 +117,25 @@ nonisolated enum Lang: String, CaseIterable, Codable, Sendable {
     case .ru: "ru-RU"
     case .pt: "pt-BR"
     case .it: "it-IT"
+    case .vi: "vi-VN"
+    case .th: "th-TH"
+    case .id: "id-ID"
+    case .ms: "ms-MY"
+    case .ar: "ar-SA"
+    case .tr: "tr-TR"
+    case .hi: "hi-IN"
+    case .nl: "nl-NL"
+    case .pl: "pl-PL"
+    case .uk: "uk-UA"
+    case .sv: "sv-SE"
+    case .da: "da-DK"
+    case .fi: "fi-FI"
+    case .nb: "nb-NO"
+    case .cs: "cs-CZ"
+    case .el: "el-GR"
+    case .he: "he-IL"
+    case .hu: "hu-HU"
+    case .ro: "ro-RO"
     }
   }
 
@@ -80,6 +157,25 @@ nonisolated enum Lang: String, CaseIterable, Codable, Sendable {
     case .ru: .russian
     case .pt: .portuguese
     case .it: .italian
+    case .vi: .vietnamese
+    case .th: .thai
+    case .id: .indonesian
+    case .ms: .malay
+    case .ar: .arabic
+    case .tr: .turkish
+    case .hi: .hindi
+    case .nl: .dutch
+    case .pl: .polish
+    case .uk: .ukrainian
+    case .sv: .swedish
+    case .da: .danish
+    case .fi: .finnish
+    case .nb: .norwegian
+    case .cs: .czech
+    case .el: .greek
+    case .he: .hebrew
+    case .hu: .hungarian
+    case .ro: .romanian
     }
   }
 
@@ -146,5 +242,24 @@ extension Lang {
     var second = rawSecond.flatMap(Lang.init) ?? .en
     if second.isSameLanguage(as: first) { second = first == .en ? .zhHans : .en }
     return (first, second)
+  }
+}
+
+extension Lang {
+  /// 新装第一次启动时（AppDelegate 里、Prefs.registerDefaults 之前，同 Feature.seedNewInstall）：系统语言列表里英文排在
+  /// 中文前面的 Mac，把第一 / 第二语言明写成英语 / 简体中文；中文在前（或者都没有）的照旧不写，用注册的默认值（简体中文 / 英语）。
+  /// 注册的默认值全 App 一套、不改（mac-native §1：导出、同步里「没有这一项 = 默认值」，各台不同会把没动过的设置悄悄换掉）。
+  /// 新装 = 还没看过任何一版、引导也没开过（同 Feature.seedNewInstall）；升级上来的、已经存过的都不碰。只看持久域
+  @MainActor static func seedNewInstall(
+    _ defaults: UserDefaults = .standard, domainName: String? = Bundle.main.bundleIdentifier,
+    system: [String] = InterfaceLanguage.systemLanguages
+  ) {
+    let stored = domainName.flatMap(defaults.persistentDomain(forName:)) ?? [:]
+    guard stored[Prefs.lastSeenVersion] == nil, stored[Prefs.onboardingScreen] == nil,
+      stored[Prefs.translateFirst] == nil, stored[Prefs.translateSecond] == nil,
+      system.first(where: { $0.hasPrefix("en") || $0.hasPrefix("zh") })?.hasPrefix("en") == true
+    else { return }
+    defaults.set(Lang.en.rawValue, forKey: Prefs.translateFirst)
+    defaults.set(Lang.zhHans.rawValue, forKey: Prefs.translateSecond)
   }
 }

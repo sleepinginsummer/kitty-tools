@@ -61,6 +61,10 @@ struct ScreenshotSnapshotTests {
       h.window, "idle-element-parent", crop: CGRect(x: 100, y: 340, width: 620, height: 460))
     h = element()
     try shoot(h.window, "idle-element-hint", crop: top)
+    // 窄屏（第五轮体检 U3：13 寸「更大字体」、随航的 iPad）：提示条按屏宽在段与段之间折行，不撑出屏幕，「Esc 取消」在
+    h = Harness(findsElements: true, size: CGSize(width: 480, height: 480))
+    h.move(CGPoint(x: 240, y: 60))
+    try shoot(h.window, "idle-hint-narrow", crop: CGRect(x: 0, y: 300, width: 480, height: 180))
     h = capture()
     h.move(CGPoint(x: 1000, y: 700))
     try shoot(h.window, "idle-desktop", crop: top)
@@ -70,6 +74,18 @@ struct ScreenshotSnapshotTests {
     try shoot(
       h.window, "idle-window-original-colors", crop: CGRect(x: 100, y: 340, width: 620, height: 460)
     )
+    // 设置 › 截图「框选时的放大镜」（2026-11-17）：只显示放大镜（没有色值卡）、不显示（按住 ⌘ 的十字准线照样有）；
+    // 「框选时显示操作提示」关着时顶上没有那条
+    h = Harness(windows: Self.windows, image: desktop, loupe: .loupe)
+    h.move(CGPoint(x: 330, y: 520))
+    try shoot(
+      h.window, "idle-window-loupe-only", crop: CGRect(x: 100, y: 340, width: 620, height: 460))
+    h = Harness(windows: Self.windows, image: desktop, showsHint: false, loupe: .off)
+    h.move(CGPoint(x: 330, y: 520))
+    h.modifiers(.command)
+    try shoot(
+      h.window, "idle-window-no-loupe-no-hint",
+      crop: CGRect(x: 0, y: 340, width: 1200, height: 460))
     h = Harness(windows: Self.windows, image: desktop, keepsColors: true)
     h.drag(CGPoint(x: 300.3, y: 260.7), CGPoint(x: 800.4, y: 560.2))
     try shoot(
@@ -251,7 +267,7 @@ struct ScreenshotSnapshotTests {
     let fontBar = try #require(h.view.subviews.lazy.compactMap { $0 as? StyleBar }.first)
     let sizeButton = try #require(
       Self.descendants(of: fontBar).compactMap { $0 as? NSButton }.first {
-        $0.accessibilityLabel() == "字号"
+        $0.accessibilityLabel() == String(localized: "字号")  // 英文截图里是 Font size
       })
     sizeButton.sendAction(sizeButton.action, to: sizeButton.target)
     try shoot(
@@ -314,6 +330,13 @@ struct ScreenshotSnapshotTests {
     ]
     h.rightClick(CGPoint(x: 1000, y: 700))
     try shoot(h.window, "right-click-hint", crop: top)
+    // 有标注时 Esc 退到头 / 点 ✕（第五轮体检 E8）：先上膛，顶部提示「再按一次放弃这些标注」
+    h = adjust()
+    h.view.annotations = [
+      Annotation(shape: .rectangle(CGRect(x: 360, y: 330, width: 200, height: 100)))
+    ]
+    h.key(kVK_Escape, "\u{1b}")
+    try shoot(h.window, "discard-armed-hint", crop: top)
 
     // 截图翻译 / 识字（quick）：待选（提示 + 放大镜）、框选中（粉线、只读尺寸、放大镜、吸附参考线）
     let quick = {
@@ -524,6 +547,98 @@ struct ScreenshotSnapshotTests {
   /// 放弃上膛（✕ 变红）、整屏（没有边框，可见区底部居中）。HUD 永远深色，不出深色版；-crop 是 HUD 的局部。
   /// 2026-10-12 视觉对齐：选区录制的 HUD 右边线对着录制条的右边线（各张 -crop 右边都留 24 pt：✕、主圆钮离右边一样远）；
   /// record-hud-align / audio-hud-align 把各种形态按真实的摆位上下叠在一张图里，看右边线、✕、主圆钮是不是各在一条竖线上
+  /// 从截图历史改标注时的工具栏（第五轮体检 U7）：✕ 左边多一颗「完成」（存回历史、不出图），浅色、深色；
+  /// 压在标注遮罩那样的暗底上（假桌面 + HUD.scrim）
+  @Test(.enabled(if: directory != nil)) func renderHistoryToolbar() throws {
+    let bar = EditorToolbar(mode: .longShot, done: true)
+    bar.update(tool: nil, canUndo: true, canRedo: false)
+    let size = CGSize(width: bar.frame.width + 48, height: bar.frame.height + 48)
+    let container = NSView(frame: CGRect(origin: .zero, size: size))
+    container.wantsLayer = true
+    container.layer?.contents = try Self.desktop()
+    container.layer?.contentsGravity = .resizeAspectFill
+    let scrim = CALayer()
+    scrim.frame = container.bounds
+    scrim.backgroundColor = Style.HUD.scrim.cgColor
+    container.layer?.addSublayer(scrim)
+    bar.frame.origin = CGPoint(x: 24, y: 24)
+    container.addSubview(bar)
+    let window = NSWindow(
+      contentRect: CGRect(origin: CGPoint(x: -20000, y: -20000), size: size),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = container
+    defer { window.orderOut(nil) }
+    for dark in [false, true] { try shoot(window, "annotate-toolbar-done", dark: dark) }
+  }
+
+  /// 第五轮体检第 8 批：延时截图的倒数（录制 HUD 的倒数态，整屏的摆法：可见区底部居中，10 秒、Esc 注册上了）；
+  /// 单击窗口截下的样子（WindowShot，图以 shot-window-shadow 开头）：左边是原来的矩形裁切（四角是壁纸），右边是透明圆角 +
+  /// 阴影，垫在浅 / 深两种底上看阴影；后面那扇表格窗口被备忘录（另一个 App）挡着一角，那一角换成了窗口自己的画面（-occluded）；
+  /// 另存一张原样的透明 PNG（-raw）
+  @Test(.enabled(if: directory != nil)) func renderBatch8() throws {
+    let out = try #require(Self.directory)
+    let desktop = try Self.desktop()
+    let bounds = CGRect(x: 0, y: 0, width: 1200, height: 800)
+    let visible = bounds.insetBy(dx: 0, dy: 24).offsetBy(dx: 0, dy: -12)
+    for dark in [false, true] {
+      let root = NSView(frame: bounds)
+      root.wantsLayer = true
+      root.layer?.contents = desktop
+      let hud = RecordingHUD(state: .countdown(10), stopKey: nil, escapes: true)
+      hud.removeFromSuperview()
+      hud.frame.origin = RecordingHUD.origin(
+        size: hud.frame.size, region: bounds, screen: bounds, visible: visible, isFullScreen: true,
+        dragged: nil)
+      root.addSubview(hud)
+      try shoot(
+        offscreen(root), "delay-countdown", dark: dark, crop: hud.frame.insetBy(dx: -40, dy: -24)
+      ) {
+        hud.update(.countdown(7))
+      }
+      // 26 起 HUD 的玻璃在屏外画成一块白：另存一张只画内容、垫深底的（同工具栏）
+      if !dark { try shootContent(hud, "delay-countdown") }
+    }
+    for (index, name) in [(0, "window-shadow"), (1, "window-shadow-occluded")] {
+      let frame = Self.windows[index]
+      let pixels = CGRect(
+        x: frame.minX * 2, y: (800 - frame.maxY) * 2, width: frame.width * 2,
+        height: frame.height * 2)
+      let frozen = try #require(desktop.cropping(to: pixels))
+      let live = try #require(try Self.desktop(only: index).cropping(to: pixels))
+      let capture = RegionSelector.Capture(
+        image: frozen, frame: frame, action: .copy, original: frozen)
+      // 两扇窗口算两个 App：后面那扇被备忘录挡住的一角换成它自己的画面
+      let covered = WindowShot.covered(index, windows: Self.windows, owners: [[1], [2]])
+      let shot = try #require(WindowShot.compose(capture, window: live, covered: covered))
+      if index == 0 { try write(shot.image, to: "\(out)/shot-\(name)-raw.png") }
+      for dark in [false, true] {
+        let gap = 60
+        let width = frozen.width + shot.image.width + gap * 3
+        let height = shot.image.height + gap * 2
+        let context = try #require(
+          CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(gray: dark ? 0.16 : 0.93, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(
+          frozen,
+          in: CGRect(
+            x: gap, y: (height - frozen.height) / 2, width: frozen.width, height: frozen.height))
+        context.draw(
+          shot.image,
+          in: CGRect(
+            x: gap * 2 + frozen.width, y: gap, width: shot.image.width,
+            height: shot.image.height))
+        try write(
+          try #require(context.makeImage()),
+          to: "\(out)/shot-\(name)\(dark ? "-dark" : "").png")
+      }
+    }
+  }
+
   @Test(.enabled(if: directory != nil)) func renderRecordingHUD() throws {
     let desktop = try Self.desktop()
     let region = CGRect(x: 160, y: 260, width: 640, height: 400)
@@ -978,8 +1093,9 @@ struct ScreenshotSnapshotTests {
     return bars.map(\.frame).reduce(CGRect.null) { $0.union($1) }.insetBy(dx: -24, dy: -24)
   }
 
-  /// 假桌面（1200 × 800 点 @2x）：渐变壁纸、菜单栏，后面一个表格窗口（行、色块），前面一个备忘录窗口（多语种文字）
-  static func desktop() throws -> CGImage {
+  /// 假桌面（1200 × 800 点 @2x）：渐变壁纸、菜单栏，后面一个表格窗口（行、色块），前面一个备忘录窗口（多语种文字）。
+  /// only：只画这一扇窗口（透明底、不带阴影，当「单独截的那扇窗口」用，第五轮体检 N1）
+  static func desktop(only: Int? = nil) throws -> CGImage {
     let bitmap = try #require(
       NSBitmapImageRep(
         bitmapDataPlanes: nil, pixelsWide: 2400, pixelsHigh: 1600, bitsPerSample: 8,
@@ -996,16 +1112,21 @@ struct ScreenshotSnapshotTests {
         attributes: [.font: NSFont.systemFont(ofSize: size), .foregroundColor: color]
       ).draw(at: NSPoint(x: x, y: y))
     }
-    NSGradient(
-      starting: NSColor(srgbRed: 0.24, green: 0.19, blue: 0.50, alpha: 1),
-      ending: NSColor(srgbRed: 0.10, green: 0.56, blue: 0.58, alpha: 1))?
-      .draw(in: NSRect(x: 0, y: 0, width: 1200, height: 800), angle: -30)
-    NSColor.white.withAlphaComponent(0.8).setFill()
-    NSRect(x: 0, y: 776, width: 1200, height: 24).fill()
-    text("Finder    文件    编辑    显示    前往    窗口", 16, 780, size: 13)
-    for (index, frame) in windows.enumerated().reversed() {
+    if only != nil {
+      NSColor.clear.set()
+      NSRect(x: 0, y: 0, width: 1200, height: 800).fill(using: .copy)
+    } else {
+      NSGradient(
+        starting: NSColor(srgbRed: 0.24, green: 0.19, blue: 0.50, alpha: 1),
+        ending: NSColor(srgbRed: 0.10, green: 0.56, blue: 0.58, alpha: 1))?
+        .draw(in: NSRect(x: 0, y: 0, width: 1200, height: 800), angle: -30)
+      NSColor.white.withAlphaComponent(0.8).setFill()
+      NSRect(x: 0, y: 776, width: 1200, height: 24).fill()
+      text("Finder    文件    编辑    显示    前往    窗口", 16, 780, size: 13)
+    }
+    for (index, frame) in windows.enumerated().reversed() where only == nil || only == index {
       let shadow = NSShadow()
-      shadow.shadowColor = .black.withAlphaComponent(0.35)
+      shadow.shadowColor = .black.withAlphaComponent(only == nil ? 0.35 : 0)
       shadow.shadowBlurRadius = 20
       shadow.shadowOffset = NSSize(width: 0, height: -8)
       NSGraphicsContext.saveGraphicsState()
@@ -1033,12 +1154,12 @@ struct ScreenshotSnapshotTests {
       "The quick brown fox jumps over", "敏捷的棕色狐狸跳过了懒狗", "Hello World  #FF4D7E", "日本語のテキスト",
       "Привет мир", "한국어 텍스트", "第七行：截图自检",
     ]
-    for (index, line) in notes.enumerated() {
+    for (index, line) in notes.enumerated() where only == nil || only == 0 {
       text(line, 160, 610 - CGFloat(index) * 34, size: 18)
     }
     // 后面的表格：斑马纹行（前面的窗口盖住左上角）+ 一组色块
     let table = windows[1]
-    for row in 0..<9 {
+    for row in 0..<9 where only == nil || only == 1 {
       let y = table.maxY - 60 - CGFloat(row) * 38
       if row % 2 == 0 {
         NSColor(white: 0.92, alpha: 1).setFill()
@@ -1047,7 +1168,7 @@ struct ScreenshotSnapshotTests {
       text("Q\(row % 4 + 1)   ¥\(1200 + row * 317)   +\(row * 3)%", table.minX + 100, y, size: 16)
     }
     for (index, color) in [NSColor.systemPink, .systemOrange, .systemTeal, .systemIndigo]
-      .enumerated()
+      .enumerated() where only == nil || only == 1
     {
       color.setFill()
       let height = CGFloat([150, 90, 200, 120][index])
@@ -1130,6 +1251,37 @@ struct ScreenshotSnapshotTests {
     try write(try #require(image.cropping(to: pixels)), to: "\(stem)-crop.png")
   }
 
+  /// 钉图上选字（2026-11-17）：认出字、⌘A 全选之后的样子（选区高亮是系统的选字层画的）
+  @Test(.enabled(if: directory != nil)) func renderPinTextSelection() async throws {
+    let out = try #require(Self.directory)
+    Prefs.registerDefaults()  // 「钉图上的字可以直接选」的默认值（只写注册域）
+    let board = PinBoard()
+    board.pin(PinTextTests.image, frame: CGRect(x: -20000, y: -20000, width: 700, height: 200))
+    defer { board.closeAll() }
+    let panel = try #require(board.panels.first)
+    panel.finishPopIn()
+    panel.orderFront(nil)
+    await panel.prepareText()
+    let pin = try #require(panel.contentView)
+    pin.keyDown(
+      with: try #require(
+        NSEvent.keyEvent(
+          with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0,
+          context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false,
+          keyCode: UInt16(kVK_ANSI_A))))
+    try await Task.sleep(for: .milliseconds(300))  // 选区高亮画上
+    let size = pin.bounds.size
+    let bitmap = try #require(
+      NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+    let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap)).cgContext
+    context.scaleBy(x: 2, y: 2)
+    try #require(pin.layer).render(in: context)
+    try write(try #require(bitmap.cgImage), to: "\(out)/shot-pin-text-selected.png")
+  }
+
   // 钉图的透明度滑块（2026-10-03）：右键「透明度 ▸」、悬停圆钮弹出的那一行（60%、最低 10%，浅 / 深色），垫在菜单材质上看对齐
   @Test(.enabled(if: directory != nil)) func renderPinOpacity() throws {
     let out = try #require(Self.directory)
@@ -1147,7 +1299,8 @@ struct ScreenshotSnapshotTests {
     for (percent, dark) in [(60, false), (60, true), (10, false)] {
       panel.opacity = CGFloat(percent) / 100
       let row = try #require(
-        pin.menu(for: event)?.items.first { $0.title == "透明度" }?.submenu?.items.first?.view)
+        pin.menu(for: event)?.items.first { $0.title == String(localized: "透明度") }?.submenu?.items
+          .first?.view)
       // 菜单上下各有约 5 pt 的内边距
       let size = NSSize(width: row.frame.width, height: row.frame.height + 10)
       let window = NSWindow(

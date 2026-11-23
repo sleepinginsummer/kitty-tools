@@ -226,6 +226,10 @@ final class EditorToolbar: PopView {
     /// 保存右侧的 ▾：弹出「存储到 / 另存为」菜单
     case saveMenu
     case cancel
+    /// 裁剪（X17，只在标注遮罩里）：进 / 出裁剪框
+    case crop
+    /// 完成（第五轮体检 U7，只在从截图历史改标注时）：标注存回历史那一条、不出图
+    case done
   }
 
   var onClick: (Item) -> Void = { _ in }
@@ -236,9 +240,10 @@ final class EditorToolbar: PopView {
   private var buttons: [(item: Item, button: BarButton)] = []
   /// 当前工具的粉色底块（全 App 唯一一处强调色填满的块），在工具间滑动
   private let toolHighlight = CALayer()
-  private var state: (tool: Annotation.Tool?, canUndo: Bool, canRedo: Bool)?
+  private var state: (tool: Annotation.Tool?, canUndo: Bool, canRedo: Bool, cropping: Bool)?
 
-  init(mode: Mode = .capture) {
+  /// done：右段末尾多一颗「完成」（从截图历史改标注时，U7）
+  init(mode: Mode = .capture, done: Bool = false) {
     super.init(frame: .zero)
     wantsLayer = true
     // (item, 符号, 旁白名字, 悬停提示)
@@ -247,29 +252,47 @@ final class EditorToolbar: PopView {
       // 有快捷键的按钮悬停提示由 tip(for:name:) 现写（截图时的快捷键能改），这里的提示位先填名字
       Annotation.Tool.allCases.map { (.tool($0), $0.symbol, $0.title, $0.title) },
       [
-        (.undo, "arrow.uturn.backward", "撤销", "撤销"),
-        (.redo, "arrow.uturn.forward", "重做", "重做"),
+        (.undo, "arrow.uturn.backward", String(localized: "撤销"), String(localized: "撤销")),
+        (.redo, "arrow.uturn.forward", String(localized: "重做"), String(localized: "重做")),
       ],
     ]
+    let finish: [Spec] =
+      done
+      ? [
+        (
+          .done, "tray.and.arrow.down", String(localized: "完成"),
+          String(localized: "完成：标注存回截图历史，不出图")
+        )
+      ]
+      : []
     let right: [[Spec]] = [
       ([
-        (.output(.recognize), "text.viewfinder", "识字并拷贝", "识字并拷贝"),
-        (.output(.translate), "translate", "翻译", "翻译"),
-        (.scroll, "rectangle.expand.vertical", "长截图", "长截图"),
-        (.record, "record.circle", "录屏", "录屏"),
-        (.output(.pin), "pin", "钉到屏幕", "钉到屏幕"),
+        // 裁剪（X17）：截图框选时调选区就是裁剪，只有标注遮罩（长截图、截图历史的改标注）才有这颗
+        (.crop, "crop", String(localized: "裁剪"), String(localized: "裁剪")),
+        (
+          .output(.recognize), "text.viewfinder", String(localized: "识字并拷贝"),
+          String(localized: "识字并拷贝")
+        ),
+        (.output(.translate), "translate", String(localized: "翻译"), String(localized: "翻译")),
+        (.scroll, "rectangle.expand.vertical", String(localized: "长截图"), String(localized: "长截图")),
+        (.record, "record.circle", String(localized: "录屏"), String(localized: "录屏")),
+        (.output(.pin), "pin", String(localized: "钉到屏幕"), String(localized: "钉到屏幕")),
       ] as [Spec]).filter { spec in
-        // 长图的标注窗口：这一组只留识字（翻译、长截图、录屏、钉图对一张长图没意义，拍板 C1）
-        guard mode == .capture || spec.0 == .output(.recognize) else { return false }
+        // 长图的标注窗口：这一组只留裁剪和识字（翻译、长截图、录屏、钉图对一张长图没意义，拍板 C1）；截图框选时没有裁剪
+        guard mode == .capture ? spec.0 != .crop : [.crop, .output(.recognize)].contains(spec.0)
+        else { return false }
         // 翻译、录制这两个功能关着（Feature）时没有它们的钮
         return (spec.0 != .output(.translate) || Feature.translate.isOn)
           && (spec.0 != .record || Feature.record.isOn)
       },
       [
-        (.output(.save), "square.and.arrow.down", "存储", "存储"),
-        (.saveMenu, "chevron.down", "更多存储选项", "更多存储选项"),
+        (.output(.save), "square.and.arrow.down", String(localized: "存储"), String(localized: "存储")),
+        (.saveMenu, "chevron.down", String(localized: "更多存储选项"), String(localized: "更多存储选项")),
       ],
-      [(.cancel, "xmark", "取消", "取消（Esc）"), (.output(.copy), "checkmark", "拷贝", "拷贝（↩）")],
+      finish + [
+        (.cancel, "xmark", String(localized: "取消"), String(localized: "取消（Esc）")),
+        (.output(.copy), "checkmark", String(localized: "拷贝"), String(localized: "拷贝（↩）")),
+      ],
     ]
     tools.install(makeButtons(left))
     outputs.install(makeButtons(right))
@@ -358,6 +381,7 @@ final class EditorToolbar: PopView {
     case .saveMenu: .saveAs
     case .scroll: .scroll
     case .record: .record
+    case .crop: .crop
     default: nil
     }
   }
@@ -366,10 +390,12 @@ final class EditorToolbar: PopView {
   /// （键在它弹出的菜单里）
   static func tip(for item: Item, name: String) -> String {
     switch item {
-    case .scroll: ShotKey.scroll.label.map { "长截图（\($0)，不带标注）" } ?? "长截图（不带标注）"
+    case .scroll:
+      ShotKey.scroll.label.map { String(localized: "长截图（\($0)，不带标注）") }
+        ?? String(localized: "长截图（不带标注）")
     case .output(.save): ShotKey.save.tip(ScreenshotOutput.saveTitle)
-    case .output(.copy): "拷贝（↩）"
-    case .saveMenu: ScreenshotOutput.saveTitle + " / 另存为…"
+    case .output(.copy): String(localized: "拷贝（↩）")
+    case .saveMenu: String(localized: "\(ScreenshotOutput.saveTitle) / 另存为…")
     default: shotKey(for: item)?.tip(name) ?? name
     }
   }
@@ -434,10 +460,14 @@ final class EditorToolbar: PopView {
   }
 
   /// 当前工具的底块滑过去、图标换成强调色上的符号色（白，黄色这类亮色上是深色）；撤销 / 重做没得做时变灰。跟着鼠标移动一直在调，状态没变就不动
-  func update(tool: Annotation.Tool?, canUndo: Bool, canRedo: Bool) {
-    if let state, state.tool == tool, state.canUndo == canUndo, state.canRedo == canRedo { return }
+  func update(tool: Annotation.Tool?, canUndo: Bool, canRedo: Bool, cropping: Bool = false) {
+    if let state, state.tool == tool, state.canUndo == canUndo, state.canRedo == canRedo,
+      state.cropping == cropping
+    {
+      return
+    }
     let previous = state?.tool
-    state = (tool, canUndo, canRedo)
+    state = (tool, canUndo, canRedo, cropping)
     for (item, button) in buttons {
       switch item {
       case .tool(let each):
@@ -446,6 +476,8 @@ final class EditorToolbar: PopView {
       case .undo: button.isEnabled = canUndo
       case .redo: button.isEnabled = canRedo
       case .output(.copy), .saveMenu: break
+      // 裁剪框开着：裁剪钮是强调色（同当前工具，只是不挪粉色底块）
+      case .crop: button.contentTintColor = cropping ? Style.Shot.accent : Style.HUD.text
       default: button.contentTintColor = Style.HUD.text
       }
     }
@@ -563,11 +595,14 @@ final class RecordBar: HUDBar {
       return button as BarButton
     }
     let cancel = barButton(
-      NSImage(systemSymbolName: "xmark", accessibilityDescription: "取消")!, tip: "取消（Esc）",
-      label: "取消", action: #selector(clicked(_:)), size: CGSize(width: 32, height: 32))
+      NSImage(systemSymbolName: "xmark", accessibilityDescription: String(localized: "取消"))!,
+      tip: String(localized: "取消（Esc）"), label: String(localized: "取消"),
+      action: #selector(clicked(_:)), size: CGSize(width: 32, height: 32))
     let start = barButton(
-      NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "开始录制")!,
-      tip: "开始录制（↩）", label: "开始录制", action: #selector(clicked(_:)),
+      NSImage(
+        systemSymbolName: "circle.fill", accessibilityDescription: String(localized: "开始录制"))!,
+      tip: String(localized: "开始录制（↩）"), label: String(localized: "开始录制"),
+      action: #selector(clicked(_:)),
       size: CGSize(width: 28, height: 28))
     start.showsHover = false
     start.layer?.backgroundColor = Style.Shot.accent.cgColor
@@ -604,7 +639,7 @@ final class RecordBar: HUDBar {
     if let key = Self.key(for: item) {
       defaults.set(!isOn(item), forKey: key)
       applyToggles(animated: true, only: item)
-      Island.announce(tip(for: item, device: false))
+      Island.announce("\(tip(for: item, device: false))")
     }
     onClick(item)
   }
@@ -651,29 +686,33 @@ final class RecordBar: HUDBar {
   private func tip(for item: Item, device: Bool) -> String {
     let on = isOn(item)
     switch item {
-    case .systemAudio: return "系统声音：\(on ? "开" : "关")"
+    case .systemAudio: return on ? String(localized: "系统声音：开") : String(localized: "系统声音：关")
     case .microphone:
       let input = device ? input : nil
       return Self.microphoneTip(on: on, device: input?.name, bluetooth: input?.bluetooth ?? false)
     case .keys:
       return Self.keysTip(
         on: on, shortcutsOnly: defaults.bool(forKey: Prefs.screenRecordKeysShortcutsOnly))
-    default: return "显示点按：\(on ? "开" : "关")"
+    default: return on ? String(localized: "显示点按：开") : String(localized: "显示点按：关")
     }
   }
 
   /// 显示按键开关的提示（纯函数，配单测）：开着时提醒一句——按下的键都会进画面（不承诺密码不会显示：终端里输的密码
   /// 这类不一定走系统的安全输入）；设置里选了只显示快捷键时打字本来就不进画面，不用提密码，说明显示的是什么
   nonisolated static func keysTip(on: Bool, shortcutsOnly: Bool = false) -> String {
-    guard on else { return "显示按键：关" }
+    guard on else { return String(localized: "显示按键：关") }
     return shortcutsOnly
-      ? "显示按键：开\n只显示快捷键，打字不进画面" : "显示按键：开\n按下的键会录进画面，要输密码先关掉"
+      ? String(localized: "显示按键：开\n只显示快捷键，打字不进画面")
+      : String(localized: "显示按键：开\n按下的键会录进画面，要输密码先关掉")
   }
 
   /// 麦克风开关的提示（纯函数，配单测）：开时带设备名；当前输入是蓝牙时（开关两态都）再加一句，免得打开了才发现音质变差
   nonisolated static func microphoneTip(on: Bool, device: String?, bluetooth: Bool) -> String {
-    let state = on ? "开" + (device.map { "（\($0)）" } ?? "") : "关"
-    return "麦克风：\(state)" + (bluetooth ? "\n蓝牙耳机麦克风会变成通话音质" : "")
+    let state =
+      !on
+      ? String(localized: "麦克风：关")
+      : device.map { String(localized: "麦克风：开（\($0)）") } ?? String(localized: "麦克风：开")
+    return bluetooth ? state + "\n" + String(localized: "蓝牙耳机麦克风会变成通话音质") : state
   }
 
   /// AVCaptureDevice.transportType 是不是蓝牙（CoreAudio 的 kAudioDeviceTransportTypeBluetooth 'blue'、
@@ -818,7 +857,7 @@ final class StyleBar: HUDBar {
       tool.hasColor
       ? Annotation.Palette.allCases.map { color in
         let swatch = Swatch(
-          fill: color.color, diameter: 14, outlined: true, label: "\(color.title)色")
+          fill: color.color, diameter: 14, outlined: true, label: color.title)
         swatch.tag = color.rawValue
         swatch.target = self
         swatch.action = #selector(pickColor(_:))
@@ -827,7 +866,8 @@ final class StyleBar: HUDBar {
     if tool.hasColor, let custom {
       let hex = String(format: "#%06X", custom)
       let swatch = Swatch(
-        fill: Annotation.Palette.srgb(custom), diameter: 14, outlined: true, label: "取的颜色 \(hex)")
+        fill: Annotation.Palette.srgb(custom), diameter: 14, outlined: true,
+        label: String(localized: "取的颜色 \(hex)"))
       swatch.tag = -1  // 已经在用它：点了不做事
       colors.append(swatch)
     }
@@ -845,14 +885,15 @@ final class StyleBar: HUDBar {
     if tool.hasColor {
       // 吸管：从截图里取一个颜色（拍板 O10）
       let dropper = BarButton(
-        image: NSImage(systemSymbolName: "eyedropper", accessibilityDescription: "吸管取色")!,
+        image: NSImage(
+          systemSymbolName: "eyedropper", accessibilityDescription: String(localized: "吸管取色"))!,
         target: self, action: #selector(eyedropper))
       dropper.isBordered = false
       dropper.refusesFirstResponder = true
       dropper.layer?.cornerRadius = Style.Radius.mini
       dropper.contentTintColor = Style.HUD.text
       dropper.symbolConfiguration = .init(pointSize: 12, weight: .medium)
-      dropper.toolTip = "吸管：从截图里取一个颜色"
+      dropper.toolTip = String(localized: "吸管：从截图里取一个颜色")
       dropper.widthAnchor.constraint(equalToConstant: 26).isActive = true
       dropper.heightAnchor.constraint(equalToConstant: 26).isActive = true
       views.append(dropper)
@@ -863,14 +904,16 @@ final class StyleBar: HUDBar {
       let value = Self.chipButton(
         Self.sizeText(Annotation.Style().textSize), target: self,
         action: #selector(openFontMenu(_:)),
-        label: "字号")
-      value.toolTip = "选择字号"
+        label: String(localized: "字号"))
+      value.toolTip = String(localized: "选择字号")
       sizeValue = value
       views.append(
         Self.chip([
-          Self.chipButton("A−", target: self, action: #selector(smallerFont), label: "缩小字号"),
+          Self.chipButton(
+            "A−", target: self, action: #selector(smallerFont), label: String(localized: "缩小字号")),
           value,
-          Self.chipButton("A+", target: self, action: #selector(largerFont), label: "放大字号"),
+          Self.chipButton(
+            "A+", target: self, action: #selector(largerFont), label: String(localized: "放大字号")),
         ]))
     }
     if numbered {
@@ -879,14 +922,16 @@ final class StyleBar: HUDBar {
       value.textColor = Style.HUD.text
       value.alignment = .center
       value.widthAnchor.constraint(equalToConstant: 26).isActive = true
-      value.setAccessibilityLabel("编号")
+      value.setAccessibilityLabel(String(localized: "编号"))
       numberValue = value
       let chip = Self.chip([
-        Self.chipButton("−", target: self, action: #selector(lowerNumber), label: "编号减一"),
+        Self.chipButton(
+          "−", target: self, action: #selector(lowerNumber), label: String(localized: "编号减一")),
         value,
-        Self.chipButton("+", target: self, action: #selector(raiseNumber), label: "编号加一"),
+        Self.chipButton(
+          "+", target: self, action: #selector(raiseNumber), label: String(localized: "编号加一")),
       ])
-      chip.toolTip = "改这个序号的编号"
+      chip.toolTip = String(localized: "改这个序号的编号")
       views += [barSeparator(), chip]
     }
     options = tool.optionOrder.map { index in
@@ -918,9 +963,11 @@ final class StyleBar: HUDBar {
     // 一个动作，放最后（拍板 C5）
     if tool == .mosaic {
       let auto = Self.chip([
-        Self.chipButton("自动", target: self, action: #selector(autoRedact), label: "自动打码")
+        Self.chipButton(
+          String(localized: "自动"), target: self, action: #selector(autoRedact),
+          label: String(localized: "自动打码"))
       ])
-      auto.toolTip = "找出手机号、邮箱、银行卡号、身份证号，自动打码"
+      auto.toolTip = String(localized: "找出手机号、邮箱、银行卡号、身份证号，自动打码")
       views += [barSeparator(), auto]
     }
     views.forEach(stack.addArrangedSubview)
@@ -1053,7 +1100,7 @@ extension HUDMenu {
       }, label: fontMenuLabel)
   }
 
-  static let fontMenuLabel = "字号"
+  static var fontMenuLabel: String { String(localized: "字号") }
 }
 
 /// 托盘里的色点 / 粗细点：选中时外圈 2 pt 品牌粉环（离点 2 pt）、整体放大 1.1（pop）。
@@ -1227,7 +1274,7 @@ private final class HUDMenuRow: NSView {
     setAccessibilityRole(.button)
     setAccessibilityLabel(entry.title)
     setAccessibilityHelp(entry.key)
-    setAccessibilityValue(entry.checked ? "已选中" : nil)
+    setAccessibilityValue(entry.checked ? String(localized: "已选中") : nil)
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

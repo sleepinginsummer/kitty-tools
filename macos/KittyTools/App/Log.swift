@@ -14,4 +14,8 @@ nonisolated enum Log {
   static let island = Logger(subsystem: subsystem, category: "island")
   /// 刘海岛的正在播放（NowPlaying）：连不上服务、服务说 MediaRemote 不能用
   static let nowPlaying = Logger(subsystem: subsystem, category: "nowplaying")
+  /// 全局快捷键（HotKeyCenter）：每次重新注册（几个、哪些没注册上）、停用（issue #27：失效时能看出是没注册上还是停着）
+  static let hotkeys = Logger(subsystem: subsystem, category: "hotkeys")
+  /// 键位映射插件（KeyRemapping）：读不出 / 存不下规则、系统没收映射（键盘的名字按默认的不公开记）
+  static let keyRemapping = Logger(subsystem: subsystem, category: "keyremapping")
 }

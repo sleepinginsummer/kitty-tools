@@ -1,6 +1,6 @@
 // 设置 › 翻译 › 某个服务（N12 详情页，从服务列表推进来）：页头 40 pt 服务图标 + 名称 + 状态（在表单外面，和列表页的页头同一个位置），
 // 下面分组表单：启用、各服务自己的选项（智谱两档免费模型；自建 AI 实例的名称 / 协议 / 地址 / 模型）、钥匙串里的密钥、
-// 测试连接（成功时自动打开启用）；自建 AI 实例可以删除（连同密钥）。改动即时生效（服务列表写 UserDefaults，密钥直接写钥匙串）。
+// 测试连接（成功时自动打开启用）；自建 AI 实例可以删除（连同密钥）。大模型服务另有「浮窗里的回答」一组：讲解外文句子、附加要求（issue #35）。改动即时生效（服务列表写 UserDefaults，密钥直接写钥匙串）。
 // AI 实例的模型（体检 B27）：地址（Anthropic 可空）和 Key 齐了（本机 / 局域网地址不要 Key）就在后台取一次服务端的
 // 模型列表，模型框打字时按已输入的字列出来（textInputSuggestions，macOS 15）；右边 ↻ 重新读取，取的时候转圈。
 // 从「+」新建的（厂商预设，D15）光标落在 API Key。
@@ -27,7 +27,7 @@ struct TranslateServiceDetail: View {
     // 删掉之后、退回列表之前的这一帧没有这条服务：什么都不画
     if let current = store.services.first(where: { $0.id == id }) {
       form(current)
-        .navigationTitle(current.name)
+        .navigationTitle(current.displayName)
         .toolbar { SettingsBackButton { dismiss() } }
     }
   }
@@ -36,7 +36,9 @@ struct TranslateServiceDetail: View {
     let service = binding(current)
     let status = current.settingsStatus
     return VStack(spacing: 0) {
-      DetailHeader(title: current.name, status: status.text, isProblem: status.isProblem) {
+      DetailHeader(
+        title: "\(current.displayName)", status: "\(status.text)", isProblem: status.isProblem
+      ) {
         ServiceTile(service: current, size: 40)
       }
       fields(current, service: service)
@@ -53,7 +55,7 @@ struct TranslateServiceDetail: View {
       guard !Task.isCancelled else { return }
       await fetchModels(current, quiet: true)
     }
-    .confirmationDialog("删除「\(current.name)」？", isPresented: $confirmsDelete) {
+    .confirmationDialog("删除「\(current.displayName)」？", isPresented: $confirmsDelete) {
       Button("删除", role: .destructive) {
         dismiss()
         store.remove(id)
@@ -71,7 +73,9 @@ struct TranslateServiceDetail: View {
         options(service)
         if current.kind == .ai { modelRow(service) }
       }
-      // 系统翻译、有道词典、有道网页版不用密钥：没有字段就整段不出现（不然只剩一个空的「密钥」标题）
+      // 讲解和附加要求（issue #35）：只有大模型服务有；只在翻译浮窗里用
+      if current.isStreaming { answerSection(service) }
+      // 系统翻译、有道词典、有道网页版不用密钥
       if !current.secretFields.isEmpty {
         Section {
           ForEach(current.secretFields, id: \.name) { field in
@@ -110,6 +114,46 @@ struct TranslateServiceDetail: View {
       }
     }
     .formStyle(.grouped)
+  }
+
+  /// 浮窗里怎么回答（issue #35）：讲解外文句子（关着存 nil）、附加要求（空着存 nil，截到上限）
+  private func answerSection(_ service: Binding<TranslateService>) -> some View {
+    Section {
+      Toggle(
+        isOn: Binding {
+          service.wrappedValue.explainsSentences == true
+        } set: {
+          service.wrappedValue.explainsSentences = $0 ? true : nil
+        }
+      ) {
+        Text("讲解外文句子")
+        Text("查一句外文时给出译文、三到五个重点词和句型；单个词照 查词 的设置")
+      }
+      // 一段话：标题和说明在上、整行宽的输入框在下（右对齐的单行框放不下几句话）
+      VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("附加要求")
+          Text("接在内置的提示词后面，翻译、查词、讲解都用")
+            .font(.subheadline).foregroundStyle(.secondary)
+        }
+        TextField(
+          "附加要求",
+          text: Binding {
+            service.wrappedValue.extraPrompt ?? ""
+          } set: {
+            service.wrappedValue.extraPrompt = TranslateService.storedExtraPrompt($0)
+          },
+          prompt: Text("如：术语保留英文；每个词多给一个例句"), axis: .vertical
+        )
+        .labelsHidden()
+        .textFieldStyle(.roundedBorder)  // 分组表单里输入框默认没边，看着像一段字
+        .lineLimit(3...6)
+      }
+    } header: {
+      Text("浮窗里的回答")
+    } footer: {
+      SectionFootnote("只在翻译浮窗里用；划词翻译并替换、截图翻译盖回截图照旧只要译文。讲解比译文长，用的额度也多。")
+    }
   }
 
   /// 按 id 找回这条服务的绑定（列表拖动排序后下标会变）
@@ -227,9 +271,9 @@ struct TranslateServiceDetail: View {
 
   private static func addressHint(_ aiProtocol: TranslateService.AIProtocol) -> String {
     switch aiProtocol {
-    case .openai: "https://api.openai.com/v1 或本机 http://127.0.0.1:11434/v1"
-    case .azure: "https://<资源名>.openai.azure.com/openai/v1"
-    case .anthropic: "留空即 https://api.anthropic.com"
+    case .openai: String(localized: "https://api.openai.com/v1 或本机 http://127.0.0.1:11434/v1")
+    case .azure: String(localized: "https://<资源名>.openai.azure.com/openai/v1")
+    case .anthropic: String(localized: "留空即 https://api.anthropic.com")
     }
   }
 
@@ -270,7 +314,8 @@ struct TranslateServiceDetail: View {
       if !quiet {
         result =
           models.isEmpty
-          ? (false, "服务端没有返回模型") : (true, "找到 \(models.count) 个模型，在「模型」里打字时会列出来")
+          ? (false, String(localized: "服务端没有返回模型"))
+          : (true, String(localized: "找到 \(models.count) 个模型，在「模型」里打字时会列出来"))
       }
     } catch {
       if !quiet { result = (false, error.localizedDescription) }
@@ -287,32 +332,46 @@ extension TranslateService {
       case .zhipu: (TranslateService.zhipuModel(model), false)
       case .ai:
         if aiProtocol != .anthropic, (baseURL ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
-          ("未填服务地址", true)
+          (String(localized: "未填服务地址"), true)
         } else if let url = AIService.endpoint(baseURL ?? "", aiProtocol ?? .openai),
           !HTTP.isLocalNetwork(url), secret() == nil
         {
           // 本机 / 局域网的模型可以不要 Key（也不读钥匙串）；别的地址翻译前直接报「请先在设置里填写 API Key」
           // （第四轮体检 E20）
-          ("未填 API Key", true)
+          (String(localized: "未填 API Key"), true)
         } else if (model ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
-          ("未填模型", true)
+          (String(localized: "未填模型"), true)
         } else {
           ([aiProtocol?.title, model].compactMap { $0 }.joined(separator: " · "), false)
         }
       case .deepl:
         if usesDeepLX == true {
-          (baseURL ?? "").isEmpty ? ("未填 DeepLX 地址", true) : ("DeepLX（自建）", false)
+          (baseURL ?? "").isEmpty
+            ? (String(localized: "未填 DeepLX 地址"), true) : (String(localized: "DeepLX（自建）"), false)
         } else {
-          secret("authKey") == nil ? ("未填密钥", true) : ("官方 API", false)
+          secret("authKey") == nil
+            ? (String(localized: "未填密钥"), true) : (String(localized: "官方 API"), false)
         }
-      case .microsoft: (secret("subscriptionKey") == nil ? "免费 Edge 接口" : "Azure 翻译", false)
-      case .apple: AppleTranslation.isAvailable ? ("离线 · 本机翻译", false) : ("要 macOS 26", true)
-      case .youdaoDict: ("免费 · 只查单词", false)
-      case .youdaoWeb: ("免费的网页版接口", false)
+      case .microsoft:
+        (
+          secret("subscriptionKey") == nil
+            ? String(localized: "Edge 接口") : String(localized: "Azure 翻译"), false
+        )
+      case .apple:
+        AppleTranslation.isAvailable
+          ? (String(localized: "离线 · 本机翻译"), false) : (String(localized: "要 macOS 26"), true)
+      case .youdaoDict: (String(localized: "只查单词"), false)
+      case .youdaoWeb: (String(localized: "网页版接口"), false)
       default:
-        secretFields.allSatisfy { secret($0.name) != nil } ? ("已填密钥", false) : ("未填密钥", true)
+        secretFields.allSatisfy { secret($0.name) != nil }
+          ? (String(localized: "已填密钥"), false) : (String(localized: "未填密钥"), true)
       }
     return (text, missing && isEnabled)
+  }
+
+  /// 服务行标不标「免费」：种类不花钱，微软填了自己的 Key 走 Azure 就不算了。读钥匙串，只在设置里用
+  var settingsIsFree: Bool {
+    kind.isFree && (kind != .microsoft || secret("subscriptionKey") == nil)
   }
 }
 

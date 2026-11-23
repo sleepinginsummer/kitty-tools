@@ -89,15 +89,20 @@ final class OverlayPanel: NSPanel {
   ///   - minSize: 传了就允许拖左右边改宽度（无边框窗口没有系统的拖边，用两条 ResizeEdge）
   ///   - frameName: 传了就记住用户拖到的位置和宽度（首次居中），present 可带锚点跟随鼠标；不传则每次显示都居中到鼠标所在屏幕
   ///   - topAnchored: 放在屏幕上部（启动器），配合 setContentHeight 伸缩
+  ///   - firstMouse: 不是 key 时第一下点击也交给内容（App 快捷键：按着 ⌘ 时面板不拿键盘，点一行要直接执行）
   init<Content: View>(
     size: NSSize, minSize: NSSize? = nil, frameName: String? = nil, topAnchored: Bool = false,
-    autoHide: AutoHide, isPinned: @escaping () -> Bool, content: Content
+    firstMouse: Bool = false, autoHide: AutoHide, isPinned: @escaping () -> Bool, content: Content
   ) {
     self.autoHide = autoHide
     self.isPinned = isPinned
     self.frameName = frameName
     self.topAnchored = topAnchored
-    let hosting = NSHostingView(rootView: PanelRoot(content: content))
+    // 要第一下点击的才换成子类（别的面板照旧是系统的宿主，StyleTests 按类型数）
+    let hosting: NSHostingView<PanelRoot<Content>> =
+      firstMouse
+      ? FirstMouseHost(rootView: PanelRoot(content: content))
+      : NSHostingView(rootView: PanelRoot(content: content))
     hosting.sizingOptions = []  // 窗口大小由这里定，不让 SwiftUI 的理想尺寸反推窗口
     hosting.wantsLayer = true
     host = hosting
@@ -332,6 +337,7 @@ final class OverlayPanel: NSPanel {
   func hide() {
     endSqueeze()
     guard isVisible else { return }
+    Island.cancelSettled()
     saveFrameIfMoved()
     showGeneration += 1
     animationBehavior = .none
@@ -355,6 +361,7 @@ final class OverlayPanel: NSPanel {
     endSqueeze()
     guard isVisible else { return }
     let returnTo = byKeyboard ? pasteTarget()?.window : nil
+    Island.cancelSettled()  // 键盘换选中时排着要念的那一行不念了（A1）
     saveFrameIfMoved()
     showGeneration += 1
     lastDismiss = CACurrentMediaTime()
@@ -572,22 +579,22 @@ final class OverlayPanel: NSPanel {
     guard event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command else {
       return false
     }
-    // ⌘W 关闭（各浮层都认，固定着也关：固定只管点别处不收起）。本 App 不激活，主菜单的「关闭」收不到
-    if Int(event.keyCode) == kVK_ANSI_W {
+    // ⌘W 关闭（各浮层都认，固定着也关：固定只管点别处不收起）。本 App 不激活，主菜单的「关闭」收不到。
+    // 字母、标点按打出来的字认（E2：法语键盘上印着 W 的键在美式的 Z 位置），同下面的编辑键
+    if event.typedKeyCode == kVK_ANSI_W {
       dismiss()
       return true
     }
     // 浮层不激活本 App，主菜单的 ⌘C / ⌘V 等不一定收得到：直接发给当前输入框
-    guard let action = Self.editActions[event.charactersIgnoringModifiers?.lowercased() ?? ""]
-    else { return false }
+    guard let action = Self.editActions[event.typedKeyCode] else { return false }
     return Self.sendEditAction(action, from: self)
   }
 
-  /// 截图里输入文字时也用它（同样不激活本 App）
-  static let editActions: [String: Selector] = [
-    "x": #selector(NSText.cut(_:)), "c": #selector(NSText.copy(_:)),
-    "v": #selector(NSText.paste(_:)), "a": #selector(NSText.selectAll(_:)),
-    "z": Selector(("undo:")),
+  /// 截图里输入文字时也用它（同样不激活本 App）。键是 NSEvent.typedKeyCode（按打出来的字认，E2）
+  static let editActions: [Int: Selector] = [
+    kVK_ANSI_X: #selector(NSText.cut(_:)), kVK_ANSI_C: #selector(NSText.copy(_:)),
+    kVK_ANSI_V: #selector(NSText.paste(_:)), kVK_ANSI_A: #selector(NSText.selectAll(_:)),
+    kVK_ANSI_Z: Selector(("undo:")),
   ]
 
   /// ⌘Z 撤销 / ⇧⌘Z 重做**焦点所在的输入框**里打的字（NSWindow.undoFocusedText：直接动它登记撤销的那个栈，
@@ -596,7 +603,7 @@ final class OverlayPanel: NSPanel {
   static func undoRedo(_ event: NSEvent, in window: NSWindow) -> Bool? {
     let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
     guard flags == .command || flags == [.command, .shift],
-      event.charactersIgnoringModifiers?.lowercased() == "z", window.firstResponder is NSTextView
+      event.typedKeyCode == kVK_ANSI_Z, window.firstResponder is NSTextView
     else { return nil }
     return window.undoFocusedText(redo: flags != .command)
   }
@@ -687,17 +694,17 @@ final class OverlayPanel: NSPanel {
     // 记着的宽度（W1）先摆上：下面几种摆法都按当前的宽度算
     if let widthKey, case let width = UserDefaults.standard.double(forKey: widthKey), width > 0 {
       let minWidth = max(minSize.width, contentMinSize.width)
-      let clamped = min(max(width, minWidth), maxSize.width)
+      let clamped = min(max(CGFloat(width), minWidth), maxSize.width)
       if abs(clamped - frame.width) > 0.5 {
         setFrame(
           NSRect(x: frame.minX, y: frame.minY, width: clamped, height: frame.height), display: false
         )
       }
-      if let user = userFrame { userFrame = (user.topLeft, clamped) }
+      if let user = userFrame { userFrame = (topLeft: user.topLeft, width: clamped) }
     }
     // 挂在图标下面时用图标所在的那块屏（键盘、旁白点开的，鼠标不一定在那儿）
     let point = below.map { NSPoint(x: $0.midX, y: $0.midY) } ?? NSEvent.mouseLocation
-    let screen = NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) } ?? NSScreen.main
+    let screen = NSScreen.containing(point) ?? NSScreen.main
     guard let visible = screen?.visibleFrame else { return }
     defer { placed = (NSPoint(x: frame.minX, y: frame.maxY), frame.width) }
     if let below {
@@ -887,6 +894,11 @@ final class PanelStandIn: NSPanel {
   }
 }
 
+/// 面板不是 key 时第一下点击也交给内容的宿主（同程序坞预览的 PreviewHost）
+private final class FirstMouseHost<Content: View>: NSHostingView<PanelRoot<Content>> {
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// 浮层内容的根：描边 + 减弱动态效果时去掉全部 SF Symbol 动效（mac-whisker §7，一处管三个面板）
 private struct PanelRoot<Content: View>: View {
   let content: Content
@@ -1058,4 +1070,22 @@ extension NSWindow {
     if view.textLayoutManager != nil { view.didChangeText() }
     return true
   }
+}
+
+extension NSScreen {
+  /// 含 point（屏幕坐标）的是 frames 里的第几块。**含上边**（NSMouseInRect）：光标在屏幕最上一行时 y 正好等于 frame.maxY，
+  /// frame.contains 不算——第五轮体检 H4：录音那两处这样漏了最上一行，控制条可能出在别的屏上。面板、遮罩、录音条要摆在
+  /// 「鼠标所在的屏」上的都走这里（原来十来份各写各的）。纯函数，配单测
+  nonisolated static func index(containing point: CGPoint, in frames: [CGRect]) -> Int? {
+    frames.firstIndex { NSMouseInRect(point, $0, false) }
+  }
+
+  /// 含 point（屏幕坐标）的那块屏
+  static func containing(_ point: CGPoint) -> NSScreen? {
+    let screens = screens
+    return index(containing: point, in: screens.map(\.frame)).map { screens[$0] }
+  }
+
+  /// 鼠标所在的那块屏；哪块都不在（拔屏的那一瞬）给主屏
+  static var underMouse: NSScreen? { containing(NSEvent.mouseLocation) ?? main }
 }

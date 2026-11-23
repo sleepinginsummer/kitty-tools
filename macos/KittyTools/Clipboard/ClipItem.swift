@@ -19,6 +19,7 @@ struct ClipItem: Identifiable, Hashable, Sendable {
   var ocrText: String?
   /// 带格式文本的类型（rtf / html）；nil 表示纯文本
   var richType: RichType?
+  /// 来源 App 的名字（通用剪贴板过来的存 remoteSourceName）；显示用 sourceTitle
   var sourceName: String?
   var sourceBundleID: String?
   var copiedAt = Date.now
@@ -28,6 +29,9 @@ struct ClipItem: Identifiable, Hashable, Sendable {
   var note: String?
   /// 所在的收藏夹（命名收藏夹，体检 A1）。不变式：有 groupID 的条目一定 favorite = true
   var groupID: UUID?
+  /// 片段的关键词（片段展开插件，2026-11-22）：在任何 App 里打出它就换成这条片段（SnippetKeyword 管规矩）。只有片段的才算数；
+  /// 移出片段时留着不清（同备注），再存成片段就回来
+  var keyword: String?
 
   struct ImageInfo: Hashable, Sendable {
     var width: Int
@@ -37,8 +41,10 @@ struct ClipItem: Identifiable, Hashable, Sendable {
     var sha256: String
   }
 
+  /// rtfd：图文混排（备忘录、邮件、文本编辑里连图带字复制，第四轮体检 X3）——带图的那份。旧版本读到不认识的 rtfd
+  /// 当没有格式（只粘纯文本）
   enum RichType: String, Sendable {
-    case rtf, html
+    case rtf, html, rtfd
   }
 
   /// 用户显式留下的条目（收藏 / 片段；收藏夹里的都是收藏）：保留天数、图片占用、退出与锁屏清空都不动它们。
@@ -47,6 +53,16 @@ struct ClipItem: Identifiable, Hashable, Sendable {
   /// 同一条规则在库里的写法（每日备份只留这些行，Backup.dropped）：改 isRetained 要连它一起改，BackupTests 核对两边挑出来的
   /// 是同一批。多带一个 group_id 是兜底：不变式保证归了收藏夹的一定是收藏，万一哪一行没跟上，备份宁可多留
   nonisolated static let retainedSQL = "favorite = 1 OR snippet = 1 OR group_id IS NOT NULL"
+
+  /// 通用剪贴板过来的（iPhone、另一台 Mac 上复制的，没有 bundle ID）存进 source_name 的固定的字：多语言之后照旧存它、
+  /// 不随界面语言变（存原文、显示时翻，TRANSLATION.md 二），0.9.0 及以前存的也是它，升级上来的照样认得
+  nonisolated static let remoteSourceName = "其他设备"
+
+  /// 来源显示成什么：通用剪贴板过来的按界面语言出（「其他设备」/ Other Device），App 名原样
+  nonisolated var sourceTitle: String? {
+    sourceBundleID == nil && sourceName == Self.remoteSourceName
+      ? String(localized: "其他设备") : sourceName
+  }
 
   /// 是否是同一份剪贴板内容：文本比正文，文件比路径列表，图片比 PNG 哈希
   func hasSameContent(as other: ClipItem) -> Bool {

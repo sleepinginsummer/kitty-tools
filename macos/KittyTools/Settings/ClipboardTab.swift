@@ -1,16 +1,20 @@
-// 设置 › 剪贴板：保留普通历史（一行按时间，体检 A4）与普通图片占用、面板行为（带实时示意图：单列 + 透镜 + 底栏）、
-// 粘贴方式与图片文字、隐私（敏感文本 / 清空时机）、排除的 App（按 bundle ID 精确匹配的 App 列表，体检 A11）。
+// 设置 › 剪贴板（2026-11-18 设置改版 S4）：外面是常用的——保留普通历史（一行按时间，体检 A4）与普通图片占用；怎么粘贴（单击直接
+// 粘贴、默认纯文本）；隐私（敏感文本、自动清空（退出 / 锁屏两个开关合成一个选单，S6）、立即清空）；不记录的 App（按 bundle ID
+// 精确匹配，体检 A11）。「高级…」：面板（带实时示意图的透镜、链接预览、位置、大小）和图片里的文字。
 // 上限类设置改了立即生效（执行一次清理）；会删掉东西时先问（第四轮体检 E4，取消就不改）。控件分工（Whisker §6）：
-// > 5 项弹出菜单、3–5 项单选。排除的 App 跟着偏好走：同步 / 导入换了列表，开着的页面跟上，改的时候也从偏好现读（E19）。
-
+// > 5 项弹出菜单、3–5 项单选（选项字长、英文横排放不下的用弹出菜单）。排除的 App 跟着偏好走：同步 / 导入换了列表，开着的
+// 页面跟上，改的时候也从偏好现读（E19）。
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct ClipboardTab: View {
   let store: ClipboardStore
+  /// 截图自检直接画「高级…」表单（sheet 画不进屏外截图）
+  var drawsAdvanced = false
   @AppStorage(Prefs.clipboardRetentionDays) private var retentionDays = 7
   @AppStorage(Prefs.clipboardImageBudgetMB) private var imageBudgetMB = 512
   @AppStorage(Prefs.clipboardShowPreview) private var showPreview = true
+  @AppStorage(Prefs.clipboardImageRows) private var imageRows = true
   @AppStorage(Prefs.clipboardLinkPreview) private var linkPreview = true
   @AppStorage(Prefs.clipboardPasteOnClick) private var pasteOnClick = false
   @AppStorage(Prefs.clipboardPanelPosition) private var panelPosition = "top"
@@ -34,68 +38,61 @@ struct ClipboardTab: View {
     Form {
       Section { FeatureToggle(feature: .clipboard, inPage: true) }
       Section {
-        Picker("保留普通历史", selection: limited(.days)) {
-          ForEach(Prefs.clipboardRetentionChoices, id: \.self) {
-            Text(Self.retentionTitle($0)).tag($0)
+        SettingRow(title: "保留普通历史", info: "收藏和片段一直留着，不算在里面。") {
+          Picker("保留普通历史", selection: limited(.days)) {
+            ForEach(Prefs.clipboardRetentionChoices, id: \.self) {
+              Text(Self.retentionTitle($0)).tag($0)
+            }
           }
         }
         // 两个弹出菜单是同一节里挨着的兄弟：id 要各不相同，同一个值的话 SwiftUI 当成同一个视图、第二行画成第一行
         .id("days-\(limitPickers)")
-        Picker("图片最多占用", selection: limited(.imageMB)) {
-          ForEach(Self.imageBudgetChoices, id: \.0) {
-            Text($0.1).tag($0.0)
+        .settingsAnchor(.clipboardRetention)
+        SettingRow(title: "图片最多占用", info: "只算普通历史里的图片，收藏的不算。") {
+          Picker("图片最多占用", selection: limited(.imageMB)) {
+            ForEach(Self.imageBudgetChoices, id: \.0) {
+              Text($0.1).tag($0.0)
+            }
           }
         }
         .id("imageMB-\(limitPickers)")
+        .settingsAnchor(.clipboardImageBudget)
         LabeledContent("图片当前占用", value: imageUsage)
+          .settingsAnchor(.clipboardImageUsage)
       } header: {
         Text("历史")
-      } footer: {
-        SectionFootnote("收藏和片段一直留着，图片占用也只算普通历史里的。")
       }
-      Section("面板") {
-        ClipboardPanelSketch(showsLens: showPreview, showsLinkPreview: linkPreview)
-          .frame(maxWidth: .infinity)
-        Toggle(isOn: $showPreview) {
-          Text("显示透镜")
-          Text("选中的条目在原地展开预览；关掉就是纯列表，一屏多露出几行")
+      Section("粘贴") {
+        SettingRow(
+          title: "单击条目直接粘贴", subtitle: "点一下就粘贴，不用双击",
+          info: "想先看内容用 ↑↓；⌘ 单击、⇧ 单击照常多选。"
+        ) {
+          Toggle("单击条目直接粘贴", isOn: $pasteOnClick)
+            .toggleStyle(.switch)
         }
-        Toggle(isOn: $linkPreview) {
-          Text("链接显示网页标题和图片")
-          Text("选中链接时联网读取；本机、内网和带登录令牌的网址不读")
+        .settingsAnchor(.clipboardPasteOnClick)
+        SettingRow(
+          title: "默认粘贴为纯文本", subtitle: "↩ 粘贴纯文本，⌥↩ 保留格式", info: "文字的格式总是记下来。"
+        ) {
+          Toggle("默认粘贴为纯文本", isOn: $pastePlain)
+            .toggleStyle(.switch)
         }
-        Toggle(isOn: $pasteOnClick) {
-          Text("单击条目直接粘贴")
-          Text("关着时单击选中、双击粘贴；打开后点一下就粘贴，想先看内容用 ↑↓，⌘ 单击、⇧ 单击照常多选")
-        }
-        Picker(selection: $panelPosition) {
-          Text("屏幕上方").tag("top")
-          Text("跟随鼠标").tag("mouse")
-          Text("上次位置").tag("last")
-        } label: {
-          Text("面板位置")
-          Text("屏幕上方是鼠标所在屏幕的上方正中，跟随鼠标是光标旁边，上次位置是上次拖到的地方")
-        }
-        .pickerStyle(.segmented)
-        PanelSizeRow(
-          detail: "拖左右两边改宽度，拖下边改最多显示几行", widthKey: Prefs.clipboardPanelWidth,
-          heightKey: Prefs.clipboardPanelRows, defaultWidth: Style.listPanelWidth)
-      }
-      .gated(by: .clipboard)
-      Section("内容") {
-        Toggle(isOn: $pastePlain) {
-          Text("默认粘贴为纯文本")
-          Text("打开后 ↩ 粘贴纯文本，⌥↩ 保留格式；文字的格式总是记下来")
-        }
-        Toggle("识别图片中的文字，用于搜索", isOn: $imageOCR)
+        .settingsAnchor(.clipboardPastePlain)
       }
       .gated(by: .clipboard)
       Section("隐私") {
         Toggle("不记录疑似密钥和银行卡号", isOn: $blockSensitive)
           .gated(by: .clipboard)
-        Toggle("退出 App 时清空普通历史", isOn: $clearOnQuit)
-        Toggle("锁屏时清空普通历史", isOn: $clearOnLock)
+          .settingsAnchor(.clipboardBlockSensitive)
+        Picker(selection: autoClear) {
+          ForEach(AutoClear.allCases, id: \.self) { Text(plain: $0.title).tag($0) }
+        } label: {
+          Text("自动清空普通历史")
+          Text("收藏和片段不清")
+        }
+        .settingsAnchor(.clipboardAutoClear)
         DangerButton("立即清空普通历史…") { confirmClear = true }
+          .settingsAnchor(.clipboardClearNow)
       }
       Section {
         excludedList
@@ -117,14 +114,19 @@ struct ClipboardTab: View {
           .help("添加 App")
         }
       } header: {
-        Text("不记录这些 App 里的复制")
-      } footer: {
-        SectionFootnote("密码管理器通常会自己标记「不要记录」，这里只是兜底。")
+        InfoHeader("不记录这些 App 里的复制", info: "密码管理器通常会自己标记「不要记录」，这里只是兜底。")
+          .settingsAnchor(.clipboardExcludedApps)
       }
       .gated(by: .clipboard)
+      Section {
+      } footer: {
+        AdvancedButton(page: .clipboard)
+      }
     }
     .formStyle(.grouped)
+    .settingsScrollTarget()
     .onChange(of: imageOCR) { store.recognizePendingImages() }
+    .advancedSheet(.clipboard, summary: "面板的样子和图片里的字", inline: drawsAdvanced) { advanced }
     // 同步、导入落下了新的排除列表：页面跟上（异步序列在主线程上接：偏好不一定是在主线程上改的）。
     // object 不填：UserDefaults 不是 Sendable，填 .standard 会报警告；别的偏好域发来的也只是多比一次
     .task {
@@ -160,10 +162,106 @@ struct ClipboardTab: View {
     }
   }
 
+  /// 「高级…」表单：面板（实时示意图、透镜、链接预览、位置、大小）和图片里的文字
+  @ViewBuilder private var advanced: some View {
+    Section("面板") {
+      ClipboardPanelSketch(showsLens: showPreview, showsLinkPreview: linkPreview)
+        .frame(maxWidth: .infinity)
+      SettingRow(
+        title: "显示透镜", subtitle: "选中的条目在原地展开预览", info: "关掉就是纯列表，一屏多露出几行。"
+      ) {
+        Toggle("显示透镜", isOn: $showPreview)
+          .toggleStyle(.switch)
+      }
+      .settingsAnchor(.clipboardLens)
+      SettingRow(
+        title: "列表里直接显示图片", subtitle: "图片条目显示成一张小图，选中时原地放大",
+        info: "关掉就和别的条目一样，行首一个小方块，一屏多露出几行。"
+      ) {
+        Toggle("列表里直接显示图片", isOn: $imageRows)
+          .toggleStyle(.switch)
+      }
+      .settingsAnchor(.clipboardImageRows)
+      SettingRow(
+        title: "链接显示网页标题和图片", subtitle: "选中链接时联网读取", info: "本机、内网和带登录令牌的网址不读。"
+      ) {
+        Toggle("链接显示网页标题和图片", isOn: $linkPreview)
+          .toggleStyle(.switch)
+      }
+      .settingsAnchor(.clipboardLinkPreview)
+      SettingRow(
+        title: "面板位置", info: "屏幕上方是鼠标所在屏幕的上方正中，跟随鼠标是光标旁边，上次位置是上次拖到的地方。"
+      ) {
+        Picker("面板位置", selection: $panelPosition) {
+          Text("屏幕上方").tag("top")
+          Text("跟随鼠标").tag("mouse")
+          Text("上次位置").tag("last")
+        }
+        .pickerStyle(.segmented)
+      }
+      .settingsAnchor(.clipboardPanelPosition)
+      PanelSizeRow(
+        detail: "拖面板的边改大小", info: "拖左右两边改宽度，拖下边改最多显示几行。",
+        widthKey: Prefs.clipboardPanelWidth,
+        heightKey: Prefs.clipboardPanelRows, defaultWidth: Style.listPanelWidth
+      )
+      .settingsAnchor(.clipboardPanelSize)
+    }
+    .gated(by: .clipboard)
+    Section("内容") {
+      Toggle("识别图片中的文字，用于搜索", isOn: $imageOCR)
+        .settingsAnchor(.clipboardOCR)
+    }
+    .gated(by: .clipboard)
+  }
+
+  /// 「自动清空普通历史」（设置改版 S6：原来退出时、锁屏时两个开关）：读写的照旧是那两个键，只写变了的那个
+  enum AutoClear: CaseIterable {
+    case never, onQuit, onLock, both
+
+    init(quit: Bool, lock: Bool) {
+      self = quit ? (lock ? .both : .onQuit) : (lock ? .onLock : .never)
+    }
+
+    var quit: Bool { self == .onQuit || self == .both }
+    var lock: Bool { self == .onLock || self == .both }
+
+    var title: LocalizedStringResource {
+      switch self {
+      case .never: "从不"
+      case .onQuit: "退出 App 时"
+      case .onLock: "锁屏时"
+      case .both: "退出或锁屏时"
+      }
+    }
+
+    /// 从 old 换成这一项要写哪几个键（没变的不写：写进持久域的话，同步会当成本机刚改的发出去）
+    func writes(from old: AutoClear) -> [(key: String, value: Bool)] {
+      [(Prefs.clipboardClearOnQuit, quit, old.quit), (Prefs.clipboardClearOnLock, lock, old.lock)]
+        .filter { $0.1 != $0.2 }.map { ($0.0, $0.1) }
+    }
+  }
+
+  private var autoClear: Binding<AutoClear> {
+    Binding {
+      AutoClear(quit: clearOnQuit, lock: clearOnLock)
+    } set: { choice in
+      // 经 @AppStorage 写（截图自检给的临时偏好域也认）
+      for write in choice.writes(from: AutoClear(quit: clearOnQuit, lock: clearOnLock)) {
+        if write.key == Prefs.clipboardClearOnQuit {
+          clearOnQuit = write.value
+        } else {
+          clearOnLock = write.value
+        }
+      }
+    }
+  }
+
   /// 「图片最多占用」的档位（MB → 名字；0 = 不限）。256 MB 是 issue #19 加的（2026-11-13，想少占点空间），
   /// 六项起换成弹出菜单（Whisker §6）
   static let imageBudgetChoices = [
-    (256, "256 MB"), (512, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (5120, "5 GB"), (0, "不限"),
+    (256, "256 MB"), (512, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (5120, "5 GB"),
+    (0, String(localized: "不限")),
   ]
 
   /// 两个上限：保留天数、图片占用（MB）
@@ -217,32 +315,33 @@ struct ClipboardTab: View {
   /// 确认框的标题：「保留普通历史改成「1 天」？」「图片最多占用改成「512 MB」？」
   private static func title(_ change: LimitChange) -> String {
     switch change.field {
-    case .days: "保留普通历史改成「\(retentionTitle(change.value))」？"
+    case .days: String(localized: "保留普通历史改成「\(retentionTitle(change.value))」？")
     case .imageMB:
-      "图片最多占用改成「\(imageBudgetChoices.first { $0.0 == change.value }?.1 ?? "\(change.value) MB")」？"
+      String(
+        localized:
+          "图片最多占用改成「\(imageBudgetChoices.first { $0.0 == change.value }?.1 ?? "\(change.value) MB")」？"
+      )
     }
   }
 
   /// 改上限前的确认里那句：会删掉几条普通历史（其中几张图片），收藏和片段不受影响
   static func pruneWarning(items: Int, images: Int) -> String {
-    let what =
-      switch images {
-      case 0: "\(items) 条普通历史"
-      case items: "\(images) 张普通历史里的图片"
-      default: "\(items) 条普通历史（其中 \(images) 张图片）"
-      }
-    return "会删掉 \(what)，收藏和片段不受影响。"
+    switch images {
+    case 0: String(localized: "会删掉 \(items) 条普通历史，收藏和片段不受影响。")
+    case items: String(localized: "会删掉 \(images) 张普通历史里的图片，收藏和片段不受影响。")
+    default: String(localized: "会删掉 \(items) 条普通历史（其中 \(images) 张图片），收藏和片段不受影响。")
+    }
   }
 
   /// 「保留普通历史」的档位名：1 天 / 1 周 / 1 个月 / 3 个月 / 1 年 / 永久
   static func retentionTitle(_ days: Int) -> String {
     switch days {
-    case 0: "永久"
-    case 7: "1 周"
-    case 30: "1 个月"
-    case 90: "3 个月"
-    case 365: "1 年"
-    default: "\(days) 天"
+    case 0: String(localized: "永久")
+    case 7: String(localized: "1 周")
+    case 30: String(localized: "1 个月")
+    case 90: String(localized: "3 个月")
+    case 365: String(localized: "1 年")
+    default: String(localized: "\(days) 天")
     }
   }
 
@@ -256,8 +355,9 @@ struct ClipboardTab: View {
   /// 「普通 X · 留下的 Y」：只有普通的算进「图片最多占用」（体检 B2）
   private var imageUsage: String {
     let usage = store.imageUsage
-    return "普通 \(usage.ordinary.formatted(.byteCount(style: .file))) · 留下的 "
-      + usage.retained.formatted(.byteCount(style: .file))
+    let ordinary = usage.ordinary.formatted(.byteCount(style: .file))
+    return String(
+      localized: "普通 \(ordinary) · 留下的 \(usage.retained.formatted(.byteCount(style: .file)))")
   }
 
   // MARK: 排除的 App
@@ -338,13 +438,15 @@ struct AppListRow: View {
   }
 
   /// 从「应用程序」里选（可多选），返回选中的 App 包的 bundle ID
-  static func chooseApps(prompt: String, message: String) -> [String] {
+  static func chooseApps(prompt: LocalizedStringResource, message: LocalizedStringResource)
+    -> [String]
+  {
     let panel = NSOpenPanel()
     panel.directoryURL = URL(filePath: "/Applications")
     panel.allowedContentTypes = [.applicationBundle]
     panel.allowsMultipleSelection = true
-    panel.prompt = prompt
-    panel.message = message
+    panel.prompt = String(localized: prompt)
+    panel.message = String(localized: message)
     guard panel.runModal() == .OK else { return [] }
     return panel.urls.compactMap { Bundle(url: $0)?.bundleIdentifier }
   }
@@ -352,7 +454,8 @@ struct AppListRow: View {
 
 /// 剪贴板面板的示意图（实时预览，Sleeve 式）：单列 + 一块透镜 + 底栏，跟着「显示透镜」「链接显示网页标题和图片」变——
 /// 关掉透镜时选中行只是一条中性高亮（纯列表，多露出几行）；透镜里的链接有没有头图。只是线框，不画真内容
-private struct ClipboardPanelSketch: View {
+/// 剪贴板面板的示意（「高级…」里跟着开关变；设置里的悬停预览也拿它演「挤压弹开」）
+struct ClipboardPanelSketch: View {
   let showsLens: Bool
   let showsLinkPreview: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion

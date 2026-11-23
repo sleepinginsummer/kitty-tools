@@ -30,8 +30,12 @@ enum WhatsNew {
     var actions: [HotKeyAction] = []
     /// 它的设置页：侧栏那一行挂标记，打开过就算碰过
     var page: SettingsPage?
-    /// 设置页里新的那一节（或那一行开关）的标题：标题后面挂「新」，进了页面知道新的是哪个；nil = 只标页
-    var section: String?
+    /// 设置页里新的那一节（或那一行开关）的标题：标题后面挂「新」，进了页面知道新的是哪个；nil = 只标页。
+    /// 按目录的 key 认那一节（多语言：不拿显示出来的字比，换了语言也对得上；页里写的是同一句中文就是同一个 key）
+    var section: LocalizedStringResource?
+    /// 新插件（插件页改版 E1）：插件默认不添加，按 feature 就永远标不上——这种条目没添加时标（「全部插件」那一行、
+    /// 侧栏「全部插件」，page 写 .plugins），添加着不标，添加的那一刻算碰过（之后移除也不再标）。feature 写 nil
+    var plugin: Feature?
   }
 
   /// 清单（新的版本往后加）
@@ -71,21 +75,62 @@ enum WhatsNew {
     // 设置 › 刘海岛 里新的「正在播放」（刘海岛插件的页，拨过那个开关算看过；原来挑的是「系统提示」，正在播放进 0.9.0 后换成它，
     // 一版最多 3 个）、设置 › 通用「同步」能连 WebDAV 服务器
     // （issue #18，点过「连接服务器…」算看过）。截图标注的新东西在框选后的工具栏里、刘海两边的活动和两指下滑没有入口，不标
-    Entry(id: "plugins", version: "0.9.0", feature: nil, page: .general, section: "功能"),
+    // 2026-11-17 插件页改版：插件挪进「全部插件」，这一条改标通用页「插件 ›」那一行（id 不变），添加 / 移除过一个插件算看过
+    Entry(id: "plugins", version: "0.9.0", feature: nil, page: .general, section: "插件"),
     Entry(
       id: "island-now-playing", version: "0.9.0", feature: .island, page: .island,
       section: "正在播放"),
     Entry(id: "sync-server", version: "0.9.0", feature: nil, page: .general, section: "同步"),
+    // 0.10.0（多语言）：设置 › 通用「语言」那一行（拨过算看过；只有升级上来的标，升级的保持了中文，这一行告诉他能换）。
+    // 英文界面本身、搜索中英都认、自带脚本说英文没有单独的入口，不标
+    Entry(
+      id: "interface-language", version: "0.10.0", feature: nil, page: .general,
+      section: GeneralTab.languageLabel),
+    // 0.10.0 另有 设置 › 截图「也认网页里的元素」（截图识别元素第三轮，拨过算看过；0.10.1 设置改版并进高级里的「悬停时识别」）
+    Entry(
+      id: "screenshot-web-elements", version: "0.10.0", feature: .screenshot, page: .screenshot,
+      section: "悬停时识别"),
+    // 0.10.0 的四个新插件（插件页改版 E1）：没添加时在「全部插件」那一行、侧栏「全部插件」上标，添加了算碰过；四个算一个
+    Entry(
+      id: "plugin-keep-awake", version: "0.10.0", feature: nil, page: .plugins, plugin: .keepAwake),
+    Entry(
+      id: "plugin-bluetooth-snooze", version: "0.10.0", feature: nil, page: .plugins,
+      plugin: .bluetoothSnooze),
+    Entry(
+      id: "plugin-smooth-scroll", version: "0.10.0", feature: nil, page: .plugins,
+      plugin: .smoothScroll),
+    Entry(
+      id: "plugin-app-shortcuts", version: "0.10.0", feature: nil, page: .plugins,
+      plugin: .appShortcuts),
+    // 0.10.1：延时截图（新动作：菜单、主界面、快捷键，用过一次算看过）、设置 › 访达右键「在访达里用 ⌘X 剪切、⌘V 移动」
+    // （拨过算看过）、设置 › 翻译 › 查词与朗读「朗读速度」（选过一档算看过；推进行跟着挂，SettingsItem.subpageIsNew）。
+    // 设置改版和搜索落到行（整个设置窗都变了，挂哪都不对）、讲解外文句子和附加要求（在每个大模型服务的详情里，列表上没有一处能挂）、
+    // 启动器路径模式和搜菜单项（打字就出来，没有入口）、窗口截图的阴影（截图 › 高级里的一行，改样子）不标，交给更新日志
+    Entry(
+      id: "delayed-screenshot", version: "0.10.1", feature: .screenshot,
+      actions: [.delayedScreenshot]),
+    Entry(
+      id: "finder-keys", version: "0.10.1", feature: .finderMenu, page: .finderMenu,
+      section: "在访达里用 ⌘X 剪切、⌘V 移动"),
+    Entry(
+      id: "speech-speed", version: "0.10.1", feature: .translate, page: .translate,
+      section: "朗读速度"),
+    // 0.10.2：设置 › 截图「截图圆角」（拖过算看过）——升上来以后截出来的图默认就是圆角、四角透明，标出来让人知道在哪调。
+    // 剪贴板图片行、空格放大预览、空闲释放识字模型（都在面板里或「高级…」里，默认样子就看得到 / 没变）、App 快捷键面板改版、
+    // 安全输入的小锁和录键提醒（改样子、修问题）不标，交给更新日志
+    Entry(
+      id: "screenshot-corner-radius", version: "0.10.2", feature: .screenshot, page: .screenshot,
+      section: "截图圆角"),
   ]
 
-  /// 一版最多标几个（拍板 B1：标多了到处都是「新」，等于没标）
+  /// 一版最多标几个（拍板 B1：标多了到处都是「新」，等于没标）。同一版的几个新插件算一个：都只标在「全部插件」一处
   static let perVersion = 3
   /// 一直没碰最多挂多久（拍板 B2）
   static let lifetime: TimeInterval = 30 * 24 * 60 * 60
   /// 写出来的那个字
-  static let label = "新"
+  static var label: String { String(localized: "新", comment: "新功能标记：菜单徽标、设置页标题后的小胶囊") }
   /// 读屏念的
-  static let spoken = "新功能"
+  static var spoken: String { String(localized: "新功能") }
 
   /// 系统菜单的徽标（macOS 14 起；样子、颜色系统定，拍板 C1）
   static var menuBadge: NSMenuItemBadge { NSMenuItemBadge(string: label) }
@@ -130,6 +175,8 @@ enum WhatsNew {
       guard let start = ledger.started[entry.version], now.timeIntervalSince(start) < lifetime,
         !ledger.touched.contains(entry.id)
       else { return false }
+      // 这台用不了的插件（台式机上的睡眠关蓝牙、15 上的启动台）不标：「全部插件」里没有它，碰不掉（评审 1）
+      if let plugin = entry.plugin { return plugin.isAvailable && !enabled.contains(plugin) }
       return entry.feature.map(enabled.contains) ?? true
     }
   }
@@ -164,9 +211,16 @@ enum WhatsNew {
     entries.contains { ids.contains($0.id) && $0.page == page }
   }
 
-  /// 设置页里这一节要不要标
-  static func marks(section: String, of page: SettingsPage, in ids: Set<String>) -> Bool {
-    entries.contains { ids.contains($0.id) && $0.page == page && $0.section == section }
+  /// 「全部插件」里这个插件的那一行要不要标
+  static func marks(plugin: Feature, in ids: Set<String>) -> Bool {
+    entries.contains { ids.contains($0.id) && $0.plugin == plugin }
+  }
+
+  /// 设置页里这一节要不要标（按 key 比）
+  static func marks(
+    section: LocalizedStringResource, of page: SettingsPage, in ids: Set<String>
+  ) -> Bool {
+    entries.contains { ids.contains($0.id) && $0.page == page && $0.section?.key == section.key }
   }
 
   // MARK: 这台 Mac 的账（偏好；AppDelegate 用）
@@ -207,9 +261,16 @@ enum WhatsNew {
     update(defaults) { touching($0) { $0.actions.contains(action) } }
   }
 
+  /// 添加了一个插件（AppDelegate.applyFeatures：从哪儿添加的都算，同步来的也算）
+  static func touch(plugin: Feature, defaults: UserDefaults = .standard) {
+    update(defaults) { touching($0) { $0.plugin == plugin } }
+  }
+
   /// 拨了设置页里新的那一节 / 那一行的开关（Entry.section 是它的标题）。光打开那一页不算（2026-11-06）
-  static func touch(section: String, of page: SettingsPage, defaults: UserDefaults = .standard) {
-    update(defaults) { touching($0) { $0.page == page && $0.section == section } }
+  static func touch(
+    section: LocalizedStringResource, of page: SettingsPage, defaults: UserDefaults = .standard
+  ) {
+    update(defaults) { touching($0) { $0.page == page && $0.section?.key == section.key } }
   }
 }
 
@@ -225,11 +286,11 @@ struct NewDot: View {
 
 /// 设置页里一行开关的标题，这一版新加、还没换过页时后面跟一个「新」（WhatsNew.Entry.section 写的就是这个标题）
 struct NewTitle: View {
-  let title: String
+  let title: LocalizedStringResource
   let page: SettingsPage
   let fresh: Set<String>
 
-  init(_ title: String, page: SettingsPage, fresh: Set<String>) {
+  init(_ title: LocalizedStringResource, page: SettingsPage, fresh: Set<String>) {
     self.title = title
     self.page = page
     self.fresh = fresh
@@ -237,7 +298,7 @@ struct NewTitle: View {
 
   var body: some View {
     HStack(spacing: 6) {
-      Text(title)
+      Text(plain: title)
       if WhatsNew.marks(section: title, of: page, in: fresh) { NewTag() }
     }
   }

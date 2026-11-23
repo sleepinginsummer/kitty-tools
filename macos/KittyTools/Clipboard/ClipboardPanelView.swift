@@ -1,7 +1,8 @@
 // 剪贴板面板根视图（透镜指令条 Lens Bar，mac-whisker §6 剪贴板）：宽 720、贴在屏幕上方 20%（和启动器同位置），
 // 高度按条数伸缩、顶边不动、≤ 520（height(for:)；透镜预留是常数，↑↓ 永远不改窗口高度）。
 // 56 pt 搜索线 = 放大镜 + 粉色筛选标签 + 输入框；单列满宽列表（始终按天分组吸顶，搜索只过滤，体检 A6），
-// 行 40，选中行原地展开成透镜（LensView），一块中性高亮在行间滑动、和透镜一起伸缩（前缀和定位）；列表只画可见区附近的项、
+// 行 40（图片行 64：设置「列表里直接显示图片」，默认开），选中行原地展开成透镜（LensView），一块中性高亮在行间滑动、
+// 和透镜一起伸缩（前缀和定位）；列表只画可见区附近的项、
 // 上下按前缀和撑开，吸顶的分组标题自己画（list，2026-10-03：交给 LazyVStack 时条目多了高亮错位、越往后越卡）；
 // 片段范围第一行固定一条虚线的「＋ 新建片段 ⌘N」；底栏 36 = （已暂停记录）条数 / 修饰键提示 / 多选动词 ｜ 粘贴 ↩ · 操作 ⌘K ｜
 // 齿轮 图钉。
@@ -23,6 +24,8 @@ struct ClipboardPanelView: View {
   @Bindable var model: ClipboardPanelModel
   @AppStorage(Prefs.clipboardHideOnUnfocus) private var hideOnUnfocus = true
   @AppStorage(Prefs.clipboardShowPreview) private var showsLens = true
+  /// 图片条目在列表里直接画图（64 高的图片行，选中时图在原地长大）；关掉就和别的条目一样是 24 pt 小方块
+  @AppStorage(Prefs.clipboardImageRows) private var imageRows = true
   /// 拖下边定的最多几行（W2，0 = 默认）
   @AppStorage(Prefs.clipboardPanelRows) private var maxRows = 0.0
   /// 默认粘贴为纯文本：底栏按住 ⌥ 的提示、右键菜单的替代粘贴跟着换名字
@@ -91,7 +94,10 @@ struct ClipboardPanelView: View {
     let layout = ListLayout(
       leading: newSnippet ? ClipRowView.height : 0, sections: sections,
       lens: lensOpen
-        ? selected.map { ($0.id, Lens.height(for: $0, form: model.contentForm(of: $0))) } : nil)
+        ? selected.map {
+          ($0.id, Lens.height(for: $0, form: model.contentForm(of: $0), imageRows: imageRows))
+        } : nil,
+      imageRows: imageRows)
     VStack(spacing: 0) {
       searchBar
       Hairline()
@@ -146,9 +152,9 @@ struct ClipboardPanelView: View {
     )
     .onChange(
       of: Self.height(
-        rows: items.count + (newSnippet ? 1 : 0), sections: sections.count,
-        reservesLens: showsLens && !items.isEmpty, banner: !trusted, model: model,
-        maxRows: maxRows),
+        rowsHeight: Self.rowsHeight(items, newSnippet: newSnippet, imageRows: imageRows),
+        sections: sections.count, reservesLens: showsLens && !items.isEmpty, banner: !trusted,
+        model: model, maxRows: maxRows),
       initial: true
     ) { _, height in model.resize(height) }
     .onModifierKeysChanged(mask: [.command, .option]) { _, keys in heldKeys = keys }
@@ -170,14 +176,15 @@ struct ClipboardPanelView: View {
   // MARK: 高度
 
   /// 面板高度（窗口和截图自检同一个算法）：56 + 0.5 +（授权横幅）+ 列表区 + 36。列表区 =
-  /// min(上下内缩 12 + 24 × 分组数 + 40 × 行数 + 透镜预留, 427.5)，空列表 140；对话框开着给满，浮起的菜单开着至少放得下 8.5 行
-  /// maxRows：拖下边定的最多几行（0 = 默认 8.5）
+  /// min(上下内缩 12 + 24 × 分组数 + 各行高之和 + 透镜预留, 427.5)，空列表 140；对话框开着给满，浮起的菜单开着至少放得下 8.5 行
+  /// rowsHeight：各行（没展开时）的高加起来（同名函数）；maxRows：拖下边定的最多几行（0 = 默认 8.5）
   static func height(
-    rows: Int, sections: Int, reservesLens: Bool, banner: Bool, model: ClipboardPanelModel,
+    rowsHeight: CGFloat, sections: Int, reservesLens: Bool, banner: Bool,
+    model: ClipboardPanelModel,
     maxRows: Double = 0
   ) -> CGFloat {
     var list = listHeight(
-      rows: rows, sections: sections, reservesLens: reservesLens, maxRows: maxRows)
+      rowsHeight: rowsHeight, sections: sections, reservesLens: reservesLens, maxRows: maxRows)
     if model.dialog != nil {
       list = maxListHeight(rows: maxRows)
     } else if model.palette != nil {
@@ -186,14 +193,23 @@ struct ClipboardPanelView: View {
     return chrome(banner: banner) + list
   }
 
-  static func listHeight(rows: Int, sections: Int, reservesLens: Bool, maxRows: Double = 0)
-    -> CGFloat
-  {
-    guard rows > 0 else { return emptyListHeight }
+  /// rowsHeight：各行（没展开时）的高加起来（同名函数），0 = 空列表
+  static func listHeight(
+    rowsHeight: CGFloat, sections: Int, reservesLens: Bool, maxRows: Double = 0
+  ) -> CGFloat {
+    guard rowsHeight > 0 else { return emptyListHeight }
     let content =
-      inset * 2 + headerHeight * CGFloat(sections) + ClipRowView.height * CGFloat(rows)
+      inset * 2 + headerHeight * CGFloat(sections) + rowsHeight
       + (reservesLens ? Lens.reserve : 0)
     return min(content, maxListHeight(rows: maxRows))
+  }
+
+  /// 各行（没展开时）的高加起来：「新建片段」40、图片行 64（开着「列表里直接显示图片」）、其余 40。
+  /// 透镜预留（Lens.reserve，按最高的代码透镜比普通行多出的 158）也盖得住图片行展开多出的 82
+  static func rowsHeight(_ items: [ClipItem], newSnippet: Bool, imageRows: Bool) -> CGFloat {
+    items.reduce(newSnippet ? ClipRowView.height : 0) {
+      $0 + ClipRowView.height(of: $1, imageRows: imageRows)
+    }
   }
 
   /// 按模型现算（AppDelegate 建窗口、截图自检用）；视图里用上面那个，省一次搜索
@@ -201,11 +217,13 @@ struct ClipboardPanelView: View {
     for model: ClipboardPanelModel,
     showsLens: Bool = UserDefaults.standard.bool(forKey: Prefs.clipboardShowPreview),
     banner: Bool = !Permissions.isAccessibilityTrusted,
-    maxRows: Double = UserDefaults.standard.double(forKey: Prefs.clipboardPanelRows)
+    maxRows: Double = UserDefaults.standard.double(forKey: Prefs.clipboardPanelRows),
+    imageRows: Bool = UserDefaults.standard.bool(forKey: Prefs.clipboardImageRows)
   ) -> CGFloat {
     let items = model.visibleItems
     return height(
-      rows: items.count + (model.showsNewSnippetRow(in: items) ? 1 : 0),
+      rowsHeight: rowsHeight(
+        items, newSnippet: model.showsNewSnippetRow(in: items), imageRows: imageRows),
       sections: daySections(items).count,
       reservesLens: showsLens && !items.isEmpty, banner: banner, model: model, maxRows: maxRows)
   }
@@ -234,7 +252,8 @@ struct ClipboardPanelView: View {
       // 筛选面板 / ⌘K 开着时，搜索框改成过滤它们的条目
       CommandTextField(
         text: model.palette != nil ? $model.actionQuery : $model.query,
-        placeholder: placeholder, fontSize: 20, onCommand: model.handleCommand
+        placeholder: placeholder, fontSize: 20, onCommand: model.handleCommand,
+        onSpace: model.handleSpace
       )
       .frame(maxWidth: .infinity)
       .padding(.leading, tokens.isEmpty ? 0 : 2)
@@ -255,13 +274,15 @@ struct ClipboardPanelView: View {
   }
 
   private var placeholder: String {
-    switch model.palette {
-    case .filters: "筛选范围、收藏夹、类型、来源"
-    // 子列表只有「移到收藏夹」这一个
-    case .actions: model.submenuTitle == nil ? "搜索操作" : "搜索收藏夹"
-    case .groups: "搜索收藏夹"
-    case nil: model.tokens.isEmpty ? "搜索剪贴板，Tab 筛选" : "搜索"
-    }
+    let text: LocalizedStringResource =
+      switch model.palette {
+      case .filters: "筛选范围、收藏夹、类型、来源"
+      // 子列表只有「移到收藏夹」这一个
+      case .actions: model.submenuTitle == nil ? "搜索操作" : "搜索收藏夹"
+      case .groups: "搜索收藏夹"
+      case nil: model.tokens.isEmpty ? "搜索剪贴板，Tab 筛选" : "搜索"
+      }
+    return String(localized: text)
   }
 
   private var permissionBanner: some View {
@@ -269,13 +290,11 @@ struct ClipboardPanelView: View {
       Image(systemName: "lock.shield").foregroundStyle(Color(nsColor: .systemOrange))
       Text("授权「辅助功能」后才能直接粘贴回原 App，现在只会写进剪贴板")
       Spacer()
-      Button("去授权") {
-        Permissions.requestAccessibility()
-        Permissions.openAccessibilitySettings()
-      }
-      .buttonStyle(.plain)
-      .foregroundStyle(Style.brandInk)
-      .pointerStyle(.link)
+      // 没问过只弹系统框、问过了才打开系统设置（第五轮体检 U11：原来两样一起来）
+      Button("去授权") { Permissions.grant(.accessibility) }
+        .buttonStyle(.plain)
+        .foregroundStyle(Style.brandInk)
+        .pointerStyle(.link)
     }
     .font(.system(size: 12))
     .lineLimit(1)
@@ -446,7 +465,8 @@ struct ClipboardPanelView: View {
     return ClipListRow(
       item: item, form: model.contentForm(of: item), model: model,
       shortcutIndex: index < 9 ? index : nil, showsShortcut: shownKeys.contains(.command),
-      isSelected: isSelected, lensOpen: lensOpen && isSelected, groupName: groupBadge(for: item)
+      isSelected: isSelected, lensOpen: lensOpen && isSelected, groupName: groupBadge(for: item),
+      imageRows: imageRows
     )
     // 右键菜单和 ⌘K 同一份动作（体检 B12）；包成视图：菜单打开时才算，不在每次画行时建一遍
     .contextMenu { ActionContextMenu { model.actions(for: item, targets: [item]) } }
@@ -494,7 +514,11 @@ struct ClipboardPanelView: View {
 
   /// 共用的空状态（Shell/Style 的 EmptyState）：28 pt 符号 + 14 semibold 标题 + 说明 / 品牌粉文字按钮
   @ViewBuilder private var emptyState: some View {
-    if model.isFiltered {
+    if model.isEmptyGroup {
+      EmptyState(symbol: "folder", title: "这个收藏夹还是空的") {
+        Text("在别的条目上按 ⌘K，选「移到收藏夹」放进来").foregroundStyle(.secondary)
+      }
+    } else if model.isFiltered {
       EmptyState(symbol: "magnifyingglass", title: "没有匹配的条目") {
         Button("清除搜索和筛选", action: model.clearSearchAndFilters)
           .buttonStyle(.plain)
@@ -516,7 +540,9 @@ struct ClipboardPanelView: View {
 
   private func bottomBar(count: Int) -> some View {
     HStack(spacing: 12) {
+      // 左边先分宽度（英文的动词长：不先分的话 HStack 只给它剩下的一半，还有空也被截断）；中文本来就放得下，样子不变
       barStatus(count: count)
+        .layoutPriority(1)
         .transition(reduceMotion ? .opacity : AnyTransition(.blurReplace))
         .id(barState(count: count))
         // 对话框开着时只有「撤销」能点（管理收藏夹里删掉的收藏夹）；多选动词里的粘贴会收起面板、丢掉没保存的字
@@ -624,7 +650,8 @@ struct ClipboardPanelView: View {
     let items = model.targets
     let ids = Set(items.map(\.id))
     HStack(spacing: 12) {
-      Text("已选 \(items.count) 条")
+      // 实在放不下时先截它（勾选标记看得见选了哪些），动词不截
+      Text("已选 \(items.count) 条").lineLimit(1).layoutPriority(-1)
       Button(action: { model.pasteSelection() }) {
         hint(ClipboardPanelModel.PasteMode(items).verb, key: "↩", primary: true)
       }
@@ -650,12 +677,14 @@ struct ClipboardPanelView: View {
   /// 「动词 键帽」；primary：↩ 是品牌粉实心键帽（主按钮）；leadingKey：键帽在前（按住修饰键时的替代动作）；
   /// danger：删除这类，动词用危险色（mac-whisker §3「危险色」）
   private func hint(
-    _ title: String, key: String, primary: Bool = false, leadingKey: Bool = false,
+    _ title: LocalizedStringResource, key: String, primary: Bool = false, leadingKey: Bool = false,
     danger: Bool = false
   ) -> some View {
     HStack(spacing: 6) {
       if leadingKey { KeyCap(key) }
-      Text(title).foregroundStyle(danger ? AnyShapeStyle(Style.danger) : AnyShapeStyle(.primary))
+      // 一行：英文的动词长，挤的时候截断，别从词中间折成两行
+      Text(title).lineLimit(1)
+        .foregroundStyle(danger ? AnyShapeStyle(Style.danger) : AnyShapeStyle(.primary))
       if !leadingKey {
         KeyCap(key, primary: primary)
       }
@@ -663,13 +692,13 @@ struct ClipboardPanelView: View {
     .contentShape(.rect)
   }
 
-  private func countText(_ count: Int) -> String {
+  private func countText(_ count: Int) -> LocalizedStringResource {
     let total = model.store.items.count
     return count == total ? "\(total) 条" : "\(count) / \(total) 条"
   }
 }
 
-/// 列表几何（前缀和）：行 40、分组标题 24、透镜按类型的常数（Lens.height）；不量真实尺寸。列表就按它排（只画可见区附近的项，
+/// 列表几何（前缀和）：行 40（图片行 64）、分组标题 24、透镜按类型的常数（Lens.height）；不量真实尺寸。列表就按它排（只画可见区附近的项，
 /// 上下按它撑开，见 ClipboardPanelView.list），高亮、滚动、吸顶也都从这里算，所以算出来的位置就是画出来的位置
 struct ListLayout {
   /// 列表里的一项：「新建片段」行、分组标题（第几组）、条目行（第几组的第几行）
@@ -694,9 +723,10 @@ struct ListLayout {
   /// 条目 id → 它在 entries 里的下标
   private let rowIndex: [UUID: Int]
 
+  /// imageRows：设置「列表里直接显示图片」开着（图片行 64）
   init(
     leading: CGFloat = 0, sections: [ClipboardPanelView.DaySection],
-    lens: (id: UUID, height: CGFloat)?
+    lens: (id: UUID, height: CGFloat)?, imageRows: Bool = false
   ) {
     self.leading = leading
     self.sections = sections
@@ -723,7 +753,7 @@ struct ListLayout {
         if let lens, lens.id == entry.element.id {
           y += lens.height
         } else {
-          y += ClipRowView.height
+          y += ClipRowView.height(of: entry.element, imageRows: imageRows)
         }
       }
     }
@@ -740,8 +770,9 @@ struct ListLayout {
   /// 第 index 项的顶（不含四周内缩）；index == entries.count 是总高
   func top(of index: Int) -> CGFloat { tops[index] }
 
+  /// 这一行（展开透镜的就是透镜）的高：相邻两项的顶相减
   func height(of id: UUID) -> CGFloat {
-    if let lens, lens.id == id { lens.height } else { ClipRowView.height }
+    rowIndex[id].map { tops[$0 + 1] - tops[$0] } ?? ClipRowView.height
   }
 
   /// 行顶在列表内容里的 y（不含四周内缩）
@@ -780,6 +811,8 @@ private struct ClipListRow: View {
   let isSelected: Bool
   let lensOpen: Bool
   let groupName: String?
+  /// 设置「列表里直接显示图片」：图片条目画成图片行
+  let imageRows: Bool
   @State private var hovered = false
   /// 这次按下已经起了拖放会话（手势结束或被 AppKit 接走后自动复位）
   @GestureState private var dragging = false
@@ -789,23 +822,29 @@ private struct ClipListRow: View {
     Button {
       model.click(item)
     } label: {
+      let picture = imageRows && item.kind == .image
       VStack(alignment: .leading, spacing: 0) {
         ClipRowView(
           item: item, form: form, query: model.query, shortcutIndex: shortcutIndex,
           showsShortcut: showsShortcut,
           isChecked: model.multiSelection.isEmpty ? nil : model.multiSelection.contains(item.id),
-          groupName: groupName, images: model.store.images
+          groupName: groupName, images: model.store.images, picture: picture,
+          expanded: picture && lensOpen
         )
         // 悬停只出 fill.hover，不移动透镜（选中行下面已经有高亮）
         .background(
           hovered && !isSelected ? Style.hoverFill : .clear,
           in: .rect(cornerRadius: Style.Radius.card, style: .continuous))
         if lensOpen {
-          LensView(item: item, form: form, model: model).transition(lensTransition)
+          LensView(item: item, form: form, model: model, imageRows: imageRows)
+            .transition(lensTransition)
         }
       }
       .frame(
-        height: lensOpen ? Lens.height(for: item, form: form) : ClipRowView.height, alignment: .top
+        height: lensOpen
+          ? Lens.height(for: item, form: form, imageRows: imageRows)
+          : ClipRowView.height(of: item, imageRows: imageRows),
+        alignment: .top
       )
       .clipped()
       .contentShape(.rect)

@@ -165,8 +165,10 @@ nonisolated enum Recovery {
     /// 库文件不见了 / 是空的（没有东西可挪开留着，弹框里不说「数据还在里面」）
     var lost = false
     /// backups/ 里有设置与数据的自动备份（SettingsBackup 每天那份 JSON）：片段、文字收藏和生词本在里面还有一份。
-    /// 选了重新开始它们跟着 backups/ 一起挪开、设置里「从备份恢复」是空的，弹框里说怎么用「导入…」导回来
-    var hasSettingsBackup = false
+    /// 选了重新开始它们跟着 backups/ 一起挪开、再拷一份回新的 backups/（T5），弹框里说用「从备份恢复」导回来
+    var hasSettingsBackup: Bool { settingsBackupDay != nil }
+    /// 最近那份的日期：弹框里点名选它（重新开始之后当天会再备一份，那份是空的，不能说「最新的一份」，评审 A2 B1）
+    var settingsBackupDay: Date?
   }
 
   enum Failure: Error, Equatable, CustomStringConvertible {
@@ -206,9 +208,9 @@ nonisolated enum Recovery {
           reason: "\(error)", backup: Backup.latestUsable(in: directory, calendar: calendar))
       }
     }
-    problem.hasSettingsBackup = SettingsBackup.list(
-      in: Backup.folder(in: directory), calendar: calendar
-    ).contains { $0.kind == .daily }
+    problem.settingsBackupDay =
+      SettingsBackup.list(in: Backup.folder(in: directory), calendar: calendar)
+      .first { $0.kind == .daily }?.date
     let choice = ask(problem)
     guard choice != .quit, choice != .restore || problem.backup != nil else { throw Failure.quit }
     do {
@@ -218,7 +220,11 @@ nonisolated enum Recovery {
       if choice == .restore, let backup = problem.backup {
         try manager.copyItem(at: backup.url, to: staged)
       }
-      try setAside(in: directory, everything: choice == .startFresh, now: now, calendar: calendar)
+      let aside = try setAside(
+        in: directory, everything: choice == .startFresh, now: now, calendar: calendar)
+      if choice == .startFresh, let aside {
+        bringBackSettingsBackups(from: aside, to: directory, calendar: calendar)
+      }
       if choice == .restore {
         try manager.moveItem(at: staged, to: directory.appending(path: Backup.databaseName))
       }
@@ -236,7 +242,8 @@ nonisolated enum Recovery {
       let backup = Backup.latestUsable(in: directory, calendar: calendar)
     else { return nil }
     return Problem(
-      reason: size == nil ? "数据库文件不见了" : "数据库文件是空的", backup: backup, lost: true)
+      reason: size == nil ? String(localized: "数据库文件不见了") : String(localized: "数据库文件是空的"),
+      backup: backup, lost: true)
   }
 
   /// 挪开的文件放在数据目录里的这个文件夹：damaged-20261002-213045（当地时间；重名加序号）
@@ -291,18 +298,45 @@ nonisolated enum Recovery {
     return folder
   }
 
-  /// 弹框里怎么称呼那份备份：「10 月 1 日（昨天）」「9 月 28 日（4 天前）」「今天」
+  /// 重新开始时 backups/ 整个挪进了 damaged-…/：里面设置与数据的自动备份（JSON，SettingsBackup）拷一份回新的 backups/，
+  /// 设置里「从备份恢复」直接选得到（第四轮体检 T5；以前要自己去挪开的文件夹里找、走「导入…」）。只拷本机写的那几份
+  /// （每天的和导入前的，不带电脑编号），名字不变，轮换照旧。拷不成不算失败（记日志）：挪开的那份还在
+  static func bringBackSettingsBackups(
+    from aside: URL, to directory: URL, calendar: Calendar = .current
+  ) {
+    let copies = SettingsBackup.list(in: Backup.folder(in: aside), calendar: calendar)
+    guard !copies.isEmpty else { return }
+    let folder = Backup.folder(in: directory)
+    do {
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    } catch {
+      return Log.storage.error("重新开始后没能把设置的自动备份拷回来：\(error)")
+    }
+    // 一份一份拷：一份拷不成不连累别的
+    for copy in copies {
+      do {
+        try FileManager.default.copyItem(
+          at: copy.url, to: folder.appending(path: copy.url.lastPathComponent))
+      } catch {
+        Log.storage.error("重新开始后有一份设置的自动备份没拷回来：\(error)")
+      }
+    }
+  }
+
+  /// 弹框里怎么称呼那份备份：「10月1日（昨天）」「9月28日（4 天前）」「10月2日（今天）」。月、日按界面语言的写法
+  /// （Locale.current：英文「Oct 1 (yesterday)」），不手拼；时区、历法按传进来的 calendar
   static func describe(_ day: Date, now: Date = .now, calendar: Calendar = .current) -> String {
-    let parts = calendar.dateComponents([.month, .day], from: day)
-    let date = "\(parts.month ?? 0) 月 \(parts.day ?? 0) 日"
+    let date = day.formatted(
+      Date.FormatStyle(locale: .current, calendar: calendar, timeZone: calendar.timeZone)
+        .month().day())
     let days =
       calendar.dateComponents(
         [.day], from: calendar.startOfDay(for: day), to: calendar.startOfDay(for: now)
       ).day ?? 0
     switch days {
-    case ...0: return date + "（今天）"
-    case 1: return date + "（昨天）"
-    default: return date + "（\(days) 天前）"
+    case ...0: return String(localized: "\(date)（今天）")
+    case 1: return String(localized: "\(date)（昨天）")
+    default: return String(localized: "\(date)（\(days) 天前）")
     }
   }
 
@@ -314,30 +348,47 @@ nonisolated enum Recovery {
     for problem: Problem, directory: URL, now: Date = .now, calendar: Calendar = .current
   ) -> (title: String, text: String, buttons: [String], choices: [Choice]) {
     let place = (directory.path as NSString).abbreviatingWithTildeInPath
-    let head = "Kitty Tools 的数据库读不出来了。"
-    let fresh = "重新开始：全部从空的开始；现在的数据库文件、图片和备份一起挪开留着。"
-    let kept = "挪开的文件不会删，在数据目录（\(place)）里一个「damaged-日期-时间」的文件夹里。设置和钥匙串里的密钥不受影响。"
-    let reason = "原因：\(problem.reason)"
-    let note =
-      "选了重新开始，片段、文字收藏和生词本之后还能导回来：到 设置 › 通用 点「导入…」，选上面那个文件夹的 backups 里最新的「Kitty Tools 自动备份 日期.json」。"
+    let title = String(localized: "数据打不开了")
+    let head = String(localized: "Kitty Tools 的数据库读不出来了。")
+    let fresh = String(localized: "重新开始：全部从空的开始；现在的数据库文件、图片和备份一起挪开留着。")
+    let kept = String(
+      localized: "挪开的文件不会删，在数据目录（\(place)）里一个「damaged-日期-时间」的文件夹里。设置和钥匙串里的密钥不受影响。")
+    let reason = String(localized: "原因：\(problem.reason)")
+    // 重新开始时这些 JSON 会拷回新的 backups/（T5，bringBackSettingsBackups），「从备份恢复」里直接选得到。点名是哪一天的：
+    // 重新开始之后当天还会再备一份（那份是空的），「最新的一份」就不是它了
+    let backupDay =
+      problem.settingsBackupDay.map { describe($0, now: now, calendar: calendar) } ?? ""
+    let note = String(
+      localized: """
+        选了重新开始，片段、文字收藏和生词本之后还能导回来：每天的自动备份会留一份在原处，\
+        到 设置 › 通用 › 备份与导出导入 点「从备份恢复」，选 \(backupDay)那一份。
+        """)
     // 说明文件留在哪的那一段后面接这一段（没有那种备份就没有这一段）
     let tail = (problem.hasSettingsBackup ? [kept, note] : [kept]) + [reason]
     guard let backup = problem.backup else {
       // 有那种备份时把话说准：没有的是数据库的备份
-      let none = problem.hasSettingsBackup ? "也没有可用的数据库备份。" : "也没有可用的备份。"
+      let none =
+        problem.hasSettingsBackup
+        ? String(localized: "Kitty Tools 的数据库读不出来了。也没有可用的数据库备份。")
+        : String(localized: "Kitty Tools 的数据库读不出来了。也没有可用的备份。")
       return (
-        "数据打不开了", ([head + none, fresh] + tail).joined(separator: "\n\n"),
-        ["重新开始", "退出"], [.startFresh, .quit]
+        title, ([none, fresh] + tail).joined(separator: "\n\n"),
+        [String(localized: "重新开始"), String(localized: "退出")], [.startFresh, .quit]
       )
     }
     let day = describe(backup.day, now: now, calendar: calendar)
     let restore =
-      "用备份：片段、收藏、收藏夹、生词本和启动器的收藏回到 \(day)备份时的样子；普通剪贴板历史、翻译历史和启动器的使用记录不在备份里，"
-      + "会从空的开始。"
-      + (problem.lost ? "" : "出问题的数据库和当时的图片都留在「damaged-日期-时间」文件夹里（全部数据还在里面）。")
+      problem.lost
+      ? String(
+        localized: "用备份：片段、收藏、收藏夹、生词本和启动器的收藏回到 \(day)备份时的样子；普通剪贴板历史、翻译历史和启动器的使用记录不在备份里，会从空的开始。")
+      : String(
+        localized:
+          "用备份：片段、收藏、收藏夹、生词本和启动器的收藏回到 \(day)备份时的样子；普通剪贴板历史、翻译历史和启动器的使用记录不在备份里，会从空的开始。出问题的数据库和当时的图片都留在「damaged-日期-时间」文件夹里（全部数据还在里面）。"
+      )
     return (
-      "数据打不开了", ([head, restore + "\n" + fresh] + tail).joined(separator: "\n\n"),
-      ["用 \(day)的备份", "重新开始", "退出"], [.restore, .startFresh, .quit]
+      title, ([head, restore + "\n" + fresh] + tail).joined(separator: "\n\n"),
+      [String(localized: "用 \(day)的备份"), String(localized: "重新开始"), String(localized: "退出")],
+      [.restore, .startFresh, .quit]
     )
   }
 }

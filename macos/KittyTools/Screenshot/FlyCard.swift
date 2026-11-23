@@ -21,15 +21,16 @@ enum FlyCard {
     /// 结果的一句话（旁白；减弱动态效果时不飞，刘海岛说这句）
     var title: String {
       switch self {
-      case .copied: "已复制截图"
-      case .saved: "已保存到「\(folder ?? "")」"
+      case .copied: String(localized: "已复制截图")
+      case .saved: String(localized: "已保存到「\(folder ?? "")」")
       }
     }
 
-    /// 存到的文件夹的显示名（访达里的名字：中文系统上 Desktop 是「桌面」，同保存 ▾ 菜单的「存储到「桌面」」）
+    /// 存到的文件夹的显示名（访达里的名字：中文系统上 Desktop 是「桌面」，同保存 ▾ 菜单的「存储到「桌面」」；
+    /// 快速保存的文件夹读存下的名字，第五轮体检 P2）
     var folder: String? {
       if case .saved(let url) = self {
-        FileManager.default.displayName(atPath: url.deletingLastPathComponent().path)
+        ScreenshotOutput.folderName(of: url.deletingLastPathComponent())
       } else {
         nil
       }
@@ -45,7 +46,7 @@ enum FlyCard {
     /// announces：卡片不接鼠标，主动给 VoiceOver 播报结果；录屏自己说（带时长）或由岛说时传 false
     func land(_ badge: Badge, announces: Bool = true) {
       self.badge = badge
-      if announces { Island.announce(badge.title) }
+      if announces { Island.announce("\(badge.title)") }
     }
   }
 

@@ -800,6 +800,7 @@ private final class Probe {
         switch page {
         case .general: AnyView(GeneralTab())
         case .island: AnyView(IslandTab())
+        case .plugins: AnyView(PluginsPage())
         case .clipboard: AnyView(ClipboardTab(store: store))
         case .launcher: AnyView(EmptyView())
         case .launchpad: AnyView(EmptyView())
@@ -811,6 +812,12 @@ private final class Probe {
         case .reminders: AnyView(EmptyView())
         case .dockPreview: AnyView(DockPreviewTab())
         case .finderMenu: AnyView(FinderMenuTab(extensionEnabled: false))
+        case .keepAwake: AnyView(EmptyView())
+        case .bluetoothSnooze: AnyView(BluetoothSnoozeTab(requestAccess: {}, authorized: false))
+        case .smoothScroll: AnyView(SmoothScrollTab(smoothScroll: SmoothScroll(observes: false)))
+        case .appShortcuts: AnyView(AppShortcutsTab(trusted: false))
+        case .keyRemapping: AnyView(EmptyView())
+        case .snippetExpand: AnyView(SnippetExpandTab(store: store, authorized: false))
         case .translate:
           AnyView(TranslateTab(services: services, history: history, speaker: speaker))
         case .hotkeys: AnyView(HotkeysTab(center: hotKeys))

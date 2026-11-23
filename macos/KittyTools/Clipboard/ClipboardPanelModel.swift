@@ -7,7 +7,8 @@
 // 范围和筛选只以搜索框里的标签出现：Tab 开关筛选面板、⇧Tab 循环范围、⌫（搜索为空）先选中最后一个标签再删；
 // ⌘K 或 →（光标在末尾）打开操作面板，← 关掉；两个面板开着时搜索框用来过滤条目，↑↓ ↩ 选择执行，Esc 关掉；
 // ⌘K 里「移到收藏夹 ›」→ / ↩ 进子列表、← / Esc 回来；右键菜单和 ⌘K 是同一份动作表（actions(for:targets:)）；
-// ⌘Y 放大预览（QuickLookView，单独的浮层，不抢键盘：↑↓ 照样在这里换条目）。
+// ⌘Y 放大预览（QuickLookView，单独的浮层，不抢键盘：↑↓ 照样在这里换条目）；搜索框空着时按空格同样开关（handleSpace，
+// 从搜索框的 onSpace 进来：字进了框才判断，输入法组字的空格吞不到；有字时空格照常输入）。
 // 按类型的动作：⌘T 翻译、⌘O 打开链接 / 文件、⌘R 在访达中显示、⌥⌘C 复制路径、图片和文字钉到屏幕；行能拖到别的 App（dragItems）。
 
 import AppKit
@@ -18,13 +19,16 @@ import Observation
   enum Scope: String, CaseIterable {
     case all, favorites, snippets
 
-    var title: String {
+    /// 范围的名字（名词）：显式 key，和动作「收藏」（⌘D）、行上「片段」的标记分开译
+    var titleResource: LocalizedStringResource {
       switch self {
-      case .all: "全部"
-      case .favorites: "收藏"
-      case .snippets: "片段"
+      case .all: LocalizedStringResource("clipboard.scope.all", defaultValue: "全部")
+      case .favorites: LocalizedStringResource("clipboard.scope.favorites", defaultValue: "收藏")
+      case .snippets: LocalizedStringResource("clipboard.scope.snippets", defaultValue: "片段")
       }
     }
+
+    var title: String { String(localized: titleResource) }
 
     var symbol: String {
       switch self {
@@ -57,8 +61,20 @@ import Observation
     case edit(UUID)
     case newSnippet, manageGroups
     case newGroup(Set<UUID>)
+    /// 片段的关键词（片段展开插件添加着时）
+    case keyword(UUID)
+    /// 片段里有 {input}：粘贴 / 复制前一个个填（X20）
+    case fill(Fill)
 
     var id: String { String(describing: self) }
+  }
+
+  /// 填完空要接着做的那次粘贴 / 复制：条目（按当时的顺序）、要问的空、是不是复制、粘贴方式
+  struct Fill {
+    var items: [UUID]
+    var labels: [String]
+    var copies: Bool
+    var plainText: Bool?
   }
 
   /// 一次粘贴 / 复制写进剪贴板的东西：writes 每项是一次写入（逐条粘贴时有多项）
@@ -245,6 +261,15 @@ import Observation
     !query.isEmpty || kind != nil || form != nil || sourceBundleID != nil || groupFilter != .all
   }
 
+  /// 只按一个收藏夹筛（没有搜索词、别的筛选，范围不是片段），这个收藏夹里一条都没有：空状态说「这个收藏夹还是空的」、
+  /// 教怎么放进来，不给「清除搜索和筛选」（第五轮体检 U8：一点连收藏夹筛选也清了）
+  var isEmptyGroup: Bool {
+    guard case .group(let id) = groupFilter, query.isEmpty, kind == nil, form == nil,
+      sourceBundleID == nil, scope != .snippets
+    else { return false }
+    return !store.items.contains { $0.groupID == id }
+  }
+
   /// 片段范围第一行的「＋ 新建片段」：片段范围里搜索 / 筛选没有结果时不画，让位给「没有匹配的条目」和清除按钮
   func showsNewSnippetRow(in items: [ClipItem]) -> Bool {
     scope == .snippets && !(items.isEmpty && isFiltered)
@@ -282,7 +307,7 @@ import Observation
     var counts: [String: (name: String, count: Int)] = [:]
     for item in store.items {
       guard let id = item.sourceBundleID else { continue }
-      counts[id, default: (item.sourceName ?? id, 0)].count += 1
+      counts[id, default: (item.sourceTitle ?? id, 0)].count += 1
     }
     return counts.sorted { $0.value.count > $1.value.count }.map {
       ($0.key, $0.value.name, $0.value.count)
@@ -301,12 +326,14 @@ import Observation
       tokens.append(Token(kind: .type, title: kind.title))
     }
     if let sourceBundleID {
-      let name = store.items.first { $0.sourceBundleID == sourceBundleID }?.sourceName
+      let name = store.items.first { $0.sourceBundleID == sourceBundleID }?.sourceTitle
       tokens.append(Token(kind: .source, title: name ?? sourceBundleID))
     }
     if case .group(let id) = groupFilter {
       tokens.append(
-        Token(kind: .group, title: store.groups.first { $0.id == id }?.name ?? "收藏夹"))
+        Token(
+          kind: .group, title: store.groups.first { $0.id == id }?.name ?? String(localized: "收藏夹"))
+      )
     }
     return tokens
   }
@@ -435,7 +462,8 @@ import Observation
     noteActivity()
     // 不看大写锁定和 fn（⌘⌦ 带 fn），和 OverlayPanel 的 ⌘W 同一套判断
     let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-    let key = Int(event.keyCode)
+    // 字母、标点按打出来的字认（E2：德语键盘上 ⌘Z 不再当成 ⌘Y、法语上不再当成 ⌘W）
+    let key = event.typedKeyCode
     // ⌘W 在对话框开着时先关对话框（同 Esc 逐级退），不让 OverlayPanel 连面板带没保存的字一起收掉
     if dialog != nil, key == kVK_ANSI_W, modifiers == .command {
       dialog = nil
@@ -481,7 +509,7 @@ import Observation
   private func handleCommandKey(_ event: NSEvent) -> Bool {
     let fieldEditor = event.window?.firstResponder as? NSTextView
     let fieldHasSelection = (fieldEditor?.selectedRange().length ?? 0) > 0
-    switch Int(event.keyCode) {
+    switch event.typedKeyCode {
     case kVK_Return: copySelection()
     case kVK_ANSI_C where !fieldHasSelection: copySelection()
     // 焦点在放大预览的正文里（不是搜索框）时 ⌘A 是全选那段文字
@@ -513,7 +541,7 @@ import Observation
       guard let single = singleTarget, single.kind == .file else { return beep() }
       revealInFinder(single)
     default:
-      guard let digit = Self.digitKeys.firstIndex(of: Int(event.keyCode)) else { return false }
+      guard let digit = HotKey.digitKeys.firstIndex(of: Int(event.keyCode)) else { return false }
       let items = visibleItems
       if digit < items.count { paste([items[digit]]) }
     }
@@ -525,11 +553,6 @@ import Observation
     NSSound.beep()
     return true
   }
-
-  private static let digitKeys = [
-    kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8,
-    kVK_ANSI_9,
-  ]
 
   /// extending：⇧↑ / ⇧↓，从锚点到新位置整段选中（和系统列表一致）
   private func move(by offset: Int, extending: Bool = false) {
@@ -552,6 +575,9 @@ import Observation
       multiSelection = []
     }
     select(items[next])
+    // 焦点一直在搜索框：说出选中了什么（A1；图片的摘要本来就是「图片 宽×高」，不再说一遍种类）
+    let item = items[next]
+    Island.announceSettled(item.title, item.kind == .image ? nil : item.kind.title)
   }
 
   // MARK: 放大预览
@@ -570,6 +596,15 @@ import Observation
     } else {
       NSSound.beep()
     }
+  }
+
+  /// 搜索框空着时打的空格（CommandTextField.onSpace）：同 ⌘Y。筛选 / 操作面板开着时框里是过滤词、对话框开着时
+  /// 不是它的事，交还输入框；按住不放的连发吞掉、不来回开关
+  func handleSpace() -> Bool {
+    noteActivity()
+    guard palette == nil, dialog == nil else { return false }
+    if !Style.isKeyRepeat { toggleQuickLook() }
+    return true
   }
 
   /// 预览浮层收走了（缩回放完、点了外面、跟着面板收起）：同步状态、拆掉卡片
@@ -666,7 +701,9 @@ import Observation
   var pastesPlainByDefault: Bool { UserDefaults.standard.bool(forKey: Prefs.clipboardPastePlain) }
 
   /// ⌥↩ 的名字（⌘K、右键、底栏按住 ⌥ 的提示同一个）
-  var alternatePasteTitle: String { pastesPlainByDefault ? "保留格式粘贴" : "粘贴为纯文本" }
+  var alternatePasteTitle: LocalizedStringResource {
+    pastesPlainByDefault ? "保留格式粘贴" : "粘贴为纯文本"
+  }
 
   /// 多条怎么粘（体检 B3）：全是文本合成一段、全是文件一次粘进去、其余（含图片，或文本和文件混着）逐条
   enum PasteMode {
@@ -680,7 +717,7 @@ import Observation
     }
 
     /// ⌘K 首项、底栏多选按钮同一个名字
-    var verb: String {
+    var verb: LocalizedStringResource {
       switch self {
       case .single: "粘贴"
       case .merged: "合并粘贴"
@@ -695,13 +732,15 @@ import Observation
 
   /// 全是文本：按复制先后换行合成一段（片段展开占位符）粘贴，并记成一条新历史；全是文件：一次写进全部文件、一次 ⌘V；
   /// 其余（含图片，或文本和文件混着）：按复制先后逐条粘贴，文本之间补换行，间隔 250ms（目标 App 要时间处理上一次 ⌘V）
-  func paste(_ items: [ClipItem], plainText: Bool? = nil) {
+  func paste(_ items: [ClipItem], plainText: Bool? = nil, inputs: [String: String]? = nil) {
     guard !items.isEmpty else { return }
     if let gone = unavailable(items) {
       island?.show("没能粘贴", detail: gone, tone: .error)
       return
     }
-    let payload = payload(for: items, plainText: plainText ?? pastesPlainByDefault)
+    if inputs == nil, asksInputs(items, copies: false, plainText: plainText) { return }
+    let payload = payload(
+      for: items, plainText: plainText ?? pastesPlainByDefault, inputs: inputs ?? [:])
     pendingCopy = nil  // 粘贴的那条才是剪贴板里的
     // 第 8 批：呼出面板前焦点在自家便签里（正文 / 标题框）→ 收起面板、把 key 还给它、直接调它的 paste(_:)。
     // 这条路不发合成按键、不要辅助功能授权（放在授权检查前面）
@@ -720,11 +759,12 @@ import Observation
     }
     guard Permissions.isAccessibilityTrusted else {
       writeClipboard(payload.writes[0])
-      // 是警告不是成功；系统授权框一点，没固定的面板就收了，底栏提示会跟着丢
+      // 是警告不是成功；系统授权框一点，没固定的面板就收了，底栏提示会跟着丢。
+      // 三目先给不是可选的 let：直接写在可选参数里只有第一个分支被抽进目录（TRANSLATION.md 二）
+      let detail: LocalizedStringResource =
+        payload.writes.count > 1 ? "只复制了第 1 条，授权辅助功能后才能直接粘贴" : "授权辅助功能后才能直接粘贴"
       island?.show(
-        "已复制到剪贴板",
-        detail: payload.writes.count > 1 ? "只复制了第 1 条，授权辅助功能后才能直接粘贴" : "授权辅助功能后才能直接粘贴",
-        tone: .warning, actions: [.settings(for: .accessibility)])
+        "已复制到剪贴板", detail: detail, tone: .warning, actions: [.settings(for: .accessibility)])
       Permissions.requestAccessibility()
       return
     }
@@ -746,7 +786,7 @@ import Observation
   /// 只写剪贴板，不关面板；列表这时不动，收起面板时再把它挪到最前（合成的记一条新历史，体检 A8），
   /// 下次打开第一条就是剪贴板里的。含图片的混合多选只能写第 1 条，如实说。底栏提示；放大预览开着时底栏被它盖住，改走刘海。
   /// 右键菜单、⌘Y 页脚的「复制」传被点的那一条，不管勾选了什么（体检 B9）
-  func copy(_ items: [ClipItem], plainText: Bool = false) {
+  func copy(_ items: [ClipItem], plainText: Bool = false, inputs: [String: String]? = nil) {
     guard !items.isEmpty else { return }
     let partial = PasteMode(items) == .sequential
     let written = partial ? [items[0]] : items
@@ -754,25 +794,30 @@ import Observation
       island?.show("没能复制", detail: gone, tone: .error)
       return
     }
-    let payload = payload(for: written, plainText: plainText)
+    // 填完回来按原来的那几条再走一遍（含图片的混合多选照旧只复制第 1 条、照旧警告）
+    if inputs == nil, asksInputs(items, copies: true, plainText: plainText) { return }
+    let payload = payload(for: written, plainText: plainText, inputs: inputs ?? [:])
     writeClipboard(payload.writes[0])
     pendingCopy = (payload.entry, clipboardChangeCount())
     let mode = PasteMode(items)
     if partial {
       // 没做全是警告，不带绿色对勾
-      let detail = "剪贴板一次只能放一条，含图片的多选请直接粘贴"
+      let detail: LocalizedStringResource = "剪贴板一次只能放一条，含图片的多选请直接粘贴"
       guard isQuickLooking, let island else {
-        return showToast(.warning("只复制了第 1 条"), spoken: "只复制了第 1 条，\(detail)")
+        return showToast(
+          .warning("只复制了第 1 条"),
+          spoken: String(localized: "只复制了第 1 条，\(String(localized: detail))"))
       }
       return island.show("只复制了第 1 条", detail: detail, tone: .warning)
     }
-    let text = mode == .together ? "已复制 \(payload.writes[0].count) 个文件" : "已复制"
+    let text: LocalizedStringResource =
+      mode == .together ? "已复制 \(payload.writes[0].count) 个文件" : "已复制"
     guard isQuickLooking, let island else { return showToast(.message(text)) }
-    let detail =
+    let detail: LocalizedStringResource =
       switch mode {
       case .merged: "\(items.count) 条合成一段"
-      case .together: Island.excerpt(items[0].title) + " 等 \(items.count) 条"
-      case .single, .sequential: Island.excerpt(items[0].title)
+      case .together: "\(Island.excerpt(items[0].title)) 等 \(items.count) 条"
+      case .single, .sequential: "\(Island.excerpt(items[0].title))"
       }
     island.show(text, detail: detail)
   }
@@ -792,7 +837,7 @@ import Observation
 
   /// 粘不出东西的条目（图片文件丢了、文件都已被移走）：写进去是空的，⌘V 会粘出剪贴板里原来的内容，
   /// 所以先拦下来说清楚。nil = 都能用
-  private func unavailable(_ items: [ClipItem]) -> String? {
+  private func unavailable(_ items: [ClipItem]) -> LocalizedStringResource? {
     for item in items {
       switch item.kind {
       case .text: continue
@@ -839,14 +884,14 @@ import Observation
 
   /// 没固定就先收起，再交给系统在后台打开（同步的 NSWorkspace.open 要等 App 启动完才返回，面板一直挂着、界面卡住；
   /// 同启动器，体检 B13）；打不开时面板多半已收起，用刘海岛说
-  private func openInBackground(_ urls: [URL], failure: String) {
+  private func openInBackground(_ urls: [URL], failure: LocalizedStringResource) {
     if !isPinned { hidePanel() }
     for url in urls {
       NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) {
         [weak self] _, error in
         guard let error else { return }
         Task { @MainActor in
-          self?.island?.show(failure, detail: error.localizedDescription, tone: .error)
+          self?.island?.show(failure, detail: "\(error.localizedDescription)", tone: .error)
         }
       }
     }
@@ -861,7 +906,7 @@ import Observation
     writeClipboard([plainItem(text)])
     pendingCopy = (.new(entry), clipboardChangeCount())
     guard isQuickLooking, let island else { return showToast(.message("已复制路径")) }
-    island.show("已复制路径", detail: Island.excerpt(text))
+    island.show("已复制路径", detail: "\(Island.excerpt(text))")
   }
 
   /// ⌘Y 大卡里选中文字按 ⌘C（体检 B11）：只拷纯文本（不带语法着色、搜索词黄底、放大的字号），经 Paster.write 写
@@ -871,7 +916,7 @@ import Observation
     guard !text.isEmpty else { return }
     Paster.write(string: text, record: true)
     guard let island else { return showToast(.message("已复制")) }
-    island.show("已复制", detail: Island.excerpt(text))
+    island.show("已复制", detail: "\(Island.excerpt(text))")
   }
 
   /// 钉得了的条目：图片，和有字的文字条目（2026-11-05，同「钉住剪贴板内容」：排成卡片 PinBoard.textCard）。文件不钉（只有文件名）
@@ -894,9 +939,7 @@ import Observation
       island?.show("没能钉到屏幕", detail: gone, tone: .error)
       return
     }
-    let mouse = NSEvent.mouseLocation
-    guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main
-    else { return }
+    guard let screen = NSScreen.underMouse else { return }
     let (scale, visible) = (screen.backingScaleFactor, screen.visibleFrame)
     if !isPinned { hidePanel() }
     let files = store.images
@@ -938,8 +981,9 @@ import Observation
       y: (visible.midY - height / 2 - offset).rounded(), width: width, height: height)
   }
 
-  /// 新建片段（名称存成备注，搜索时能搜到；体检 C2）：被当前范围、筛选、搜索挡住看不见时（像没存上），用刘海说一声
-  func saveSnippet(_ text: String, name: String = "") {
+  /// 新建片段（名称存成备注，搜索时能搜到；体检 C2）：被当前范围、筛选、搜索挡住看不见时（像没存上），用刘海说一声。
+  /// keyword：片段展开的关键词（对话框里查过存得了；空的不动已有的）
+  func saveSnippet(_ text: String, name: String = "", keyword: String = "") {
     store.saveSnippet(text)
     // 刚存的那条按正文找：store.record 按复制时间插，不保证在最前（同 ClipboardStore.saveSnippet）
     guard let saved = store.items.first(where: { $0.kind == .text && $0.text == text }) else {
@@ -947,8 +991,13 @@ import Observation
     }
     let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
     if !name.isEmpty { store.update([saved.id]) { $0.note = name } }
+    if let keyword = SnippetKeyword.normalized(keyword),
+      keywordCheck(keyword, editing: saved.id).problem == nil
+    {
+      store.update([saved.id]) { $0.keyword = keyword }
+    }
     guard !visibleItems.contains(where: { $0.id == saved.id }) else { return }
-    island?.show("已存为片段", detail: Island.excerpt(text), symbol: "text.badge.star")
+    island?.show("已存为片段", detail: "\(Island.excerpt(text))", symbol: "text.badge.star")
   }
 
   /// 复制图片里识别出的文字（对标 Raycast「Copy Text from Image」、Maccy 的复制识别文字）：是新内容，记进历史
@@ -958,7 +1007,7 @@ import Observation
     Paster.write(string: text, record: true)
     // 放大预览开着时底栏被它盖住，走岛（同 ⌘C）
     guard isQuickLooking, let island else { return showToast(.message("已复制图中文字")) }
-    island.show("已复制图中文字", detail: Island.excerpt(text))
+    island.show("已复制图中文字", detail: "\(Island.excerpt(text))")
   }
 
   /// ⌘P / 底栏图钉：固定 = 点面板外面不收起（Esc、⌘W、再按热键照样收，mac-overlay-panel §2）。
@@ -967,19 +1016,57 @@ import Observation
     let pinning = defaults.bool(forKey: Prefs.clipboardHideOnUnfocus)
     defaults.set(!pinning, forKey: Prefs.clipboardHideOnUnfocus)
     noteActivity()
-    let text = pinning ? "已固定" : "已取消固定"
+    let text: LocalizedStringResource = pinning ? "已固定" : "已取消固定"
     // 放大预览开着时底栏和图钉都被它盖住，改走刘海（岛自己会播报）
     guard isQuickLooking, let island else { return showToast(.message(text)) }
     island.show(text, symbol: pinning ? "pin.fill" : "pin")
   }
 
-  /// 要写进剪贴板的内容（见 paste）。片段一律纯文本、展开占位符；{clipboard} 用调用时剪贴板里的那一份
-  func payload(for items: [ClipItem], plainText: Bool) -> Payload {
+  /// 片段展开插件添加着没有（新建片段那一行关键词、⌘K「关键词…」看它）；截图自检换成固定的，不读宿主 App 的偏好
+  @ObservationIgnored var keywordsOn: () -> Bool = { Feature.snippetExpand.isOn }
+
+  /// 片段展开里带 {input} 的片段（关键词已经删掉）：选中这一条，走粘贴，粘贴前照常一个个问（面板已经呼出来了）
+  func fillSnippet(_ item: ClipItem) {
+    select(item)
+    paste([item])
+  }
+
+  /// 片段里有 {input} 要填（X20）：开填空对话框、这次先不粘，填完由 finishFill 接着做；没有要填的返回 false
+  private func asksInputs(_ items: [ClipItem], copies: Bool, plainText: Bool?) -> Bool {
+    var seen = Set<String>()
+    let labels = items.filter(\.isSnippet).flatMap { Snippet.inputs(in: $0.text ?? "") }
+      .filter { seen.insert($0).inserted }
+    guard !labels.isEmpty else { return false }
+    dialog = .fill(
+      Fill(items: items.map(\.id), labels: labels, copies: copies, plainText: plainText))
+    noteActivity()
+    return true
+  }
+
+  /// 填空对话框填完：关对话框，拿填的字接着粘贴 / 复制（条目这期间被删了的跳过）
+  func finishFill(_ fill: Fill, values: [String: String]) {
+    dialog = nil
+    let items = fill.items.compactMap { id in store.items.first { $0.id == id } }
+    guard !items.isEmpty else {
+      island?.show(fill.copies ? "没能复制" : "没能粘贴", detail: "这几条已经删掉了", tone: .error)
+      return
+    }
+    if fill.copies {
+      copy(items, plainText: fill.plainText ?? false, inputs: values)
+    } else {
+      paste(items, plainText: fill.plainText, inputs: values)
+    }
+  }
+
+  /// 要写进剪贴板的内容（见 paste）。片段一律纯文本、展开占位符；{clipboard} 用调用时剪贴板里的那一份，{input} 用填的字
+  /// （nil = 没问过：拖出去的那条路，{input…} 原样留着）
+  func payload(for items: [ClipItem], plainText: Bool, inputs: [String: String]? = nil) -> Payload {
     let clipboard = { NSPasteboard.general.string(forType: .string) }
     switch PasteMode(items) {
     case .merged:
       var merged = ClipItem(kind: .text)
-      merged.text = Self.merged(items, clipboard: clipboard(), history: historyText)
+      merged.text = Self.merged(
+        items, clipboard: clipboard(), history: historyText, inputs: inputs)
       return Payload(writes: [[plainItem(merged.text ?? "")]], entry: .new(merged))
     case .together:
       // 访达复制多个文件也是一次写进多个 file URL；同一个文件只写一次
@@ -993,7 +1080,8 @@ import Observation
     let writes = items.enumerated().map { index, item in
       var write: [NSPasteboardItem]
       if item.isSnippet, let text = item.text {
-        let expanded = Snippet.expand(text, clipboard: clipboard, history: historyText)
+        let expanded = Snippet.expand(
+          text, clipboard: clipboard, history: historyText, inputs: inputs)
         caretMoves = items.count == 1 ? expanded.charactersAfterCursor : 0
         write = [plainItem(expanded.text)]
       } else if plainText, item.kind == .text {
@@ -1016,23 +1104,20 @@ import Observation
   /// 所有 {clipboard} 共用调用前读的同一份
   static func merged(
     _ items: [ClipItem], clipboard: String?, history: (Int) -> String? = { _ in nil },
-    now: Date = .now
+    inputs: [String: String]? = [:], now: Date = .now
   ) -> String {
     items.sorted { $0.copiedAt < $1.copiedAt }.compactMap { item in
       guard let text = item.text else { return nil }
       guard item.isSnippet else { return text }
-      return Snippet.expand(text, clipboard: { clipboard }, history: history, now: now).text
+      return Snippet.expand(
+        text, clipboard: { clipboard }, history: history, inputs: inputs, now: now
+      ).text
     }
     .joined(separator: "\n")
   }
 
-  /// 片段 {clipboard:N}：历史第 N 条文本（按全部历史、不看筛选，跳过图片、文件和片段：
-  /// 片段是模板不是复制来的字，刚粘过的片段排在最前，不跳过的话 {clipboard:1} 会取到它自己）
-  private func historyText(_ n: Int) -> String? {
-    guard n > 0 else { return nil }
-    return store.items.lazy.filter { $0.kind == .text && !$0.isSnippet }.dropFirst(n - 1).first?
-      .text
-  }
+  /// 片段 {clipboard:N}（ClipboardStore.historyText）
+  private func historyText(_ n: Int) -> String? { store.historyText(n) }
 
   private func plainItem(_ text: String) -> NSPasteboardItem {
     let item = NSPasteboardItem()
@@ -1115,9 +1200,9 @@ import Observation
 
   /// 能撤销的操作的提示：底栏「… · 撤销 ⌘Z」5 秒（播报「…，按 Command-Z 撤销」）；放大预览开着时底栏被它盖住，
   /// 另走刘海（岛自己会播报）
-  private func showUndo(_ text: String, symbol: String) {
+  private func showUndo(_ text: LocalizedStringResource, symbol: String) {
     noteActivity()
-    showToast(.undo(text), spoken: "\(text)，按 Command-Z 撤销")
+    showToast(.undo(text), spoken: String(localized: "\(String(localized: text))，按 Command-Z 撤销"))
     if isQuickLooking, let island {
       island.show(
         text, tone: .info, symbol: symbol,
@@ -1132,6 +1217,24 @@ import Observation
     store.deleteGroup(group.id)
     if groupFilter == .group(group.id) { groupFilter = .all }
     showUndo("已删除收藏夹「\(group.name)」", symbol: "folder.badge.minus")
+  }
+
+  /// 关键词框里打的这个怎么样（editing：正在编的这一条，不和自己比；新建时 nil）。只和别的片段比
+  func keywordCheck(_ keyword: String, editing id: UUID?) -> SnippetKeyword.Check {
+    let others = store.items.compactMap { item -> SnippetKeyword.Other? in
+      guard item.isSnippet, item.id != id, let keyword = item.keyword else { return nil }
+      return SnippetKeyword.Other(
+        keyword: keyword, title: SnippetKeyword.title(note: item.note, text: item.text))
+    }
+    return SnippetKeyword.check(keyword, others: others)
+  }
+
+  /// 存关键词（「关键词…」对话框）：空的就是去掉；存不了的不存（对话框里已经拦着）
+  func setKeyword(_ raw: String, of id: UUID) {
+    let keyword = SnippetKeyword.normalized(raw)
+    guard keyword == nil || keywordCheck(raw, editing: id).problem == nil else { return }
+    store.update([id]) { $0.keyword = keyword }
+    noteActivity()
   }
 
   /// 编辑正文（按条目缓存的形态、链接、美化结果连正文一起记，换了正文自己就不认了：体检 B18）
@@ -1167,7 +1270,7 @@ import Observation
   func showToast(_ toast: BarNotice, spoken: String? = nil) {
     toastTask?.cancel()
     self.toast = toast
-    if !(isQuickLooking && island != nil) { Island.announce(spoken ?? toast.text) }
+    if !(isQuickLooking && island != nil) { Island.post(spoken ?? toast.text) }
     // 到期只让提示淡出；删掉的在面板收起（固定着时闲够 2 分钟）时才提交，在那之前 ⌘Z 一直有效
     toastTask = Task {
       try? await Task.sleep(for: .seconds(toast.seconds))
@@ -1212,7 +1315,7 @@ import Observation
     let single: ClipItem? = ids == [item.id] ? item : nil
     var actions: [ActionMenu.Item] = []
     func add(
-      _ title: String, _ symbol: String, _ shortcut: String? = nil, section: Int,
+      _ title: LocalizedStringResource, _ symbol: String, _ shortcut: String? = nil, section: Int,
       id: String? = nil, submenu: [ActionMenu.Item]? = nil, isDestructive: Bool = false,
       run: @escaping () -> Void = {}
     ) {
@@ -1265,7 +1368,9 @@ import Observation
           prettyJSON.toggle()
         }
       }
-      add("放大预览", "eye", "⌘Y", section: 1) { [unowned self] in
+      // 写这时按得动的那个键：搜索框空着是空格，有字时空格要打进框里，写 ⌘Y
+      let previewKey = query.isEmpty ? String(localized: "空格") : "⌘Y"
+      add("放大预览", "eye", previewKey, section: 1) { [unowned self] in
         select(single)
         toggleQuickLook()
       }
@@ -1287,7 +1392,7 @@ import Observation
     }
     if let single, single.kind == .text, !single.isSnippet {
       add("存为片段", "text.badge.star", section: 2) { [unowned self] in
-        store.update([single.id]) { $0.isSnippet = true }
+        store.markSnippet(single.id)
       }
     }
     // 移出片段（体检 C1）：多选时有片段就给
@@ -1300,6 +1405,10 @@ import Observation
     if let single {
       // 备注：所有条目都能写（体检 A3），不设快捷键（⌘R 给了在访达中显示）
       add("备注…", "note.text", section: 2) { [unowned self] in dialog = .note(single.id) }
+      // 片段的关键词：片段展开插件添加着才有（关键词只在它那里有用）
+      if single.isSnippet, keywordsOn() {
+        add("关键词…", "keyboard", section: 2) { [unowned self] in dialog = .keyword(single.id) }
+      }
       if single.kind == .text {
         add("编辑内容…", "pencil", "⌘E", section: 2) { [unowned self] in
           dialog = .edit(single.id)
@@ -1317,7 +1426,7 @@ import Observation
     var items = store.groups.map { group in
       let isIn = !targets.isEmpty && targets.allSatisfy { $0.groupID == group.id }
       return ActionMenu.Item(
-        title: group.name, symbol: "folder", isChecked: isIn, id: "group.\(group.id)"
+        title: "\(group.name)", symbol: "folder", isChecked: isIn, id: "group.\(group.id)"
       ) { [unowned self] in assign(ids, to: isIn ? nil : group.id) }
     }
     if targets.contains(where: { $0.groupID != nil }) {
@@ -1349,7 +1458,8 @@ import Observation
   var filterItems: [ActionMenu.Item] {
     func scopeItem(_ scope: Scope) -> ActionMenu.Item {
       ActionMenu.Item(
-        title: scope.title, symbol: scope.symbol, detail: "范围", isChecked: self.scope == scope,
+        title: scope.titleResource, symbol: scope.symbol, detail: "范围",
+        isChecked: self.scope == scope,
         id: "scope.\(scope.rawValue)"
       ) { [unowned self] in self.scope = self.scope == scope ? .all : scope }
     }
@@ -1360,7 +1470,7 @@ import Observation
       let isOn = groupFilter == .group(group.id)
       items.append(
         ActionMenu.Item(
-          title: group.name, symbol: "folder", detail: "收藏夹 \(groupCounts[group.id] ?? 0)",
+          title: "\(group.name)", symbol: "folder", detail: "收藏夹 \(groupCounts[group.id] ?? 0)",
           isChecked: isOn, id: "group.\(group.id)"
         ) { [unowned self] in groupFilter = isOn ? .all : .group(group.id) })
     }
@@ -1369,7 +1479,7 @@ import Observation
       let isOn = self.kind == kind && form == nil
       items.append(
         ActionMenu.Item(
-          title: kind.title, symbol: kind.symbol, detail: "类型", isChecked: isOn,
+          title: kind.titleResource, symbol: kind.symbol, detail: "类型", isChecked: isOn,
           id: "kind.\(kind.rawValue)", section: 1
         ) { [unowned self] in
           form = nil
@@ -1380,7 +1490,7 @@ import Observation
       let isOn = self.form == form
       items.append(
         ActionMenu.Item(
-          title: form.title, symbol: form.symbol, detail: "形态", isChecked: isOn,
+          title: form.titleResource, symbol: form.symbol, detail: "形态", isChecked: isOn,
           id: "form.\(form.rawValue)", section: 1
         ) { [unowned self] in
           self.form = isOn ? nil : form
@@ -1391,7 +1501,7 @@ import Observation
       let isOn = sourceBundleID == source.bundleID
       items.append(
         ActionMenu.Item(
-          title: source.name, symbol: "app", image: AppIcons.icon(for: source.bundleID),
+          title: "\(source.name)", symbol: "app", image: AppIcons.icon(for: source.bundleID),
           detail: "来源 \(source.count)", isChecked: isOn, id: "source.\(source.bundleID)",
           section: 2
         ) { [unowned self] in sourceBundleID = isOn ? nil : source.bundleID })
@@ -1433,9 +1543,11 @@ import Observation
   }
 
   private func moveAction(by offset: Int) {
-    let count = filteredActions.count
+    let actions = filteredActions
+    let count = actions.count
     guard count > 0 else { return }
     actionSelection = (actionSelection + offset + count) % count
+    ActionMenu.announce(actions[actionSelection])
   }
 
   func runSelectedAction() {
@@ -1489,7 +1601,9 @@ import Observation
   /// 按条目分的子目录里（同尺寸的截图名字一样，不能共用一个文件）；同一条的图不会变，克隆过就复用
   /// （启动时清空、用时不删：放下后对方可能还在读）
   private func dragFile(for item: ClipItem) -> URL? {
-    let name = item.image.map { "图片 \($0.width)×\($0.height).png" } ?? "图片.png"
+    let name =
+      item.image.map { String(localized: "图片 \(String($0.width))×\(String($0.height)).png") }
+      ?? String(localized: "图片.png")
     let folder = ShotShelf.dragDirectory.appending(path: item.id.uuidString)
     let url = folder.appending(path: name)
     let files = FileManager.default

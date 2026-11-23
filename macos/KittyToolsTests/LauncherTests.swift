@@ -60,8 +60,9 @@ struct LauncherTests {
   }
 
   @Test func systemAppsMatchChineseAndEnglish() {
-    // 真实系统 App：显示名是中文，英文缩写要从文件名来（am），中文名 / 拼音也能搜
-    let monitor = AppCatalog.item(path: "/System/Applications/Utilities/Activity Monitor.app")
+    // 真实系统 App（系统语言是简体中文）：标题是中文，英文缩写要从文件名来（am），中文名 / 拼音也能搜
+    let monitor = AppCatalog.item(
+      path: "/System/Applications/Utilities/Activity Monitor.app", languages: ["zh-Hans"])
     #expect(monitor.title == "活动监视器" && monitor.subtitle == "Activity Monitor")
     for query in ["am", "activity", "活动", "hdjsq"] {
       #expect(LauncherMatch.score(query, item: monitor) > 0, "\(query)")
@@ -106,12 +107,19 @@ struct LauncherTests {
       }
       return outer.path
     }
-    let lproj = AppCatalog.item(
-      path: try make(
-        "rednote", linked: true, info: ["CFBundleDisplayName": "rednote"],
-        strings: ["CFBundleDisplayName": "小红书"]))
-    let plain = AppCatalog.item(
-      path: try make("rednote2", linked: false, info: ["CFBundleDisplayName": "小红书"], strings: nil))
+    let lprojPath = try make(
+      "rednote", linked: true, info: ["CFBundleDisplayName": "rednote"],
+      strings: ["CFBundleDisplayName": "小红书"])
+    let plainPath = try make(
+      "rednote2", linked: false, info: ["CFBundleDisplayName": "小红书"], strings: nil)
+    let lproj = AppCatalog.item(path: lprojPath, languages: ["zh-Hans"])
+    let plain = AppCatalog.item(path: plainPath, languages: ["zh-Hans"])
+    // 系统是英文：中文名只写在里面那层主 Info.plist 的，标题是外面那层的名字，中文名照样搜得到
+    let english = AppCatalog.item(path: plainPath, languages: ["en"])
+    #expect(english.title == "rednote2")
+    for query in ["xhs", "小红", "rednote"] {
+      #expect(LauncherMatch.score(query, item: english) > 0, "\(query)")
+    }
     for app in [lproj, plain] {
       #expect(app.title == "小红书")
       for query in ["xhs", "xiaohongshu", "小红", "rednote"] {
@@ -281,10 +289,8 @@ struct LauncherTests {
     #expect(title("https://linux.do/latest") == "linux.do/latest")
     #expect(title("http://10.10.33.176:8089/app/") == "10.10.33.176:8089/app/")
     #expect(title("https://zh.wikipedia.org/wiki/%E8%8B%B9%E6%9E%9C") == "zh.wikipedia.org/wiki/苹果")
-    #expect(DirectItems.existingPath(from: "~") == NSHomeDirectory())
-    #expect(DirectItems.existingPath(from: "/tmp") == "/tmp")
-    #expect(DirectItems.existingPath(from: "./tmp") == nil)  // 不认相对路径
-    #expect(DirectItems.existingPath(from: "/no/such/path") == nil)
+    // 路径归路径模式（PathBrowser），直达项不再出路径
+    #expect(DirectItems.items(for: "/tmp").isEmpty && DirectItems.items(for: "~").isEmpty)
   }
 
   @Test func calculator() {
@@ -411,9 +417,10 @@ struct LauncherTests {
   @Test func tabCompletionAndAlternates() throws {
     let calculation = try #require(Calculator.item(for: "12*3+1"))
     #expect(LauncherModel.completion(for: calculation) == "37")  // 结果写回输入框接着算
+    // 没带补全的路径（收藏、常用还原出来的）补出路径本身、不 stat：是文件夹的话路径模式直接列它里面
     let directory = LauncherItem(
       kind: .path, target: "/System/Library", title: "Library", subtitle: "")
-    #expect(LauncherModel.completion(for: directory) == "/System/Library/")
+    #expect(LauncherModel.completion(for: directory) == "/System/Library")
     let file = LauncherItem(
       kind: .path, target: "/System/Library/CoreServices/SystemVersion.plist", title: "",
       subtitle: "")
@@ -534,9 +541,13 @@ struct LauncherTests {
     #expect(row.kind == .clip && row.title == "打开剪贴板历史")
     model.query = "CB "
     #expect(model.results.map(\.title) == ["打开剪贴板历史"])
-    #expect(model.primaryAction(for: row).title == "打开" && row.hotKeyAction == .clipboard)
+    #expect(
+      String(localized: model.primaryAction(for: row).title) == "打开"
+        && row.hotKeyAction == .clipboard)
     // 没有可复制、可补全的东西：⌘C 交给输入框，菜单里只有主动作
-    #expect(model.copyTitle(for: row) == nil && LauncherModel.completion(for: row) == nil)
+    #expect(
+      model.copyTitle(for: row).map { String(localized: $0) } == nil
+        && LauncherModel.completion(for: row) == nil)
     model.toggleActions()
     #expect(model.actions.map(\.shortcut) == ["↩"])
   }
@@ -725,5 +736,211 @@ struct Checkup4LauncherTests {
     #expect(model.results.contains { $0.kind == .search })
     model.query = "q"
     #expect(!model.results.contains { $0.kind == .search })
+  }
+}
+
+/// 多语言第 6 批（启动器，TRANSLATION.md「搜索中英都认」D7）：中文界面打英文、英文界面打中文 / 拼音都搜得到；英文界面的
+/// 计算器单位、汇率示例、脚本头部的英文写法、自带脚本复制出去只留一种语言、网页搜索预设只翻显示。单测宿主是中文界面：
+/// 英文界面的那一半用「标题是英文」的条目（和英文界面里建出来的一样）来验
+struct LauncherLanguageTests {
+  private func matches(_ query: String, _ item: LauncherItem) -> Bool {
+    LauncherMatch.score(query, item: item) > 0
+  }
+
+  @Test func actionsMatchBothLanguages() throws {
+    // 中文界面：没写英文别名的「截图历史」，打它的英文标题也找得到（英文来自目录）
+    let history = try #require(
+      LauncherItem.actions().first { $0.target == HotKeyAction.shotHistory.rawValue })
+    #expect(history.title == "截图历史")
+    #expect(matches("screenshot history", history) && matches("jietu", history))
+    // 英文界面：标题是英文，中文原文、全拼、首字母照样进搜索名
+    let resource = HotKeyAction.shotHistory.titleResource
+    let english = LauncherItem.searchTerms(resource.english, resource)
+    let item = LauncherItem(
+      kind: .action, target: "x", title: resource.english, subtitle: "", names: english.names,
+      initials: english.initials)
+    #expect(item.title == "Screenshot History")
+    #expect(matches("截图历史", item) && matches("jietulishi", item) && matches("jtls", item))
+    #expect(matches("screenshot", item))
+  }
+
+  @Test func systemCommandsMatchBothLanguages() throws {
+    let lock = try #require(SystemCommands.items.first { $0.target == "lock" })
+    for query in ["锁定屏幕", "suoding", "锁屏", "lock screen", "lock"] {
+      #expect(matches(query, lock), "\(query)")
+    }
+    // 显示的名字在英文里照系统的叫法，确认框带「…」
+    #expect(SystemCommand.lock.titleResource.english == "Lock Screen")
+    #expect(SystemCommand.logout.titleResource.english == "Log Out…")
+  }
+
+  /// 2026-11-16 手测反馈「我的应用都是英文，为什么启动器的别名展示成了中文」：标题是访达里的名字，跟系统的语言、
+  /// 不跟本 App 的界面语言（单测宿主钉在中文，英文系统照样是英文名）；中文名、拼音、英文名、缩写两种系统上都能搜
+  @Test func appTitleFollowsSystemLanguageAndSearchKeepsBoth() {
+    let path = "/System/Applications/Utilities/Disk Utility.app"
+    let english = AppCatalog.item(path: path, languages: ["en-CN", "zh-Hans-CN"])
+    let chinese = AppCatalog.item(path: path, languages: ["zh-Hans-CN", "en-CN"])
+    #expect(english.title == "Disk Utility" && chinese.title == "磁盘工具")
+    #expect(english.subtitle.isEmpty && chinese.subtitle == "Disk Utility")
+    for app in [english, chinese] {
+      for query in ["disk utility", "du", "磁盘", "cipan", "cpgj"] {
+        #expect(LauncherMatch.score(query, item: app) > 0, "\(query)")
+      }
+    }
+    // 英文名和文件名不一样的（FindMy.app 叫 Find My）、别的语言（德文系统叫 Notizen）都照包里的本地化名
+    let findMy = AppCatalog.item(path: "/System/Applications/FindMy.app", languages: ["en"])
+    #expect(findMy.title == "Find My" && LauncherMatch.score("查找", item: findMy) > 0)
+    #expect(
+      AppCatalog.systemName(path: "/System/Applications/Notes.app", languages: ["de"]) == "Notizen")
+    // 应用别名页、「用 X 打开」、剪贴板来源用的 systemName 和标题同一套
+    #expect(AppCatalog.systemName(path: path, languages: ["en"]) == "Disk Utility")
+    // 中文名优先只看系统的第一语言是不是简体中文
+    #expect(AppCatalog.prefersChinese(["zh-Hans-CN"]) && AppCatalog.prefersChinese(["zh-CN"]))
+    #expect(!AppCatalog.prefersChinese(["en-CN", "zh-Hans-CN"]))
+    #expect(
+      !AppCatalog.prefersChinese(["zh-Hant-TW"]) && !AppCatalog.prefersChinese(["ja", "zh-Hans"]))
+  }
+
+  @Test func scriptHeaderLanguageVariants() throws {
+    let head = """
+      #!/bin/zsh
+      # @kitty.title 防止睡眠
+      # @kitty.title.en Keep Awake
+      # @kitty.description 一小时不睡
+      # @kitty.description.en Stay awake for an hour
+      # @kitty.argument1 城市
+      # @kitty.argument1.en City
+      """
+    let zh = try #require(ScriptCommand.parse(head, path: "/s/a.sh", english: false)).get()
+    let en = try #require(ScriptCommand.parse(head, path: "/s/a.sh", english: true)).get()
+    #expect(zh.title == "防止睡眠" && zh.otherTitle == "Keep Awake" && zh.summary == "一小时不睡")
+    #expect(zh.arguments.map(\.placeholder) == ["城市"])
+    #expect(en.title == "Keep Awake" && en.otherTitle == "防止睡眠")
+    #expect(en.summary == "Stay awake for an hour" && en.arguments.map(\.placeholder) == ["City"])
+    // 两种界面里打另一种语言的标题、拼音都找得到
+    #expect(matches("keep awake", LauncherItem.script(zh, alias: nil)))
+    let enRow = LauncherItem.script(en, alias: nil)
+    #expect(matches("防止睡眠", enRow) && matches("fangzhi", enRow))
+    // 没写英文的：照旧用原来的，没有 otherTitle
+    let plain = try #require(
+      ScriptCommand.parse("#!/bin/zsh\n# @kitty.title 查天气\n", path: "/s/b.sh", english: true)
+    ).get()
+    #expect(plain.title == "查天气" && plain.otherTitle == nil)
+  }
+
+  @Test func bundledScriptsHaveEnglishHeaders() async throws {
+    let scan = await ScriptLibrary.scan([], bundled: ScriptLibrary.bundledFiles)
+    #expect(scan.scripts.count == 8)  // awake 2026-11-16 换成了保持唤醒插件
+    for script in scan.scripts {
+      let text = try String(contentsOfFile: script.path, encoding: .utf8)
+      let english = try #require(ScriptCommand.parse(text, path: script.path, english: true)).get()
+      #expect(english.title.wholeMatch(of: /[\x20-\x7E]+/) != nil, "\(script.fileName)")
+      #expect(english.otherTitle == script.title, "\(script.fileName)")
+      #expect(
+        english.summary.map { !$0.contains(/\p{Han}/) } == true, "\(script.fileName) 的 description")
+      #expect(
+        english.arguments.allSatisfy { !$0.placeholder.contains(/\p{Han}/) },
+        "\(script.fileName) 的参数")
+    }
+  }
+
+  @Test func bundledCopyKeepsOneLanguage() {
+    let text = """
+      #!/bin/zsh
+      # @kitty.title 防止睡眠
+      # @kitty.title.en Keep Awake
+      # @kitty.keyword awake
+      # @kitty.argument1 {"placeholder": "时长", "optional": true}
+      # @kitty.argument1.en {"placeholder": "Duration", "optional": true}
+      print "$KITTY_LANGUAGE"
+      """
+    let chinese = ScriptLibrary.localizedCopy(text, english: false)
+    #expect(!chinese.contains(".en ") && chinese.contains("# @kitty.title 防止睡眠"))
+    #expect(
+      chinese.contains("# @kitty.keyword awake") && chinese.hasSuffix("print \"$KITTY_LANGUAGE\""))
+    let english = ScriptLibrary.localizedCopy(text, english: true)
+    #expect(!english.contains(".en ") && !english.contains("防止睡眠"))
+    #expect(english.contains("# @kitty.title Keep Awake"))
+    #expect(english.contains(#"# @kitty.argument1 {"placeholder": "Duration", "optional": true}"#))
+  }
+
+  @Test func englishScriptTemplatesAndGuide() throws {
+    let text = ScriptLibrary.template(
+      title: "Hello", keyword: "hi", mode: .list, language: .zsh, english: true)
+    #expect(!text.contains(/\p{Han}/))
+    let script = try #require(ScriptCommand.parse(text, path: "/s/hi.sh", english: true)).get()
+    #expect(script.title == "Hello" && script.mode == .list && script.summary != nil)
+    // 写法说明的英文那份：例子本身能用
+    let guide = ScriptAIGuide.english
+    let start = try #require(guide.range(of: "```zsh\n"))
+    let end = try #require(guide.range(of: "\n```", range: start.upperBound..<guide.endIndex))
+    let example = try #require(
+      ScriptCommand.parse(String(guide[start.upperBound..<end.lowerBound]), path: "/s/w.sh")
+    ).get()
+    #expect(example.title == "Weather" && example.keyword == "weather")
+    for field in [
+      "title", "keyword", "mode", "argument1", "description", "icon", "confirm", "filter",
+    ] {
+      #expect(guide.contains("@kitty.\(field)"))
+    }
+  }
+
+  @Test func calculatorUnitsInEnglish() {
+    #expect(Calculator.result(for: "48 h to 天", english: false)?.display == "2 天")
+    #expect(Calculator.result(for: "48 h to 天", english: true)?.display == "2 d")
+    #expect(Calculator.result(for: "2 斤 to g", english: true)?.display == "1,000 g")
+    #expect(Calculator.result(for: "1 kg to 斤", english: true)?.payload == "2 jin")
+    // 英文写的市制单位也认（英文界面 Tab 写回去的能接着换算）
+    #expect(Calculator.result(for: "2 jin to g")?.display == "1,000 g")
+    #expect(Calculator.result(for: "1 mu to m2")?.payload == "666.6667 m²")
+  }
+
+  @Test func currencyExampleWorksInBothLanguages() {
+    let resource = LocalizedStringResource(
+      "launcher.currencyExample", defaultValue: "100 美元 转 日元", comment: "汇率换算的示例，要能算出来")
+    #expect(resource.english == "100 USD to JPY")
+    for example in [resource.chinese, resource.english] {
+      #expect(
+        ExchangeRates.request(for: example)
+          == ExchangeRates.Request(amount: 100, from: "USD", to: "JPY"), "\(example)")
+    }
+    // 货币名按界面语言：中文界面是中文名；英文名一直认得
+    #expect(ExchangeRates.name("CNY", locale: Locale(identifier: "en_US")) == "Chinese Yuan")
+    #expect(ExchangeRates.chineseName("CNY") == "人民币")
+    #expect(ExchangeRates.currency("chinese yuan") == "CNY")
+  }
+
+  @Test func webSearchPresetsTranslateOnlyWhenUntouched() {
+    let baidu = SearchEngine(
+      id: "baidu", name: "百度", keyword: "bd", urlTemplate: "https://www.baidu.com/s?wd={query}",
+      enabled: false)
+    #expect(WebSearch.presetTitle(id: "baidu", name: "百度")?.english == "Baidu")
+    #expect(baidu.searchNames.contains("百度") && baidu.searchNames.contains("baidu"))
+    // 改过名字的、自己加的照存的写
+    var renamed = baidu
+    renamed.name = "我的百度"
+    #expect(WebSearch.presetTitle(id: "baidu", name: "我的百度") == nil)
+    #expect(renamed.displayName == "我的百度")
+    #expect(WebSearch.presetTitle(id: "google", name: "Google") == nil)
+    // 默认列表全 App 一套：存的名字不跟着语言变
+    #expect(WebSearch.defaults(region: nil).map(\.name).contains("百度"))
+  }
+
+  @Test func commandsTableFiltersByChineseInEnglish() {
+    let row = LauncherCommandsSection.Row(
+      id: "system:lock", title: "Lock Screen", original: "锁定屏幕", symbol: "lock.fill",
+      keyword: "lock", group: .system)
+    let settings = LauncherCommands.Settings()
+    #expect(LauncherCommandsSection.filter([row], by: "锁定", settings: settings).count == 1)
+    #expect(LauncherCommandsSection.filter([row], by: "screen", settings: settings).count == 1)
+    // 中文界面：内置命令和系统命令的行都带着中文原文
+    let rows = LauncherCommandsSection.rows(scripts: [])
+    #expect(rows.allSatisfy { $0.original != nil })
+  }
+
+  @Test func reminderPrefillMatchesParser() {
+    // 菜单栏「新建提醒」在英文界面预填「remind 」：提醒的解析认它
+    #expect(ReminderPhrase.query("remind 10 min stretch") == "10 min stretch")
+    #expect(ReminderPhrase.isKeyword("remind"))
   }
 }

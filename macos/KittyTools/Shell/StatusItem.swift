@@ -15,6 +15,9 @@
 // 彩色（完整的 App 图标）或隐藏（第 9 批 M1 M2），偏好一变立刻跟着变。隐藏只是 isVisible = false，动效照常调、看不见而已；
 // 隐藏后靠再打开一次本 App 回到主界面（AppDelegate.applicationShouldHandleReopen，设置从那里一键过去），退出在启动器里（MenuExtra.quit）。
 // 有新版本时图标右上角一个强调色小圆点（updateVersion，2026-10-06）：常驻到更新为止，点开菜单最上面就是「更新到 x…」。
+// 暂停记录剪贴板时右下角一个灰色的暂停角标（clipboardPaused，第四轮体检 X13）：暂停只在这次运行里有效，很容易忘了。
+// 别的 App 开着安全输入、挡着只带 ⌥ 的快捷键时，同一个位置换成橙色小锁（secureInput，issue #27 2026-11-20）：按了没反应时
+// 看一眼就知道为什么，悬停说是谁开着、怎么关；两样同时有时显示锁。
 
 import AppKit
 import Carbon.HIToolbox
@@ -33,10 +36,20 @@ final class StatusItem: NSObject, NSMenuDelegate {
   private var isApplying = false
   /// 按钮上现在是哪种图（nil = 还没设）
   private var style: IconStyle?
-  private let badge = BadgeDot()
+  private let badge = BadgeDot(.update)
+  private let pauseBadge = BadgeDot(.paused)
+  private let lockBadge = BadgeDot(.lock)
   /// 有新版本（Updater.available 的版本号，AppDelegate 给）：图标右上角出小圆点、悬停提示写版本号；nil = 没有
   var updateVersion: String? {
     didSet { if updateVersion != oldValue { applyBadge() } }
+  }
+  /// 暂停记录剪贴板（AppDelegate 跟 ClipboardWatcher.isUserPaused 一起设）：右下角灰色暂停角标、悬停提示说一声
+  var clipboardPaused = false {
+    didSet { if clipboardPaused != oldValue { applyBadge() } }
+  }
+  /// 安全输入挡着只带 ⌥ 的快捷键（HotKeyCenter.onSecureInputChange）：右下角橙色小锁（压过暂停角标），悬停说是谁开着、怎么关
+  var secureInput: HotKeyCenter.SecureInputBlock? {
+    didSet { if secureInput != oldValue { applyBadge() } }
   }
 
   /// 图标样式（设置 › 通用「图标样式」）：单色 = 角色剪影模板图（跟着菜单栏深浅反色）；彩色 = 完整的 App 图标
@@ -49,7 +62,7 @@ final class StatusItem: NSObject, NSMenuDelegate {
     /// 偏好值 → 样式；没存过、存了认不得的值都算单色
     init(pref: String?) { self = pref.flatMap(Self.init(rawValue:)) ?? .template }
 
-    var title: String { self == .template ? "单色" : "彩色" }
+    var title: String { self == .template ? String(localized: "单色") : String(localized: "彩色") }
 
     /// 菜单栏上的图（设置页分段里的小预览也用它）
     var image: NSImage? { self == .template ? StatusItem.templateIcon : StatusItem.colorIcon }
@@ -76,10 +89,12 @@ final class StatusItem: NSObject, NSMenuDelegate {
     item.button?.target = self
     item.button?.action = #selector(clicked)
     item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-    if #available(macOS 27, *) { item.expandedInterfaceDelegate = self }
+    #if compiler(>=6.4)
+      if #available(macOS 27, *) { item.expandedInterfaceDelegate = self }
+    #endif
     // 读屏用户按不出右键 / ⌃点：菜单另给一个自定义动作（U12①）
     item.button?.setAccessibilityCustomActions([
-      NSAccessibilityCustomAction(name: "显示菜单") { [weak self] in
+      NSAccessibilityCustomAction(name: String(localized: "显示菜单")) { [weak self] in
         self?.showMenu()
         return true
       }
@@ -114,15 +129,28 @@ final class StatusItem: NSObject, NSMenuDelegate {
     applyBadge()
   }
 
-  /// 圆点贴在图标的右上角（两种图标大小不一样，换样式时跟着挪）。不做出场动画：后台查到新版本的那一刻没人在看
+  /// 圆点贴在图标的右上角、暂停角标 / 小锁贴在右下角（两种图标大小不一样，换样式时跟着挪）。不做出场动画：后台查到新版本的那一刻没人在看
   private func applyBadge() {
     guard let button = item.button else { return }
-    button.toolTip = updateVersion.map { "有新版本 \($0)" }
-    guard updateVersion != nil, let icon = button.image?.size else {
-      return badge.removeFromSuperview()
+    let tips = [
+      secureInput.map { $0.summary + "\n" + $0.advice },
+      updateVersion.map { String(localized: "有新版本 \($0)") },
+      clipboardPaused ? String(localized: "已暂停记录剪贴板") : nil,
+    ].compactMap(\.self)
+    button.toolTip = tips.isEmpty ? nil : tips.joined(separator: "\n")
+    let icon = button.image?.size
+    for (view, shown, frame) in [
+      (badge, updateVersion != nil, Self.badgeFrame),
+      (pauseBadge, clipboardPaused && secureInput == nil, Self.pauseFrame),
+      (lockBadge, secureInput != nil, Self.pauseFrame),
+    ] {
+      guard shown, let icon else {
+        view.removeFromSuperview()
+        continue
+      }
+      view.frame = frame(icon, button.bounds, button.isFlipped)
+      if view.superview == nil { button.addSubview(view) }
     }
-    badge.frame = Self.badgeFrame(icon: icon, in: button.bounds, flipped: button.isFlipped)
-    if badge.superview == nil { button.addSubview(badge) }
   }
 
   /// 圆点的位置（纯函数，单测）：直径 6，圆心压在居中的图标的右上角往里 1 pt，不出按钮
@@ -132,6 +160,15 @@ final class StatusItem: NSObject, NSMenuDelegate {
     let top = max(bounds.midY - icon.height / 2 - side / 2 + 1, bounds.minY)
     let bottom = min(bounds.midY + icon.height / 2 - side / 2 - 1, bounds.maxY - side)
     return NSRect(x: x, y: flipped ? top : bottom, width: side, height: side)
+  }
+
+  /// 暂停角标、小锁的位置（纯函数，单测）：直径 9，圆心压在图标的右下角往里 1 pt，不出按钮
+  static func pauseFrame(icon: NSSize, in bounds: NSRect, flipped: Bool) -> NSRect {
+    let side: CGFloat = 9
+    let x = min(bounds.midX + icon.width / 2 - side / 2 - 1, bounds.maxX - side)
+    let top = max(bounds.midY - icon.height / 2 - side / 2 + 1, bounds.minY)
+    let bottom = min(bounds.midY + icon.height / 2 - side / 2 - 1, bounds.maxY - side)
+    return NSRect(x: x, y: flipped ? bottom : top, width: side, height: side)
   }
 
   /// 彩色图标 = 完整的 App 图标（程序坞、访达里那张）。不交给 NSImage 按菜单栏尺寸自己挑表示：16 pt 会挑到 16 / 32 px
@@ -201,8 +238,45 @@ final class StatusItem: NSObject, NSMenuDelegate {
   }
 
   func menuNeedsUpdate(_ menu: NSMenu) {
+    // 子菜单也挂着这个代理（下面换高亮的图），它们是跟着整个菜单一起建的，不在这里重建
+    guard menu === self.menu else { return }
     menu.removeAllItems()
+    Self.menuImages = [:]
     buildMenu(menu)
+    func adopt(_ menu: NSMenu) {
+      for case let submenu? in menu.items.map(\.submenu) {
+        submenu.delegate = self
+        adopt(submenu)
+      }
+    }
+    adopt(menu)
+  }
+
+  /// 高亮的那一行图标换成白色模板图、离开的换回家族色（第五轮体检 A4④）
+  func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+    // 这一层里别的都换回去（不靠 highlightedItem 在这一刻是不是旧的那项）
+    for other in menu.items where other !== item { Self.highlight(other, false) }
+    if let item { Self.highlight(item, true) }
+  }
+
+  /// 收起时这一层全换回彩色（子菜单收起时不一定先收到 willHighlight(nil)）
+  func menuDidClose(_ menu: NSMenu) {
+    for item in menu.items { Self.highlight(item, false) }
+  }
+
+  /// 菜单栏菜单里家族色的图标在高亮时换成模板图（第五轮体检 A4④）：系统的高亮是强调色的底、字反白，家族色的符号在上面
+  /// 几乎看不见；模板图跟着字一起反白。NSMenuItem 没有「高亮时的图」，由菜单的代理在 willHighlight 时换。
+  /// 记的是 addAction 放上去的两张图（彩色、模板），按菜单项认；每次重建菜单时清空。只换之后没被换掉的那张
+  /// （状态屏的状态行换成了表情，不动）
+  static var menuImages: [ObjectIdentifier: (colored: NSImage?, plain: NSImage)] = [:]
+
+  static func highlight(_ item: NSMenuItem, _ highlighted: Bool) {
+    guard let pair = menuImages[ObjectIdentifier(item)] else { return }
+    if highlighted, item.image === pair.colored {
+      item.image = pair.plain
+    } else if !highlighted, item.image === pair.plain {
+      item.image = pair.colored
+    }
   }
 
   /// 图标在屏幕上的位置（藏着时 nil）
@@ -211,7 +285,9 @@ final class StatusItem: NSObject, NSMenuDelegate {
   /// 这一下点在图标上、由图标自己处理（主界面不当成点了外面）：只在 15–26——那里再点一下图标，按钮的动作负责收起；
   /// 27 上系统不把这一下交给我们，得让主界面当成点了外面收起
   func ownsClick(at point: NSPoint) -> Bool {
-    if #available(macOS 27, *) { return false }
+    #if compiler(>=6.4)
+      if #available(macOS 27, *) { return false }
+    #endif
     return iconFrame?.contains(point) == true
   }
 
@@ -219,7 +295,9 @@ final class StatusItem: NSObject, NSMenuDelegate {
   @objc private func clicked() {
     if Self.showsMenu(NSApp.currentEvent) { return showMenu() }
     // 27 上左键归 expandedInterfaceDelegate：哪天也送到这里来，别开两次
-    if #available(macOS 27, *) { return }
+    #if compiler(>=6.4)
+      if #available(macOS 27, *) { return }
+    #endif
     if homeIsOpen() { closeHome() } else { expand() }
   }
 
@@ -253,7 +331,9 @@ final class StatusItem: NSObject, NSMenuDelegate {
   /// 主界面收起了（点外面、Esc、点了格子、程序收起都算）：撤掉图标的高亮；27 上告诉系统这次展开结束了
   func homeDidClose() {
     item.button?.highlight(false)
-    if #available(macOS 27, *) { item.expandedInterfaceSession?.cancel() }
+    #if compiler(>=6.4)
+      if #available(macOS 27, *) { item.expandedInterfaceSession?.cancel() }
+    #endif
   }
 
   /// 菜单从按钮上直接弹（菜单项打开前在 menuNeedsUpdate 里现建）；主界面开着就先收起
@@ -303,37 +383,84 @@ final class StatusItem: NSObject, NSMenuDelegate {
   }
 }
 
-@available(macOS 27, *)
-extension StatusItem: NSStatusItemExpandedInterfaceDelegate {
-  /// 系统叫开（左键、键盘导航到图标）：开主界面。⌃点系统也当左键开，可按钮同时还收到一次右键（菜单从那里弹）——不开。
-  /// 只认鼠标点击时带的 ⌃（U12①：原来看的是全局修饰键，读屏、键盘导航按着 ⌃ 时主界面一直开不出来；菜单栏在进程外，
-  /// 当前事件可能不是那一下点击，那就看此刻鼠标键和 ⌃ 是不是都按着）
-  func statusItem(
-    _ statusItem: NSStatusItem,
-    didBegin expandedInterfaceSession: NSStatusItemExpandedInterfaceSession
-  ) {
-    if Self.showsMenu(NSApp.currentEvent) { return expandedInterfaceSession.cancel() }
-    expand()
-  }
+#if compiler(>=6.4)
+  @available(macOS 27, *)
+  extension StatusItem: NSStatusItemExpandedInterfaceDelegate {
+    /// 系统叫开（左键、键盘导航到图标）：开主界面。⌃点系统也当左键开，可按钮同时还收到一次右键（菜单从那里弹）——不开。
+    /// 只认鼠标点击时带的 ⌃（U12①：原来看的是全局修饰键，读屏、键盘导航按着 ⌃ 时主界面一直开不出来；菜单栏在进程外，
+    /// 当前事件可能不是那一下点击，那就看此刻鼠标键和 ⌃ 是不是都按着）
+    func statusItem(
+      _ statusItem: NSStatusItem,
+      didBegin expandedInterfaceSession: NSStatusItemExpandedInterfaceSession
+    ) {
+      if Self.showsMenu(NSApp.currentEvent) { return expandedInterfaceSession.cancel() }
+      expand()
+    }
 
-  /// 系统叫收（别的菜单栏菜单接手了、键盘导航走开了）
-  func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {
-    closeHome()
+    /// 系统叫收（别的菜单栏菜单接手了、键盘导航走开了）
+    func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {
+      closeHome()
+    }
   }
-}
+#endif
 
-/// 菜单栏图标上「有新版本」的小圆点：强调色实心（现在该操作的东西），在 draw 里取色，跟着菜单栏的深浅和设置里的强调色走
+/// 菜单栏图标上的角标，在 draw 里取色，跟着菜单栏的深浅和设置里的强调色走
 private final class BadgeDot: NSView {
-  override init(frame: NSRect) {
-    super.init(frame: frame)
+  enum Kind {
+    /// 有新版本：强调色实心小圆点（现在该操作的东西）
+    case update
+    /// 暂停记录剪贴板：灰底白色两竖（X13）
+    case paused
+    /// 安全输入挡着快捷键：橙底白色小锁（警示色，同主界面那行橙字）
+    case lock
+  }
+
+  private let kind: Kind
+
+  init(_ kind: Kind) {
+    self.kind = kind
+    super.init(frame: .zero)
     wantsLayer = true
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
   override func draw(_ dirtyRect: NSRect) {
-    NSColor(Style.brand).setFill()
+    switch kind {
+    case .update:
+      NSColor(Style.brand).setFill()
+      NSBezierPath(ovalIn: bounds).fill()
+    case .lock:
+      NSColor.systemOrange.setFill()
+      NSBezierPath(ovalIn: bounds).fill()
+      let config = NSImage.SymbolConfiguration(pointSize: bounds.height * 0.55, weight: .bold)
+        .applying(.init(paletteColors: [.white]))
+      guard
+        let lock = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: nil)?
+          .withSymbolConfiguration(config)
+      else { return }
+      let size = lock.size
+      lock.draw(
+        in: NSRect(
+          x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2, width: size.width,
+          height: size.height))
+    case .paused:
+      drawPause()
+    }
+  }
+
+  private func drawPause() {
+    NSColor.systemGray.setFill()
     NSBezierPath(ovalIn: bounds).fill()
+    NSColor.white.setFill()
+    let bar = NSSize(width: max(1, bounds.width * 0.16), height: bounds.height * 0.46)
+    for offset in [-0.13, 0.13] {
+      NSBezierPath(
+        rect: NSRect(
+          x: bounds.midX + bounds.width * offset - bar.width / 2, y: bounds.midY - bar.height / 2,
+          width: bar.width, height: bar.height)
+      ).fill()
+    }
   }
 
   /// 点在圆点上照常点到图标（开菜单）
@@ -362,6 +489,10 @@ enum MenuExtra: String, CaseIterable {
 
   /// 菜单里的标题（打开窗口的按菜单习惯带「…」，启动器里去掉）；pinsHidden：钉图藏着时写「显示全部钉图」
   func title(pinsHidden: Bool = false) -> String {
+    String(localized: titleResource(pinsHidden: pinsHidden))
+  }
+
+  func titleResource(pinsHidden: Bool = false) -> LocalizedStringResource {
     switch self {
     case .pauseClipboard: "暂停记录剪贴板"
     case .copyToTranslate: "复制即译"
@@ -430,14 +561,20 @@ extension NSMenu {
   /// 加一项：左边家族色符号；key 为空就不显示快捷键
   @discardableResult
   func addAction(
-    _ title: String, symbol: String, color: NSColor, key: String = "",
+    _ title: LocalizedStringResource, symbol: String, color: NSColor, key: String = "",
     modifiers: NSEvent.ModifierFlags = .command, run: @escaping () -> Void
   ) -> NSMenuItem {
-    let item = NSMenuItem(title: title, action: #selector(MenuTarget.run), keyEquivalent: key)
+    let item = NSMenuItem(
+      title: String(localized: title), action: #selector(MenuTarget.run), keyEquivalent: key)
     item.target = MenuTarget.shared
     item.representedObject = run
     item.image = NSImage.symbol(symbol)?
       .withSymbolConfiguration(.init(hierarchicalColor: color))
+    // 高亮时换上的模板图（StatusItem.highlight）。具名的图是共用的一份：拷一份再改成模板
+    if let plain = NSImage.symbol(symbol)?.copy() as? NSImage {
+      plain.isTemplate = true
+      StatusItem.menuImages[ObjectIdentifier(item)] = (item.image, plain)
+    }
     item.keyEquivalentModifierMask = modifiers
     addItem(item)
     return item

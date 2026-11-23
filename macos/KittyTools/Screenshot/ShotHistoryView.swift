@@ -41,7 +41,10 @@ struct ShotHistoryView: View {
           ForEach(ShotHistoryModel.Filter.allCases) { Text($0.title).tag($0) }
         }
         .pickerStyle(.segmented)
-        .frame(width: 280)
+        // 至少 280；四段排不下（英文）时按工具栏里那个控件自己要的宽撑开。不另建 NSSegmentedControl 量：
+        // 工具栏里的是 SwiftUI 配的（macOS 27 实测 extraLarge、等宽分段），量出来比它窄，窄了会被挤或裁
+        .frame(minWidth: 280)
+        .fixedSize(horizontal: true, vertical: false)
       }
     }
     .searchable(text: $model.search, prompt: "搜来源或种类")
@@ -95,14 +98,15 @@ struct ShotHistoryView: View {
         Button("全选") { model.pickAll() }.keyboardShortcut("a")
         Button("拷贝") { model.copySelection() }
           .keyboardShortcut("c").disabled(!model.canCopy)
+        // 钉图是单键 T（同截图时的钉图；第五轮体检 U4③：⌘P 是系统留给打印的）
+        Button("钉到屏幕") { if let item { model.actions.pin(item) } }
+          .keyboardShortcut("t", modifiers: []).disabled(!isImage)
       }
       .disabled(searching)
       Button("改标注") { if let item { edit(item) } }
         .keyboardShortcut(.return, modifiers: []).disabled(item == nil)
       Button(ScreenshotOutput.saveTitle) { model.saveSelection() }
         .keyboardShortcut("s").disabled(!model.canSave)
-      Button("钉到屏幕") { if let item { model.actions.pin(item) } }
-        .keyboardShortcut("p").disabled(!isImage)
       Button("识字并拷贝") { if let item { model.actions.recognize(item) } }
         .keyboardShortcut("o").disabled(!isImage)
       Button("在访达中显示") { model.revealSelection() }
@@ -184,7 +188,7 @@ struct ShotHistoryView: View {
     } else if !(screenshotOn && keepsHistory) {
       EmptyState(symbol: "clock.arrow.circlepath", title: "截图历史已关闭") {
         VStack(spacing: 6) {
-          Text("在 设置 › 截图 里打开「保留截图历史」，截图、长截图和录屏录音就会留在这里")
+          Text("在 设置 › 截图 › 截图历史 里打开「保留截图历史」，截图、长截图和录屏录音就会留在这里")
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
           Button("打开设置", action: model.openSettings)
@@ -203,7 +207,9 @@ struct ShotHistoryView: View {
 
   /// 空状态那句：保留几天照设置（0 = 一直留着）
   static func keepLine(days: Int) -> String {
-    "截图、长截图和录屏录音都会留在这里，" + (days > 0 ? "保留 \(days) 天" : "一直留着")
+    days > 0
+      ? String(localized: "截图、长截图和录屏录音都会留在这里，保留 \(days) 天")
+      : String(localized: "截图、长截图和录屏录音都会留在这里，一直留着")
   }
 
   static func symbol(_ kind: ShotHistory.Kind) -> String {
@@ -265,12 +271,12 @@ struct ShotHistoryView: View {
       Text(ShotHistoryModel.summary(items)).font(.system(size: 12)).foregroundStyle(.secondary)
       Divider()
       VStack(alignment: .leading, spacing: 8) {
-        row("拷贝", "doc.on.doc", key: "⌘C") { model.copySelection() }
+        row(String(localized: "拷贝"), "doc.on.doc", key: "⌘C") { model.copySelection() }
         row(ScreenshotOutput.saveTitle, "square.and.arrow.down", key: "⌘S") {
           model.saveSelection()
         }
-        row("在访达中显示", "folder", key: "⇧⌘R") { model.revealSelection() }
-        row("删除", "trash", key: "⌫", danger: true) { model.deleteSelection() }
+        row(String(localized: "在访达中显示"), "folder", key: "⇧⌘R") { model.revealSelection() }
+        row(String(localized: "删除"), "trash", key: "⌫", danger: true) { model.deleteSelection() }
       }
       Spacer()
     }
@@ -284,25 +290,29 @@ struct ShotHistoryView: View {
     let isImage = item.filePath == nil
     VStack(alignment: .leading, spacing: 8) {
       if isImage {
-        row("改标注", "pencil.tip.crop.circle", key: "↩") { edit(item) }
-        row("拷贝", "doc.on.doc", key: "⌘C") { model.actions.copy(item) }
+        row(String(localized: "改标注"), "pencil.tip.crop.circle", key: "↩") { edit(item) }
+        row(String(localized: "拷贝"), "doc.on.doc", key: "⌘C") { model.actions.copy(item) }
         row(ScreenshotOutput.saveTitle, "square.and.arrow.down", key: "⌘S") {
           model.actions.save(item)
         }
-        row("另存为…", "square.and.arrow.down.on.square", key: "⇧⌘S") { model.actions.saveAs(item) }
-        row("钉到屏幕", "pin", key: "⌘P") { model.actions.pin(item) }
-        row("识字并拷贝", "text.viewfinder", key: "⌘O") { model.actions.recognize(item) }
+        row(String(localized: "另存为…"), "square.and.arrow.down.on.square", key: "⇧⌘S") {
+          model.actions.saveAs(item)
+        }
+        row(String(localized: "钉到屏幕"), "pin", key: "T") { model.actions.pin(item) }
+        row(String(localized: "识字并拷贝"), "text.viewfinder", key: "⌘O") {
+          model.actions.recognize(item)
+        }
       } else {
-        row("打开", "play.rectangle", key: "↩") { model.open(item) }
+        row(String(localized: "打开"), "play.rectangle", key: "↩") { model.open(item) }
         // 录制的拷的是文件（第四轮体检 U1：原来只有 ⌘C，这里没有）；录屏另有转成 GIF、压缩（同视频卡）
-        row("拷贝", "doc.on.doc", key: "⌘C") { model.actions.copy(item) }
+        row(String(localized: "拷贝"), "doc.on.doc", key: "⌘C") { model.actions.copy(item) }
         ForEach(model.jobs(for: item), id: \.self) { job in
           row(job.title, job.symbol) { model.actions.convert(item, job) }
         }
       }
-      row("在访达中显示", "folder", key: "⇧⌘R") { model.reveal(item) }
+      row(String(localized: "在访达中显示"), "folder", key: "⇧⌘R") { model.reveal(item) }
         .disabled(!model.hasFile(item))
-      row("删除", "trash", key: "⌫", danger: true) { model.deleting = [item.id] }
+      row(String(localized: "删除"), "trash", key: "⌫", danger: true) { model.deleting = [item.id] }
     }
   }
 
@@ -431,7 +441,7 @@ private struct ShotCard: View {
       }
     )
     .accessibilityElement(children: .combine)
-    .accessibilityLabel("\(item.kind.title)，\(ShotHistoryModel.caption(item))")
+    .accessibilityLabel(item.kind.title + Island.comma + ShotHistoryModel.caption(item))
     .accessibilityAddTraits(chosen ? [.isSelected, .isButton] : .isButton)
   }
 }

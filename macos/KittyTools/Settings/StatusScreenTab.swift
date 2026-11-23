@@ -3,7 +3,8 @@
 // 「按快捷键直接进入排在最前面的状态」开关（默认关：按快捷键先出一排预览卡片，StatusPicker.swift）、
 // 「告示上的动画」总开关（Z18a，默认开）、
 // 「有人碰键盘或鼠标时显示怎么退出」开关、退出密码（4–8 位数字，存钥匙串，Passcode.swift；2026-10-11 用户要求）、
-// 怎么退出和「它不是安全措施」的说明。页头画在自己的 NavigationStack 里，推进时一起换掉。列表直接读写偏好里的 JSON（Prefs.statusScreenPresets）：菜单栏、启动器每次现读，改了就跟上。
+// 怎么退出和「它不是安全措施」的说明；「权限」（辅助功能，进入时拦住键盘鼠标要它；缺的时候排到最上面，插件页改版 C2）和最后
+// 「关于这个插件」（后台、同步、移除）。页头画在自己的 NavigationStack 里，推进时一起换掉。列表直接读写偏好里的 JSON（Prefs.statusScreenPresets）：菜单栏、启动器每次现读，改了就跟上。
 // 这一页没有「进入」「试一下」这类按钮：进入会拦住键盘鼠标，只从菜单栏、启动器、全局快捷键进。
 // 界面里不写「锁」字（定位是告示加防误触，mac-overlay-panel §11）。
 
@@ -23,6 +24,10 @@ struct StatusScreenTab: View {
   @Environment(SettingsNavigation.self) private var navigation
   /// 列表里用键盘选中的一条（「−」和 ⌫ 删它；鼠标单击直接推进，不留选中）
   @State private var selection: String?
+  /// 设置窗重新当 key 时 +1：「权限」组重查（插件页改版 C2）
+  @State private var accessChecks = 0
+  /// 截图自检（给了 fixed）不查宿主的授权，按给了画
+  private var fixedAccess: ((Permissions.Kind) -> Bool?)? { fixed == nil ? nil : { _ in true } }
   /// 等确认删除的状态（自己加的、改过的）
   @State private var removing: String?
   /// 钥匙串里有没有退出密码（这一页出现时读一次，设置 / 移除之后以读回来的为准）
@@ -30,6 +35,14 @@ struct StatusScreenTab: View {
   /// 正在填的退出密码和再输的那一遍
   @State private var passcode = ""
   @State private var confirmation = ""
+
+  /// 「状态」组标题的 ⓘ：快捷键直接进入的 / 先选的（别写成三元式：抽字会漏）
+  private var listInfo: LocalizedStringResource {
+    if entersFirst {
+      return "拖动调整顺序，点一行编辑。排在最前面的状态就是全局快捷键进入的那个。至少留一个；删掉的自带状态可以从「+」里恢复。"
+    }
+    return "拖动调整顺序，点一行编辑。按全局快捷键选状态时，卡片也按这个顺序排。至少留一个；删掉的自带状态可以从「+」里恢复。"
+  }
 
   var body: some View {
     NavigationStack(path: Bindable(navigation).path) {
@@ -46,7 +59,7 @@ struct StatusScreenTab: View {
       await StatusEmoji.warmStills()
     }
     .confirmationDialog(
-      "删除「\(presets.first { $0.id == removing }?.title ?? "")」？",
+      "删除「\(presets.first { $0.id == removing }?.displayTitle ?? "")」？",
       isPresented: Binding {
         removing != nil
       } set: {
@@ -66,6 +79,8 @@ struct StatusScreenTab: View {
     let isFull = list.count >= StatusPreset.maxCount
     // 关着时（Feature）变灰
     return Form {
+      PluginPermissionSection(
+        plugin: .statusScreen, at: .top, checks: accessChecks, granted: fixedAccess)
       Group {
         Section {
           presetList(list)
@@ -76,35 +91,33 @@ struct StatusScreenTab: View {
             addMenu(list, isFull: isFull)
           }
         } header: {
-          Text("状态")
+          InfoHeader("状态", info: listInfo)
+            .settingsAnchor(.statusList)
         } footer: {
-          SectionFootnote(
-            "拖动调整顺序，点一行编辑。"
-              + (entersFirst ? "排在最前面的状态就是全局快捷键进入的那个。" : "按全局快捷键选状态时，卡片也按这个顺序排。")
-              + "至少留一个；删掉的自带状态可以从「+」里恢复。"
-              + (isFull ? "最多 \(StatusPreset.maxCount) 个，已经满了，删掉一个才能再加。" : ""))
+          // 满了是状态，照旧写在页脚
+          if isFull { SectionFootnote("最多 \(StatusPreset.maxCount) 个，已经满了，删掉一个才能再加。") }
         }
         Section {
           Toggle(isOn: $entersFirst) {
             Text("按快捷键直接进入排在最前面的状态")
             Text("关着时，按快捷键先出一排预览卡片，选一个再进")
           }
+          .settingsAnchor(.statusEntersFirst)
         } header: {
-          Text("进入")
-        } footer: {
-          SectionFootnote("快捷键在 设置 › 快捷键 里设置，默认没有。在菜单栏、启动器里选一个状态，都是直接进入。")
+          InfoHeader("进入", info: "快捷键在 设置 › 快捷键 里设置，默认没有。在菜单栏、启动器里选一个状态，都是直接进入。")
         }
         Section {
-          Toggle(isOn: $animations) {
-            Text("告示上的动画")
-            Text("关掉后表情不动、进入时不做出场、屏幕边上不冒眼睛；标题照样晃一下")
+          SettingRow(
+            title: "告示上的动画", subtitle: "关掉后表情不动、不做出场",
+            info: "屏幕边上也不冒眼睛；标题照样晃一下。系统设置里打开了「减弱动态效果」时，这些动画都不做，标题也不晃。"
+          ) {
+            Toggle("告示上的动画", isOn: $animations)
+              .toggleStyle(.switch)
           }
+          .settingsAnchor(.statusAnimations)
           EmojiPackToggle()
         } header: {
           Text("动画")
-        } footer: {
-          SectionFootnote(
-            "系统设置里打开了「减弱动态效果」时，这些动画都不做，标题也不晃。" + EmojiPackToggle.footnote)
         }
         Section {
           LabeledContent {
@@ -113,23 +126,34 @@ struct StatusScreenTab: View {
             Text("怎么退出")
             Text("按住 Esc 两秒；或者动一下鼠标，再用鼠标按住屏幕底部出现的提示两秒。到了自动结束的时间、解锁电脑回来时，也会结束。")
           }
+          .settingsAnchor(.statusExit)
           Toggle(isOn: $exitHint) {
             Text("有人碰键盘或鼠标时显示怎么退出")
             Text("关掉后屏幕上不再提示，只能按住 Esc 两秒退出；键盘上没有 Esc 键的别关")
           }
+          .settingsAnchor(.statusExitHint)
           passcodeRow
         } header: {
-          Text("退出")
+          InfoHeader(
+            LocalizedStringResource(
+              "statusScreen.exitSection", defaultValue: "退出",
+              comment: "设置 › 状态屏：怎么退出状态屏那一节（不是退出 App）"),
+            info:
+              "没设退出密码时照着提示谁都能退出，设了也拦不住电源键、触控 ID 键和合盖。要防别人动电脑，进入之后再锁定屏幕（按一下触控 ID 键）：电脑照样不睡，回来解锁就结束——忘了退出密码也这样出来。"
+          )
         } footer: {
-          SectionFootnote(
-            "状态屏是告示加防误触，不是安全措施：没设退出密码时照着提示谁都能退出，设了也拦不住电源键、触控 ID 键和合盖。"
-              + "要防别人动电脑，进入之后再锁定屏幕（按一下触控 ID 键）：电脑照样不睡，回来解锁就结束——忘了退出密码也这样出来。")
+          SectionFootnote("状态屏是告示加防误触，不是安全措施。")
         }
       }
       .gated(by: .statusScreen)
-      PluginRemoveSection(plugin: .statusScreen)
+      PluginPermissionSection(
+        plugin: .statusScreen, at: .bottom, checks: accessChecks, granted: fixedAccess)
+      PluginAboutSection(plugin: .statusScreen)
     }
     .formStyle(.grouped)
+    .settingsScrollTarget()
+    // 从系统设置授权回来，「权限」组重查（插件页改版 C2）
+    .onSettingsBecameKey { accessChecks += 1 }
   }
 
   // MARK: 退出密码
@@ -150,8 +174,13 @@ struct StatusScreenTab: View {
             SecureField("再输一次", text: $confirmation, prompt: Text("再输一次"))
               .frame(width: 96)
               .onSubmit { if problem == nil { setPasscode(passcode) } }
-            Button("设置") { setPasscode(passcode) }
-              .disabled(problem != nil)
+            // 同字不同义（页名「设置」是 Settings）：显式 key，英文是 Set（第五轮体检 U3③）
+            Button(
+              LocalizedStringResource(
+                "statusScreen.setPasscode", defaultValue: "设置",
+                comment: "设置 › 状态屏：确认设定退出密码的按钮（动词：设定）")
+            ) { setPasscode(passcode) }
+            .disabled(problem != nil)
           }
         }
         .labelsHidden()
@@ -161,9 +190,10 @@ struct StatusScreenTab: View {
       Text("退出密码")
       Text(
         isSet
-          ? "已设置。按住满两秒之后，还要输入它才能退出。"
+          ? String(localized: "已设置。按住满两秒之后，还要输入它才能退出。")
           : passcode.isEmpty
-            ? "设了之后，按住满两秒还要输入这个密码才能退出" : problem ?? "两遍一样，可以设置了")
+            ? String(localized: "设了之后，按住满两秒还要输入这个密码才能退出")
+            : problem ?? String(localized: "两遍一样，可以设置了"))
     }
   }
 
@@ -275,7 +305,7 @@ private struct PresetListRow: View {
     HStack(spacing: 10) {
       StatusPresetIcon(symbol: preset.symbol)
       VStack(alignment: .leading, spacing: 1) {
-        Text(preset.title).font(.system(size: 13))
+        Text(preset.displayTitle).font(.system(size: 13))
         Text(preset.summary)
           .font(.system(size: 11))
           .foregroundStyle(.secondary)

@@ -21,6 +21,7 @@ struct LauncherCommandsSection: View {
   @AppStorage(Prefs.launcherCommandsOff) private var offText = ""
   @AppStorage(Prefs.launcherScripts) private var scriptsOn = true
   @AppStorage(Prefs.launcherWebSearchEngines) private var enginesData: Data?
+  @AppStorage(Prefs.launcherAppAliases) private var appAliasesText = ""
   @State private var filter = ""
   @State private var scope = Scope.all
   @State private var onlyOn = false
@@ -33,11 +34,24 @@ struct LauncherCommandsSection: View {
   @Environment(HotKeyCenter.self) private var center: HotKeyCenter?
 
   /// 上面那一排筛选
-  enum Scope: String, CaseIterable {
-    case all = "全部"
-    case mine = "我的脚本"
-    case bundled = "自带脚本"
-    case builtIn = "内置"
+  enum Scope: CaseIterable {
+    case all, mine, bundled, builtIn
+
+    /// 一排分段控件，英文要短（短说法；组标题照旧是全称）
+    var title: LocalizedStringResource {
+      switch self {
+      case .all: "全部"
+      case .mine:
+        LocalizedStringResource(
+          "launcher.commands.mine", defaultValue: "我的脚本", comment: "命令表的筛选（短说法）：我的脚本")
+      case .bundled:
+        LocalizedStringResource(
+          "launcher.commands.bundled", defaultValue: "自带脚本", comment: "命令表的筛选（短说法）：自带脚本")
+      case .builtIn:
+        LocalizedStringResource(
+          "launcher.commands.builtIn", defaultValue: "内置", comment: "命令表的筛选：内置的命令")
+      }
+    }
 
     func contains(_ group: Row.Group) -> Bool {
       switch self {
@@ -51,15 +65,23 @@ struct LauncherCommandsSection: View {
 
   /// 表里的一行
   struct Row: Identifiable {
-    enum Group: String, CaseIterable {
-      case mine = "我的脚本"
-      case bundled = "自带脚本"
-      case keyword = "关键词命令"
-      case system = "系统命令"
+    enum Group: CaseIterable {
+      case mine, bundled, keyword, system
+
+      var title: LocalizedStringResource {
+        switch self {
+        case .mine: "我的脚本"
+        case .bundled: "自带脚本"
+        case .keyword: "关键词命令"
+        case .system: "系统命令"
+        }
+      }
     }
 
     let id: String
     let title: String
+    /// 标题的中文原文（内置命令、系统命令；脚本是头部另写的那种语言的标题）：英文界面里打中文也筛得到
+    var original: String?
     /// 名字后面的小字（脚本的文件名）
     var detail: String?
     let symbol: String
@@ -78,16 +100,19 @@ struct LauncherCommandsSection: View {
   /// 全部的行：我的脚本、自带脚本、关键词命令、系统命令，组里按名字排（纯函数，配单测）
   static func rows(scripts: [ScriptCommand]) -> [Row] {
     let keyword = LauncherCommands.builtIns.map {
-      Row(id: $0.id, title: $0.title, symbol: $0.symbol, keyword: $0.keyword, group: .keyword)
+      Row(
+        id: $0.id, title: $0.title, original: $0.chinese, symbol: $0.symbol, keyword: $0.keyword,
+        group: .keyword)
     }
     let system = SystemCommand.allCases.map {
       Row(
-        id: LauncherCommands.systemID($0.rawValue), title: $0.title, symbol: $0.symbol,
-        keyword: $0.rawValue, group: .system)
+        id: LauncherCommands.systemID($0.rawValue), title: $0.title,
+        original: $0.titleResource.chinese, symbol: $0.symbol, keyword: $0.rawValue, group: .system)
     }
     let scripts = scripts.map {
       Row(
-        id: LauncherCommands.scriptID($0), title: $0.title, detail: $0.fileName,
+        id: LauncherCommands.scriptID($0), title: $0.title, original: $0.otherTitle,
+        detail: $0.fileName,
         symbol: "terminal.fill", icon: $0.icon, iconDark: $0.iconDark, keyword: $0.keyword,
         group: $0.isBundled ? .bundled : .mine, script: $0)
     }
@@ -104,7 +129,8 @@ struct LauncherCommandsSection: View {
     let all = Self.rows(scripts: library?.scripts ?? [])
     let conflicts = LauncherCommands.conflicts(
       all.map { ($0.id, settings.alias($0.id, default: $0.keyword)) },
-      engineKeywords: SearchEngineDetail.decode(enginesData).map(\.keyword))
+      engineKeywords: SearchEngineDetail.decode(enginesData).map(\.keyword),
+      appAliases: AppAliases(text: appAliasesText).words)
     let shown =
       only.map { id in all.filter { $0.id == id } }
       ?? Self.filter(all, by: filter, scope: scope, onlyOn: onlyOn, settings: settings)
@@ -114,7 +140,7 @@ struct LauncherCommandsSection: View {
         .labelsHidden()
       HStack {
         Picker("显示", selection: showingAll($scope)) {
-          ForEach(Scope.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+          ForEach(Scope.allCases, id: \.self) { Text($0.title).tag($0) }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -148,7 +174,7 @@ struct LauncherCommandsSection: View {
       ForEach(Row.Group.allCases, id: \.self) { group in
         let rows = shown.filter { $0.group == group }
         if group == .mine, emptyMine {
-          Text(group.rawValue)
+          Text(group.title)
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.tertiary)
             .accessibilityAddTraits(.isHeader)
@@ -160,7 +186,7 @@ struct LauncherCommandsSection: View {
           .disabled(!scriptsOn)
         }
         if !rows.isEmpty {
-          Text(group.rawValue)
+          Text(group.title)
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.tertiary)
             .accessibilityAddTraits(.isHeader)
@@ -181,7 +207,7 @@ struct LauncherCommandsSection: View {
       SectionFootnote(
         !shown.contains { conflicts.contains($0.id) }
           ? "别名就是在启动器里要打的那个词，改了以后原来的词不再认；清空就只能按名字搜。关掉的不出现在搜索里。"
-          : "描了橙框的别名重复了（也算网页搜索的关键词）：只打这个词时脚本排第一；后面接了空格和文字时，内置命令先认，其次脚本，网页搜索最后。改一个吧。")
+          : "描了橙框的别名重复了（也算网页搜索的关键词和应用别名）：只打这个词时脚本排第一；后面接了空格和文字时，内置命令先认，其次脚本，网页搜索最后。改一个吧。")
     }
     .onAppear { focus(in: all) }
     .onChange(of: navigation?.focusedCommand) { focus(in: all) }
@@ -222,7 +248,8 @@ struct LauncherCommandsSection: View {
     let needle = LauncherMatch.fold(text.trimmingCharacters(in: .whitespaces))
     guard !needle.isEmpty else { return rows }
     return rows.filter { row in
-      [row.title, row.detail, settings.alias(row.id, default: row.keyword)].compactMap { $0 }
+      [row.title, row.original, row.detail, settings.alias(row.id, default: row.keyword)]
+        .compactMap { $0 }
         .contains { LauncherMatch.fold($0).contains(needle) }
     }
   }
@@ -280,6 +307,7 @@ private struct CommandRow: View {
   var refresh: () -> Void = {}
   /// 录快捷键时的提示（缺修饰键、重复）
   @State private var message: String?
+  @Environment(Island.self) private var island: Island?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -343,7 +371,7 @@ private struct CommandRow: View {
         }
         .labelsHidden()
         .accessibilityLabel("「\(row.title)」的别名")
-        .accessibilityValue(conflicted ? "\(alias)，和别的重复了" : alias)
+        .accessibilityValue(conflicted ? String(localized: "\(alias)，和别的重复了") : alias)
       if let center {
         HotKeyRecorder(
           target: .command(id: row.id, title: row.title), center: center, message: $message,
@@ -371,12 +399,30 @@ private struct CommandRow: View {
           // 自带的在 App 包里，不在原地改（复制一份再改）
           Button("编辑脚本") { ScriptLibrary.edit(script.path) }
           Divider()
-          Button("移到废纸篓", role: .destructive) {
-            NSWorkspace.shared.recycle([URL(filePath: script.path)]) { _, _ in
-              Task { @MainActor in refresh() }
-            }
-          }
+          Button("移到废纸篓", role: .destructive) { recycle(script) }
         }
+      }
+    }
+  }
+
+  /// 移到废纸篓：岛上说一声、带「撤销」挪回原处（第五轮体检 U5①，同启动器 ⌘K「移到废纸篓」）
+  private func recycle(_ script: ScriptCommand) {
+    let original = URL(filePath: script.path)
+    Task {
+      do {
+        // 只移一样：按原网址查不到（网址的写法差一点）就取唯一那一项
+        let moved = try await NSWorkspace.shared.recycle([original])
+        let trashed = moved[original] ?? moved.values.first
+        refresh()
+        island?.show(
+          "已移到废纸篓「\(script.title)」", symbol: "trash.circle.fill",
+          actions: trashed.map {
+            [LauncherModel.putBack($0, to: original, island: island, done: refresh)]
+          }
+            ?? [])
+      } catch {
+        refresh()
+        island?.show("没能移到废纸篓", detail: "\(error.localizedDescription)", tone: .error)
       }
     }
   }

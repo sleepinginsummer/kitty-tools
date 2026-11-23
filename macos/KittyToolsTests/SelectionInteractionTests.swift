@@ -27,20 +27,22 @@ struct SelectionInteractionTests {
     let session: SelectionSession
     /// 托盘改样式会记住样式（Prefs.screenshotToolStyles）：记在临时偏好域里，不碰用户的真实偏好，用完删掉
     private let styleSuite = "kitty-test-styles-\(UUID().uuidString)"
-    private let styles: UserDefaults
+    let styles: UserDefaults
     /// 按下时接住事件的视图（不是 SelectionView / 尺寸胶囊就不发 mouseDown，免得进 NSButton 的跟踪循环）
     private var target: NSView?
     private(set) var intercepted: NSView?
 
-    /// image：冻结帧（默认 1200 × 800 纯色；截图自检传一张假桌面）；hint：松手即确认模式的顶部提示；
-    /// session / origin：多屏时几块「屏幕」共用一个会话，窗口摆在各自的位置（见 screens）
+    /// image：冻结帧（默认 size 那么大的纯色；截图自检传一张假桌面）；hint：松手即确认模式的顶部提示；
+    /// session / origin：多屏时几块「屏幕」共用一个会话，窗口摆在各自的位置（见 screens）；size：这块「屏幕」多大
     init(
       mode: SelectionView.Mode = .capture, windows: [CGRect] = [], owners: [[pid_t]] = [],
-      findsElements: Bool = false, image: CGImage? = nil, hint: String = "",
+      windowIDs: [CGWindowID?] = [], findsElements: Bool = false, image: CGImage? = nil,
+      hint: String = "",
       session: SelectionSession? = nil,
-      origin: CGPoint = CGPoint(x: -20000, y: -20000), keepsColors: Bool = false
+      origin: CGPoint = CGPoint(x: -20000, y: -20000), keepsColors: Bool = false,
+      showsHint: Bool = true, loupe: Prefs.Loupe = .full,
+      size: CGSize = CGSize(width: 1200, height: 800)
     ) {
-      let size = CGSize(width: 1200, height: 800)
       let context = CGContext(
         data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
         bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -49,10 +51,17 @@ struct SelectionInteractionTests {
       context.fill(CGRect(origin: .zero, size: size))
       self.session = session ?? SelectionSession(mode: mode, hint: hint)
       if findsElements { self.session.findsElements = true }
+      // 单击窗口出图时的单独截图（N1）：不问真的 ScreenCaptureKit
+      self.session.snapshotWindow = { _ in nil }
+      // 悬停、选中整扇窗口时量它的圆角：同样不问真的（量不出 = 按默认的画）
+      self.session.measureRadius = { _ in nil }
       view = SelectionView(
         image: image ?? context.makeImage()!, windows: windows, owners: owners,
-        session: self.session, keepsColors: keepsColors)
+        windowIDs: windowIDs, session: self.session, keepsColors: keepsColors, showsHint: showsHint,
+        loupe: loupe)
       styles = UserDefaults(suiteName: styleSuite)!
+      // 截图圆角默认按直角测（注册域是整个进程共用的：别的测试注册过默认值 10 的话临时域也读得到）；测圆角的自己设
+      styles.set(0.0, forKey: Prefs.screenshotCornerRadius)
       view.styleDefaults = styles
       window = KeyWindow(
         contentRect: NSRect(origin: origin, size: size),
@@ -605,6 +614,47 @@ struct SelectionInteractionTests {
     #expect(h.view.accessibilityLabel() == "待选，组 300 × 30 像素")
   }
 
+  // ⌥S 盖回截图的截图翻译也认元素（2026-11-16 用户：悬停框出那一块、单击就翻它）：提示里有单击、滚轮、Tab；
+  // 单击用停着的那层去翻（交给翻译的正是那一块），翻完图上贴了译文；不认元素时单击翻整扇窗口
+  @Test func autoTranslateClickTranslatesHoveredElement() async throws {
+    let window = CGRect(x: 100, y: 100, width: 600, height: 500)
+    let row = CGRect(x: 120, y: 300, width: 300, height: 30)
+    let context = try #require(
+      CGContext(
+        data: nil, width: 40, height: 30, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+    let patch = try #require(context.makeImage())
+    for elements in [true, false] {
+      let session = SelectionSession(mode: .capture)
+      session.autoTranslates = true
+      let h = Harness(
+        windows: [window], owners: [[4242]], findsElements: elements, session: session)
+      if elements { _ = h.fakeElements([row, window], names: ["行", "窗口"]) }
+      var asked: [CGSize] = []
+      h.view.translateHandler = { image, _ in
+        asked.append(CGSize(width: image.width, height: image.height))
+        return .init(image: patch)
+      }
+      let original = h.view.image
+      let parts = h.view.accessibilityHelp()?.components(separatedBy: Island.comma) ?? []
+      #expect(
+        parts
+          == ["拖动框选要翻译的文字"]
+          + (elements ? ["单击翻译", "滚轮 换大小", "Tab 只认窗口"] : ["单击翻译窗口"]) + ["Esc 取消"])
+      h.move(CGPoint(x: 200, y: 312))
+      h.click(CGPoint(x: 200, y: 312))
+      let picked = elements ? row : window
+      #expect(h.view.selection == picked)
+      for _ in 0..<500 where h.view.image === original {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      #expect(asked == [picked.size])
+      #expect(h.view.image !== original)
+    }
+  }
+
   // 问超时的 App 这次框选不再问、只认窗口；本 App 自己的窗口不问；不认元素时提示照旧
   @Test func silentAppsAndOwnWindowsStayWindowOnly() {
     let window = CGRect(x: 100, y: 100, width: 600, height: 500)
@@ -629,6 +679,67 @@ struct SelectionInteractionTests {
     h = Harness(windows: [window], owners: [[4242]])
     #expect(h.view.accessibilityHelp()?.contains("单击选中窗口") == true)
     #expect(h.view.accessibilityHelp()?.contains("Tab") == false)
+  }
+
+  // 第三轮 B1：刚叫醒的 App（也认网页里的元素）还只认到很粗的一块时，指针停着不动到 0.4 s 再问一次、变细；
+  // 遮罩收了不问；本来就细的不重问；刚叫醒时问超时的不记成卡住。假的 App 没有缓存、每次悬停都会问，所以只看
+  // 「停着不动的那段时间里有没有再问」
+  @Test func wokenAppIsAskedAgainWhileCoarse() async throws {
+    let window = CGRect(x: 100, y: 100, width: 600, height: 500)
+    let row = CGRect(x: 120, y: 300, width: 300, height: 30)
+    let point = CGPoint(x: 200, y: 312)
+    let origin = CGPoint(x: -20000, y: -20000)
+    /// ready：网页那棵树建好了没有（没建好只答整块）
+    final class Fake {
+      var asked = 0
+      var ready = false
+    }
+    func woken(views: Bool, ready: Bool = false) -> (Harness, Fake) {
+      let h = Harness(windows: [window], owners: [[4242]], findsElements: true)
+      if views { h.session.views = [h.view] }
+      h.session.hits.woken[4242] = .now
+      let fake = Fake()
+      fake.ready = ready
+      h.session.findElements = { _, _ in
+        fake.asked += 1
+        return .chain(
+          (fake.ready ? [row, window] : [window]).map {
+            ElementFinder.Layer(frame: $0.offsetBy(dx: origin.x, dy: origin.y), name: "组")
+          })
+      }
+      return (h, fake)
+    }
+    var (h, fake) = woken(views: true)
+    h.move(point)
+    #expect(h.view.accessibilityLabel() == "待选，窗口 600 × 500 像素")
+    var before = fake.asked
+    fake.ready = true
+    try await Task.sleep(for: .milliseconds(600))
+    #expect(fake.asked > before)
+    #expect(h.view.accessibilityLabel() == "待选，组 300 × 30 像素")
+    // 遮罩已经收了（finish 清掉 views）：到点不问
+    (h, fake) = woken(views: false)
+    h.move(point)
+    before = fake.asked
+    try await Task.sleep(for: .milliseconds(600))
+    #expect(fake.asked == before)
+    // 本来就认得细：不排
+    (h, fake) = woken(views: true, ready: true)
+    h.move(point)
+    before = fake.asked
+    try await Task.sleep(for: .milliseconds(600))
+    #expect(fake.asked == before)
+    // 刚叫醒时问超时：这次只给窗口，不记成卡住；叫醒很久以前的照旧记
+    h = Harness(windows: [window], owners: [[4242]], findsElements: true)
+    h.session.hits.woken[4242] = .now
+    h.session.findElements = { _, _ in .unresponsive }
+    h.move(point)
+    #expect(h.session.silentApps.isEmpty)
+    h = Harness(windows: [window], owners: [[4242]], findsElements: true)
+    h.session.hits.woken[4242] = .now - .seconds(5)
+    h.session.findElements = { _, _ in .unresponsive }
+    h.move(point)
+    #expect(h.session.silentApps == [4242])
   }
 
   // 进场时光标就在窗口上：洞和粉框从光标处的零尺寸占位长出来，不从屏幕左下角 (0, 0) 飞过来
@@ -919,7 +1030,8 @@ struct SelectionInteractionTests {
     try #require(h.toolbar).onClick(.output(.translate))
     for _ in 0..<500 where h.card == nil { try await Task.sleep(for: .milliseconds(10)) }
     let again = try #require(h.card)
-    h.window.makeFirstResponder(try #require(texts(in: again).first))
+    let field = try #require(texts(in: again).first)
+    h.window.makeFirstResponder(field)
     func buttons(in view: NSView) -> [NSButton] {
       view.subviews.flatMap { ($0 as? NSButton).map { [$0] } ?? buttons(in: $0) }
     }
@@ -1089,7 +1201,7 @@ struct SelectionInteractionTests {
     #expect(h.menu?.accessibilityLabel() != "快捷键")
   }
 
-  // Esc 依次：HUD 菜单 → 尺寸输入（放弃输入的数）→ 选中的标注 → 工具 → 取消截图
+  // Esc 依次：HUD 菜单 → 尺寸输入（放弃输入的数）→ 选中的标注 → 工具 → 取消截图（画过标注时这一下要按两次，E8）
   @Test func escapeOrder() async throws {
     let h = Harness()
     h.makeSelection()
@@ -1117,8 +1229,277 @@ struct SelectionInteractionTests {
     h.key(kVK_Escape, "\u{1b}")
     #expect(h.view.tool == nil)
     #expect(h.view.annotations.count == 1)
+    // 第五轮体检 E8：画过标注，最后这一下先上膛（顶上提示 + 播报），约 2 秒内再按才放弃
+    let armed = await h.outcome { h.key(kVK_Escape, "\u{1b}") }
+    guard case .color("没交回结果")? = armed else {
+      Issue.record("第一下 Esc 就退出了")
+      return
+    }
+    #expect(h.view.announcement == "再按一次放弃这些标注" && h.view.hintShowing)
+    #expect(h.view.annotations.count == 1)
     let outcome = await h.outcome { h.key(kVK_Escape, "\u{1b}") }
     #expect(outcome == nil)
+  }
+
+  // E8 评审 12：上膛记在几块屏共用的会话上——在一块屏上按了第一下，到另一块屏再按一下就放弃（不是三下）
+  @Test func discardArmIsSharedAcrossScreens() async {
+    let (left, right) = Harness.screens()
+    left.makeSelection()
+    left.view.tool = .rectangle
+    left.drag(CGPoint(x: 350, y: 250), CGPoint(x: 450, y: 350))
+    left.view.selectedAnnotation = nil
+    left.view.tool = nil
+    let armed = await left.outcome { left.key(kVK_Escape, "\u{1b}") }
+    guard case .color("没交回结果")? = armed else {
+      Issue.record("第一下 Esc 就退出了")
+      return
+    }
+    #expect(await right.outcome { right.key(kVK_Escape, "\u{1b}") } == nil)
+  }
+
+  // E8：工具栏 ✕ 同 Esc——画过标注时第一下只上膛，再点才放弃；没画标注时一下就退出
+  @Test func cancelButtonArmsWithAnnotations() async throws {
+    let h = Harness()
+    h.makeSelection()
+    let cancel = try #require(h.toolbar?.button(for: .cancel))
+    h.view.tool = .rectangle
+    h.drag(CGPoint(x: 350, y: 250), CGPoint(x: 450, y: 350))
+    let armed = await h.outcome { cancel.performClick(nil) }
+    guard case .color("没交回结果")? = armed else {
+      Issue.record("第一下 ✕ 就退出了")
+      return
+    }
+    #expect(h.view.announcement == "再按一次放弃这些标注")
+    #expect(await h.outcome { cancel.performClick(nil) } == nil)
+
+    let clean = Harness()
+    clean.makeSelection()
+    let close = try #require(clean.toolbar?.button(for: .cancel))
+    #expect(await clean.outcome { close.performClick(nil) } == nil)
+  }
+
+  // 顶部提示排成几行（第五轮体检 U3）：一段不拆开，超了在段与段之间折行（一段本身就超的自己占一行），行数定了再排匀
+  @Test func hintRowsWrapBetweenParts() {
+    #expect(SelectionView.hintRows([100, 100, 100], separator: 20, limit: 400) == [3])
+    #expect(SelectionView.hintRows([100, 100, 100], separator: 20, limit: 300) == [2, 1])
+    #expect(SelectionView.hintRows([100, 100, 100], separator: 20, limit: 219) == [1, 1, 1])
+    #expect(SelectionView.hintRows([500, 50, 50], separator: 20, limit: 300) == [1, 2])
+    #expect(SelectionView.hintRows([], separator: 20, limit: 300) == [])
+    // 行数定了再排匀：不剩一段孤零零挂在第二行
+    #expect(SelectionView.hintRows([80, 80, 80, 80, 80, 60], separator: 10, limit: 470) == [3, 3])
+    // 宽度上限：所在屏的可见宽度（程序坞在侧边时更窄）减两边各 32，不窄于 240
+    #expect(SelectionView.hintWidthLimit(screen: 1512, visible: nil) == 1448)
+    #expect(SelectionView.hintWidthLimit(screen: 1512, visible: 1430) == 1366)
+    #expect(SelectionView.hintWidthLimit(screen: 200, visible: nil) == 240)
+    // 窄屏上提示条不超出屏幕（折成两行以上），各段一个字都不少
+    let h = Harness(findsElements: true, size: CGSize(width: 480, height: 600))
+    h.move(CGPoint(x: 320, y: 300))
+    let hint = h.view.hintLayout
+    #expect(hint.frame.minX >= 32 && hint.frame.maxX <= 480 - 32)
+    #expect(hint.text.contains("\n") && hint.text.hasSuffix("Esc 取消"))
+    #expect(hint.text.replacingOccurrences(of: "\n", with: " · ").contains("双击直接拷贝 · Esc 取消"))
+    // 宽屏上照旧一行
+    let wide = Harness(findsElements: true)
+    wide.move(CGPoint(x: 320, y: 300))
+    #expect(!wide.view.hintLayout.text.contains("\n"))
+  }
+
+  // 设置 › 截图「框选时显示操作提示」（2026-11-17 拍板 A1）：关掉只关开场那条，被挡下时临时说的一句照出
+  @Test func hintSwitchOnlyHidesTheOpeningHint() throws {
+    #expect(Harness().view.hintShowing)
+    let h = Harness(showsHint: false)
+    h.move(CGPoint(x: 300, y: 300))
+    #expect(!h.view.hintShowing)
+    h.drag(CGPoint(x: 300, y: 200), CGPoint(x: 700, y: 240))  // 40 点高：太矮，长截图不开始
+    #expect(!h.view.hintShowing)
+    h.key(kVK_ANSI_S, "s")
+    #expect(h.view.hintShowing)
+    #expect(h.view.announcement == "选区太矮，拉高一点再长截图")
+  }
+
+  // 设置 › 截图「框选时的放大镜」（拍板 B1–B3）：色值卡和格子分开；不显示色值时 C 不取色、不结束截图；
+  // 不显示放大镜时按住 ⌘ 的十字准线照样有；吸管取色时放大镜和色值照常出来，取完回到设置的样子
+  @Test func loupeSettingSplitsMagnifierAndColor() async throws {
+    let full = Harness()
+    full.move(CGPoint(x: 300, y: 300))
+    #expect(full.view.magnifierHeight > SelectionView.loupeSide)
+    let copied = await full.outcome { full.key(kVK_ANSI_C, "c") }
+    guard case .color(let hex)? = copied, hex.hasPrefix("#") else {
+      Issue.record("放大镜和色值时 C 要拷色值：\(String(describing: copied))")
+      return
+    }
+
+    let loupe = Harness(loupe: .loupe)
+    loupe.move(CGPoint(x: 300, y: 300))
+    #expect(loupe.view.showsMagnifier && loupe.view.magnifierHeight == SelectionView.loupeSide)
+    let ignored = await loupe.outcome { loupe.key(kVK_ANSI_C, "c") }
+    guard case .color("没交回结果")? = ignored else {
+      Issue.record("不显示色值时 C 不该结束截图：\(String(describing: ignored))")
+      return
+    }
+
+    let off = Harness(loupe: .off)
+    off.move(CGPoint(x: 300, y: 300))
+    #expect(!off.view.showsMagnifier && !off.view.showsCrosshair)
+    off.modifiers(.command)
+    #expect(off.view.showsCrosshair)
+    off.modifiers([])
+    let none = await off.outcome { off.key(kVK_ANSI_C, "c") }
+    guard case .color("没交回结果")? = none else {
+      Issue.record("不显示放大镜时 C 不该结束截图：\(String(describing: none))")
+      return
+    }
+
+    for h in [loupe, off] {
+      h.makeSelection()
+      h.view.tool = .rectangle
+      let styleBar = try #require(h.styleBar)
+      styleBar.onEyedropper()
+      h.move(CGPoint(x: 500, y: 450))
+      #expect(h.view.showsMagnifier && h.view.magnifierHeight > SelectionView.loupeSide)
+      h.click(CGPoint(x: 500, y: 450))
+      #expect(h.view.style.custom != nil)
+      #expect(h.view.magnifierHeight == SelectionView.loupeSide)
+    }
+  }
+
+  // 截图里按 R 切到录屏（评审）：吸管不取了、放大镜不再挂着截图的色值卡
+  @Test func switchingToRecordDropsColorCard() throws {
+    let h = Harness()
+    h.makeSelection()
+    h.view.tool = .rectangle
+    try #require(h.styleBar).onEyedropper()
+    h.move(CGPoint(x: 500, y: 450))
+    #expect(h.view.magnifierHeight > SelectionView.loupeSide)
+    h.key(kVK_ANSI_R, "r")
+    #expect(h.recordBar != nil)
+    #expect(h.view.magnifierHeight == SelectionView.loupeSide && !h.view.showsMagnifier)
+  }
+
+  // 第五轮体检 N1：单击选中整扇窗口、开着「窗口截图带阴影」时出图带上窗口号（WindowShot 换成单独截的那张）；
+  // 选区动过、设置关着、识字、单击的是窗口里的元素 / 没有窗口号的（菜单栏那条）都不带
+  @Test func clickedWindowGoesToWindowShot() async throws {
+    let frame = CGRect(x: 200, y: 150, width: 500, height: 400)
+    let h = Harness(
+      windows: [frame, CGRect(x: 0, y: 770, width: 1200, height: 30)], windowIDs: [42, nil])
+    h.styles.set(true, forKey: Prefs.screenshotWindowShadow)
+    h.click(CGPoint(x: 400, y: 300))
+    #expect(h.view.selection == frame)
+    func shot(_ action: RegionSelector.Action) async -> Bool? {
+      guard case .capture(let capture)? = await h.outcome(of: { h.view.output(action) }) else {
+        return nil
+      }
+      return capture.window != nil
+    }
+    #expect(await shot(.copy) == true)
+    #expect(await shot(.pin) == true)
+    #expect(await shot(.recognize) == false)
+    h.styles.set(false, forKey: Prefs.screenshotWindowShadow)
+    #expect(await shot(.copy) == false)
+    h.styles.set(true, forKey: Prefs.screenshotWindowShadow)
+    // 方向键挪了一点：选区和单击时的窗口对不上了，照旧按矩形裁
+    h.arrow(kVK_RightArrow)
+    #expect(h.view.selection != frame)
+    #expect(await shot(.copy) == false)
+    // 菜单栏那一条没有窗口号
+    let bar = Harness(
+      windows: [CGRect(x: 0, y: 770, width: 1200, height: 30)], windowIDs: [nil])
+    bar.styles.set(true, forKey: Prefs.screenshotWindowShadow)
+    bar.click(CGPoint(x: 600, y: 785))
+    #expect(bar.view.clickedWindow == nil)
+  }
+
+  // 2026-11-20 用户：悬停时是圆角、单击选中后变直角。框的形状就是出图的形状：开着「窗口截图带阴影」时整扇窗口悬停和
+  // 选中都按量出来的圆角（先按默认的画，量完换上），挪过一点就按「截图圆角」（这里是 0，直角）；没有窗口号的（菜单栏那条）、
+  // 关着开关时同样按它，录屏一律直角
+  @Test func windowFrameFollowsOutputShape() async throws {
+    let frame = CGRect(x: 200, y: 150, width: 500, height: 400)
+    let bar = CGRect(x: 0, y: 770, width: 1200, height: 30)
+    let h = Harness(windows: [frame, bar], windowIDs: [42, nil])
+    h.session.measureRadius = { _ in 12 }
+    h.styles.set(true, forKey: Prefs.screenshotWindowShadow)
+    #expect(h.view.cornerRadius(of: frame) == WindowShot.defaultRadius)
+    for _ in 0..<20 where h.view.cornerRadius(of: frame) != 12 { await Task.yield() }
+    #expect(h.view.cornerRadius(of: frame) == 12)
+    #expect(h.view.cornerRadius(of: bar) == 0)
+    // 悬停：洞和粉框都是圆角（窗口左上角那一点在洞外）
+    let corner = CGPoint(x: frame.minX + 1, y: frame.maxY - 1)
+    h.move(CGPoint(x: 400, y: 300))
+    #expect(h.view.shade.path?.contains(corner, using: .evenOdd) == true)
+    #expect(h.view.highlight.path?.contains(CGPoint(x: frame.minX + 2, y: frame.maxY - 2)) == false)
+    // 单击选中：洞、边框还是那个圆角
+    h.click(CGPoint(x: 400, y: 300))
+    #expect(h.view.selection == frame)
+    #expect(h.view.selectionRadius == 12)
+    #expect(h.view.shade.path?.contains(corner, using: .evenOdd) == true)
+    #expect(h.view.outline.path?.contains(CGPoint(x: frame.minX, y: frame.maxY)) == false)
+    // 挪了一点：出图成了矩形裁切，框也成了直角
+    h.arrow(kVK_RightArrow)
+    #expect(h.view.selectionRadius == 0)
+    let moved = try #require(h.view.selection)
+    #expect(
+      h.view.shade.path?.contains(CGPoint(x: moved.minX + 1, y: moved.maxY - 1), using: .evenOdd)
+        == false)
+    // 关着开关：悬停也是直角
+    h.styles.set(false, forKey: Prefs.screenshotWindowShadow)
+    #expect(h.view.cornerRadius(of: frame) == 0)
+    // 录屏录的是矩形
+    let record = Harness(mode: .record, windows: [frame], windowIDs: [42])
+    record.styles.set(true, forKey: Prefs.screenshotWindowShadow)
+    #expect(record.view.cornerRadius(of: frame) == 0)
+  }
+
+  // 设置 › 截图「截图圆角」（2026-11-20 用户：要圆角、图也要圆角、能调）：悬停菜单栏那条、拖出来的选区按它画，
+  // 拷贝 / 钉图出去的图四角裁透明（历史的原图也是），识字不裁；单击的整扇窗口按窗口自己的，挪过就回到设置的；录屏直角
+  @Test func cornerRadiusSettingRoundsFrameAndImage() async throws {
+    let frame = CGRect(x: 200, y: 150, width: 500, height: 400)
+    let bar = CGRect(x: 0, y: 770, width: 1200, height: 30)
+    let h = Harness(windows: [frame, bar], windowIDs: [42, nil])
+    h.session.measureRadius = { _ in 16 }
+    h.styles.set(12.0, forKey: Prefs.screenshotCornerRadius)
+    h.styles.set(true, forKey: Prefs.screenshotWindowShadow)
+    #expect(h.view.cornerRadius(of: bar) == 12)
+    h.drag(CGPoint(x: 100, y: 100), CGPoint(x: 400, y: 300))
+    let drawn = try #require(h.view.selection)
+    #expect(h.view.selectionRadius == 12)
+    #expect(
+      h.view.shade.path?.contains(CGPoint(x: drawn.minX + 1, y: drawn.maxY - 1), using: .evenOdd)
+        == true)
+    func image(_ action: RegionSelector.Action) async -> RegionSelector.Capture? {
+      guard case .capture(let capture)? = await h.outcome(of: { h.view.output(action) }) else {
+        return nil
+      }
+      return capture
+    }
+    let copied = try #require(await image(.copy))
+    let pixels = copied.image
+    #expect(WindowShotTests.pixel(pixels, 0, 0)[3] == 0)
+    #expect(WindowShotTests.pixel(pixels, pixels.width - 1, pixels.height - 1)[3] == 0)
+    #expect(WindowShotTests.pixel(pixels, pixels.width / 2, 0)[3] == 255)
+    #expect(copied.original.map { WindowShotTests.pixel($0, 0, 0)[3] } == 0)
+    let read = try #require(await image(.recognize))
+    #expect(WindowShotTests.pixel(read.image, 0, 0)[3] == 255)
+    // 0 = 直角，出图不裁
+    h.styles.set(0.0, forKey: Prefs.screenshotCornerRadius)
+    #expect(h.view.selectionRadius == 0)
+    let square = try #require(await image(.copy))
+    #expect(WindowShotTests.pixel(square.image, 0, 0)[3] == 255)
+    // 单击整扇窗口：按窗口自己的圆角；方向键挪一点回到设置的
+    h.styles.set(12.0, forKey: Prefs.screenshotCornerRadius)
+    let w = Harness(windows: [frame], windowIDs: [42])
+    w.session.measureRadius = { _ in 16 }
+    w.styles.set(12.0, forKey: Prefs.screenshotCornerRadius)
+    w.styles.set(true, forKey: Prefs.screenshotWindowShadow)
+    _ = w.view.cornerRadius(of: frame)
+    for _ in 0..<20 where w.view.cornerRadius(of: frame) != 16 { await Task.yield() }
+    w.click(CGPoint(x: 400, y: 300))
+    #expect(w.view.selectionRadius == 16)
+    w.arrow(kVK_RightArrow)
+    #expect(w.view.selectionRadius == 12)
+    // 录屏录的是矩形
+    let record = Harness(mode: .record, windows: [bar], windowIDs: [nil])
+    record.styles.set(12.0, forKey: Prefs.screenshotCornerRadius)
+    #expect(record.view.cornerRadius(of: bar) == 0)
   }
 
   // 截图翻译 / 识字：待选和框选时有放大镜、尺寸只读，⇧ 照样正方形，松手即确认（交回裁好的图）

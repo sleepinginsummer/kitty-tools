@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- 局部 Info.plist：构建时与 GENERATE_INFOPLIST_FILE 生成的内容合并，只放 INFOPLIST_KEY_* 表达不了的键（PLAN §8.1）。
-     CFBundleURLTypes：App 自己的网址（scheme 就是 bundle id，Debug、Release 各认各的），访达扩展把右键的动作交过来（FinderLink） -->
+     CFBundleLocalizations：简体中文、英文；zh-Hant 不建 lproj，只为让繁体中文的系统落回简体（不列它会落到英文，2026-11-15 实测）。
+     下面几条权限说明的英文在 KittyTools/Resources/InfoPlist.xcstrings，改这里要一起改
+     CFBundleURLTypes：App 自己的网址（scheme 就是 bundle id，Debug、Release 各认各的），访达扩展把右键的动作交过来（FinderLink）
+     NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac（issue #36）：macOS 26 起系统给所有 App 的所有输入框弹「填充验证码」
+     菜单（信息 / 邮件里三分钟内收到的验证码），挂在启动器、剪贴板搜索这类不激活本 App 的面板上会占着回车、Esc；设成 true 只给
+     contentType = .oneTimeCode 的框弹，Kitty 没有这种框（读它的是 SafariPlatformSupport，macOS 27 反汇编核对过） -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleURLTypes</key>
@@ -18,7 +23,11 @@
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>zh-Hans</string>
+		<string>en</string>
+		<string>zh-Hant</string>
 	</array>
+	<key>NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac</key>
+	<true/>
 	<key>KittyBuiltinZhipuKey</key>
 	<string>$(ZHIPU_BUILTIN_KEY)</string>
 	<key>NSAppTransportSecurity</key>
@@ -33,9 +42,11 @@
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>用于打开、显示你在启动器和剪贴板历史里选中的下载文件，和在访达右键里新建文件</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>用于启动器的系统命令：让访达清倒废纸篓，弹出退出登录、重新启动、关机的系统确认框；刘海岛读不到正在播放时，替「音乐」「Spotify」播放、暂停、切歌，读「音乐」播到哪</string>
+	<string>用于启动器的系统命令：让访达清倒废纸篓，弹出退出登录、重新启动、关机的系统确认框；刘海岛读不到正在播放时，替「音乐」「Spotify」播放、暂停、切歌，读「音乐」播到哪；访达工具栏上的「Kitty Tools」按钮在 iCloud 云盘、网盘的文件夹里问访达你选中了什么</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>用于在刘海岛上显示下一个日程的倒数（标题、时间、地点和会议链接）；日程的内容只留在这台 Mac 上</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>用于「睡眠关蓝牙」插件：电脑睡下去时关掉蓝牙、醒来时再打开</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>用于录屏和录音时录下麦克风的声音</string>
 	<key>NSLocalNetworkUsageDescription</key>

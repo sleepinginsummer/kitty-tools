@@ -130,11 +130,7 @@ enum StatusPicker {
   }
 
   /// 前 9 个是主键盘的 1–9，后 9 个是小键盘的（退出密码的输入也按它认数字，Passcode.digit）
-  static let digitKeys = [
-    kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8,
-    kVK_ANSI_9, kVK_ANSI_Keypad1, kVK_ANSI_Keypad2, kVK_ANSI_Keypad3, kVK_ANSI_Keypad4,
-    kVK_ANSI_Keypad5, kVK_ANSI_Keypad6, kVK_ANSI_Keypad7, kVK_ANSI_Keypad8, kVK_ANSI_Keypad9,
-  ]
+  static let digitKeys = HotKey.digitKeys + HotKey.keypadDigitKeys
 
   /// 底栏「直接进入」后面的键帽：有几张写到几（最多 9）
   static func digitsCap(count: Int) -> String {
@@ -242,13 +238,13 @@ struct StatusPickerView: View {
     .overlay(alignment: .top) { Hairline() }
   }
 
-  private func hint(_ text: String, _ key: String) -> some View {
+  private func hint(_ text: LocalizedStringResource, _ key: String) -> some View {
     HStack(spacing: 6) {
       Text(text).foregroundStyle(.secondary)
       KeyCap(key)
     }
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(text)：\(key)")
+    .accessibilityLabel(String(localized: "\(String(localized: text))：\(key)"))
   }
 }
 
@@ -329,7 +325,7 @@ private struct PickerCard: View {
           .scaleEffect(selected ? StatusPicker.selectedScale : 1)
         HStack(spacing: 6) {
           if index < 9 { KeyCap("\(index + 1)") }
-          Text(preset.title)
+          Text(preset.displayTitle)
             .font(.system(size: 13))
             .foregroundStyle(selected ? .primary : .secondary)
             .lineLimit(1)
@@ -350,7 +346,7 @@ private struct PickerCard: View {
         }
       }
     }
-    .accessibilityLabel(preset.title)
+    .accessibilityLabel(preset.displayTitle)
     .accessibilityHint("进入这个状态")
     .accessibilityAddTraits(selected ? .isSelected : [])
   }

@@ -24,13 +24,18 @@ struct FeatureTests {
   }
 
   /// 每个动作恰好归一个功能，就是它所在那一节里的；每个功能至少一个动作（程序坞预览除外：它停在程序坞上就弹，
-  /// 没有快捷键，拍板 D1；访达右键也是，入口在访达里）；和设置页同名。打开主界面（全部功能的入口，2026-10-29）不归哪个功能；
+  /// 没有快捷键，拍板 D1；访达右键也是，入口在访达里；睡眠关蓝牙也是，跟着睡眠自己动；平滑滚动也是，跟着滚轮自己动；片段展开也是，
+  /// 跟着打的字自己动）；和设置页同名。打开主界面（全部功能的入口，2026-10-29）不归哪个功能；
   /// 打开刘海岛 2026-11-13 起归刘海岛插件（原来不归哪个功能）
   @Test func everyActionBelongsToOneFeature() {
     for feature in Feature.allCases {
       #expect(
         HotKeyAction.allCases.contains { $0.feature == feature }
-          == ![.dockPreview, .finderMenu].contains(feature))
+          == ![
+            .dockPreview, .finderMenu, .bluetoothSnooze, .smoothScroll, .keyRemapping,
+            .snippetExpand,
+          ].contains(
+            feature))
       #expect(feature.page.rawValue == feature.rawValue)
     }
     #expect(HotKeyAction.screenshotTranslate.feature == .translate)
@@ -128,28 +133,28 @@ struct FeatureTests {
   @Test func cheatSheetFollowsFeatures() {
     let full = ShortcutsSheet.groups(enabled: all)
     let noTranslate = ShortcutsSheet.groups(enabled: all.subtracting([.translate]))
-    #expect(!noTranslate.contains { $0.title.hasPrefix("翻译") })
-    let clipboard = noTranslate.first { $0.title == "剪贴板" }
+    #expect(!noTranslate.contains { $0.title.key.hasPrefix("翻译") })
+    let clipboard = noTranslate.first { $0.title.key == "剪贴板" }
     #expect(clipboard?.entries.contains { $0.keys == ["⌘T"] } == false)
-    #expect(full.first { $0.title == "剪贴板" }?.entries.contains { $0.keys == ["⌘T"] } == true)
+    #expect(full.first { $0.title.key == "剪贴板" }?.entries.contains { $0.keys == ["⌘T"] } == true)
     #expect(
-      noTranslate.first { $0.title == "启动器" }?.entries.contains { $0.keys == ["fy"] } == false)
+      noTranslate.first { $0.title.key == "启动器" }?.entries.contains { $0.keys == ["fy"] } == false)
 
     // 框选也是截图翻译和录屏的第一步：截图关了、翻译开着时这一组还在，只是没有截图的全局键
     let noShots = ShortcutsSheet.groups(enabled: all.subtracting([.screenshot]))
-    let selecting = noShots.first { $0.title == "截图 · 框选" }
+    let selecting = noShots.first { $0.title.key == "截图 · 框选" }
     #expect(selecting?.globals.isEmpty == true)
-    #expect(!noShots.contains { $0.title == "截图 · 标注" })
-    #expect(!noShots.contains { $0.title == "钉图" })
+    #expect(!noShots.contains { $0.title.key == "截图 · 标注" })
+    #expect(!noShots.contains { $0.title.key == "钉图" })
 
     let noRecord = ShortcutsSheet.groups(enabled: all.subtracting([.record]))
-    #expect(!noRecord.contains { $0.title == "录屏" })
+    #expect(!noRecord.contains { $0.title.key == "录屏" })
     #expect(
-      noRecord.first { $0.title == "截图 · 出图" }?.entries.contains { $0.keys == ["R"] } == false)
+      noRecord.first { $0.title.key == "截图 · 出图" }?.entries.contains { $0.keys == ["R"] } == false)
 
     // 都关掉只剩不归功能的那几组；刘海岛那一组一直列，没添加插件时只剩「提示怎么停住、收起」那一行（评审 5）
     let none = ShortcutsSheet.groups(enabled: [])
-    #expect(none.map(\.title) == ["刘海岛", "主界面", "设置"])
+    #expect(none.map(\.title.key) == ["刘海岛", "主界面", "设置"])
     #expect(none[0].globals.isEmpty && none[0].entries.count == 1)
   }
 
@@ -210,14 +215,18 @@ struct FeatureTests {
   /// 新做的插件默认不添加（2026-11-12 拍板 A1）；2026-11-13 从功能转过来的插件照旧用原来的默认值、刘海岛默认添加着（P2：
   /// 没拨过开关的老用户升级上来便签、提醒、点刘海都还在，0.8.x 导出的文件里没有这一项也不会把它们关掉）
   @Test func switchesAreExportedSettings() {
-    #expect(Feature.allCases.filter { !$0.defaultOn } == [.dockPreview, .finderMenu])
+    #expect(
+      Feature.allCases.filter { !$0.defaultOn } == [
+        .dockPreview, .finderMenu, .keepAwake, .bluetoothSnooze, .smoothScroll, .appShortcuts,
+        .keyRemapping, .snippetExpand,
+      ])
     #expect(
       [Feature.notes, .reminders, .statusScreen, .launchpad, .island].allSatisfy {
         $0.isPlugin && $0.defaultOn
       })
     #expect(
       Feature.allCases.filter(\.isPlugin).allSatisfy {
-        $0.pluginFacts != nil && !$0.pluginWords.isEmpty
+        $0.pluginBackground != nil && !$0.pluginWords.isEmpty
       })
     for feature in Feature.allCases {
       #expect(Prefs.defaults[feature.prefsKey] as? Bool == feature.defaultOn)
@@ -243,11 +252,25 @@ struct FeatureTests {
       Feature.allCases.filter { !$0.isPlugin } == [
         .clipboard, .launcher, .translate, .screenshot, .record,
       ])
-    // 搜插件的名字：没添加时落到通用页（「功能 ›」下面就是它的卡），添加了停在它自己那页
-    #expect(SettingsPage.page(for: "访达右键", current: .about, hidden: [.finderMenu]) == .general)
-    #expect(SettingsPage.page(for: "访达右键", current: .about) == .finderMenu)
-    // 添加了之后搜它的词停在它自己那页，不落到通用页
+    // 搜插件的名字：没添加时落到「全部插件」、描出它那一行（插件页改版 A4），添加了停在它自己那页
+    #expect(SettingsPage.page(for: "保持唤醒", current: .about, hidden: [.keepAwake]) == .plugins)
+    #expect(SettingsPage.page(for: "防息屏", current: .about, hidden: [.keepAwake]) == .plugins)
+    #expect(SettingsPage.hiddenPlugin(matching: "防息屏", hidden: [.keepAwake]) == .keepAwake)
+    #expect(SettingsPage.hiddenPlugin(matching: "防息屏", hidden: []) == nil)
+    #expect(SettingsPage.hiddenPlugin(matching: " ", hidden: [.keepAwake]) == nil)
+    #expect(SettingsPage.page(for: "插件", current: .about) == .plugins)
+    // 搜的是「全部插件」自己的词不描行（保持唤醒的关键词里也有「插件」）；这台用不了的插件不算（列表里没有它那一行）
+    #expect(SettingsPage.hiddenPlugin(matching: "插件", hidden: [.keepAwake]) == nil)
+    for page in SettingsPage.allCases
+    where page.feature.map({ $0.isPlugin && !$0.isAvailable }) == true {
+      #expect(SettingsPage.hiddenPlugin(matching: page.title, hidden: [page]) == nil, "\(page)")
+    }
+    #expect(SettingsPage.page(for: "保持唤醒", current: .about) == .keepAwake)
+    // 添加了之后搜它的词停在它自己那页，不落到「全部插件」
     #expect(SettingsPage.matching("访达右键", hidden: []) == [.finderMenu])
-    #expect(SettingsPage.finderMenu.groupTitle == "插件")
+    #expect(SettingsPage.finderMenu.section == .plugins)
+    #expect(SettingsPage.page(for: "防息屏", current: .about) == .keepAwake)
+    #expect(SettingsPage.matching("防息屏", hidden: []) == [.keepAwake])
+    #expect(SettingsPage.keepAwake.section == .plugins)
   }
 }

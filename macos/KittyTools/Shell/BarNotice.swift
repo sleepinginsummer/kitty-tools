@@ -5,46 +5,73 @@
 
 import SwiftUI
 
-enum BarNotice: Hashable {
-  case message(String)
-  /// 没做全（如「只复制了第 1 条」）：不带成功的绿色对勾
-  case warning(String)
-  /// 后面跟「撤销 ⌘Z」
-  case undo(String)
+/// 字收的是能本地化的（调用处的字面量会被抽进目录），建的时候按当前语言取好；用户的数据传 "\(x)"
+struct BarNotice: Hashable {
+  enum Kind: Hashable {
+    case message
+    /// 没做全（如「只复制了第 1 条」）：不带成功的绿色对勾
+    case warning
+    /// 后面跟「撤销 ⌘Z」
+    case undo
+  }
 
-  var text: String {
-    switch self {
-    case .message(let text), .warning(let text), .undo(let text): text
-    }
+  let kind: Kind
+  let text: String
+
+  static func message(_ text: LocalizedStringResource) -> Self {
+    Self(kind: .message, text: String(localized: text))
+  }
+
+  static func warning(_ text: LocalizedStringResource) -> Self {
+    Self(kind: .warning, text: String(localized: text))
+  }
+
+  static func undo(_ text: LocalizedStringResource) -> Self {
+    Self(kind: .undo, text: String(localized: text))
   }
 
   /// 停多久：带撤销的 5 秒，其余 1.6 秒
-  var seconds: Double {
-    if case .undo = self { 5 } else { 1.6 }
-  }
+  var seconds: Double { kind == .undo ? 5 : 1.6 }
 }
 
 /// 有新版本时底栏里常驻的「更新到 x」（剪贴板面板、启动器共用，2026-10-06；对标 Alfred 窗口底部的小提示）：跟在左边的
 /// 条数 / 种类后面，就地提示出来时让开；点了先收起面板，再下载安装、装好自动重新打开（同菜单栏菜单顶上那一项，符号也是
-/// 同一个；进度和失败原因在刘海岛上）。Updater 从环境里取：没给（单测、多数截图自检）或没有新版本时什么都不画
+/// 同一个；进度和失败原因在刘海岛上）。Updater 从环境里取：没给（单测、多数截图自检）、没有新版本或跳过了这一版
+/// （X11）时什么都不画
 struct UpdateBarHint: View {
   /// 收起所在的面板
   let dismiss: () -> Void
   @Environment(Updater.self) private var updater: Updater?
 
   var body: some View {
-    if let updater, let release = updater.available {
-      Button {
-        dismiss()
-        Task { await updater.install() }
-      } label: {
-        Label("更新到 \(release.version)", systemImage: "arrow.down.circle.fill")
-          .foregroundStyle(Style.brandInk)
-          .contentShape(.rect)
+    if let updater, let release = updater.nudge {
+      if let obstacle = updater.obstacle {
+        // 这份 App 原地换不了（第五轮体检 E10）：改成去发布页，悬停写原因
+        Button {
+          dismiss()
+          updater.openPage(release)
+        } label: {
+          Label("到发布页下载 \(release.version)", systemImage: "arrow.down.circle.fill")
+            .lineLimit(1)
+            .foregroundStyle(Style.brandInk)
+            .contentShape(.rect)
+        }
+        .pointerStyle(.link)
+        .help(obstacle.reason)
+        .accessibilityHint(obstacle.reason)
+      } else {
+        Button {
+          dismiss()
+          Task { await updater.install() }
+        } label: {
+          Label("更新到 \(release.version)", systemImage: "arrow.down.circle.fill")
+            .foregroundStyle(Style.brandInk)
+            .contentShape(.rect)
+        }
+        .pointerStyle(.link)
+        .help("有新版本：下载并安装 \(release.version)，装好自动重新打开")
+        .accessibilityHint("有新版本，下载安装后自动重新打开")
       }
-      .pointerStyle(.link)
-      .help("有新版本：下载并安装 \(release.version)，装好自动重新打开")
-      .accessibilityHint("有新版本，下载安装后自动重新打开")
     }
   }
 }
@@ -55,8 +82,9 @@ struct BarNoticeView: View {
   let undo: () -> Void
 
   var body: some View {
-    switch notice {
-    case .message(let text):
+    let text = notice.text
+    switch notice.kind {
+    case .message:
       // 只染图标：白对勾、systemGreen 圆底（palette 的两层；以前两层都给了绿，对勾和圆底融成一个实心绿点）。
       // 字不上色（绿字在浅色底上对比度不够，同下面的 warning），用 secondary：就地提示是状态、不是能点的动作
       // （mac-whisker §3「面板里共用的几件」）。写明而不靠继承：剪贴板的底栏整条默认 secondary，启动器的没有这个默认，
@@ -69,7 +97,7 @@ struct BarNoticeView: View {
           .foregroundStyle(.white, Color(nsColor: .systemGreen))
       }
       .symbolEffect(.bounce, value: text)
-    case .warning(let text):
+    case .warning:
       // 只染三角：橙字在浅色底上对比度不够，字不上色、同样用 secondary
       Label {
         Text(text).foregroundStyle(.secondary)
@@ -77,7 +105,7 @@ struct BarNoticeView: View {
         Image(systemName: "exclamationmark.triangle.fill")
           .foregroundStyle(Color(nsColor: .systemOrange))
       }
-    case .undo(let text):
+    case .undo:
       HStack(spacing: 8) {
         Text(text).foregroundStyle(.secondary)
         Text("·").foregroundStyle(.tertiary)

@@ -520,7 +520,7 @@ struct SettingsArchiveTests {
     #expect(1_000_000.multipliedReportingOverflow(by: 1_048_576).overflow == false)
   }
 
-  /// 不认识的键、类型或范围不对的值都丢掉（导入时这些键回到默认）；译文字号夹进滑块的范围；
+  /// 不认识的键、类型或范围不对的值都丢掉（导入时这些键回到默认）；译文字号、截图圆角夹进滑块的范围；
   /// 截图的存储文件夹不收（别人给的文件不能改截图存到哪）
   @Test func dropsInvalidPreferences() throws {
     let archive = try archive(
@@ -531,7 +531,8 @@ struct SettingsArchiveTests {
           "clipboardHistoryRetentionDays": -1, "translateHistoryLimit": 1000, "translateFontScale": 9,
           "clipboardExcludedBundleIDs": ["a.b", "c.d"], "autoCopy": 1, "lastSeenVersion": "0.0.1",
           "NSWindow Frame Settings": "0 0 1 1", "ocrJoinLines": null, "translateWordMode": {"a": 1},
-          "screenshotSaveDirectory": "/Users/Shared", "launcherRomanInput": true
+          "screenshotSaveDirectory": "/Users/Shared", "launcherRomanInput": true,
+          "screenshotCornerRadius": 99
         }
         """))
     #expect(
@@ -540,6 +541,7 @@ struct SettingsArchiveTests {
         Prefs.translateFontScale: .double(TranslateCoordinator.fontScales.upperBound),
         Prefs.clipboardExcludedBundleIDs: .strings(["a.b", "c.d"]),
         Prefs.launcherRomanInput: .bool(true),
+        Prefs.screenshotCornerRadius: .double(Prefs.screenshotCornerRadii.upperBound),
       ])
 
     let (target, name) = try suite()
@@ -722,6 +724,29 @@ struct SettingsArchiveTests {
           + #""clipboardExcludedBundleIDs": [\#(more)]"#) == [])
     // 不带「设置」这一类的文件不提醒
     #expect(try archive(json: file(#""hotkeys": {}"#)).privacyLosses(comparedTo: target) == [])
+  }
+
+  /// 导入「设置」会添加的插件（插件页改版 F1）：文件里添加着、本机没添加的；文件里没写的按默认值算
+  @Test func listsAddedPlugins() throws {
+    let (target, name) = try suite()
+    defer { target.removePersistentDomain(forName: name) }
+    func added(_ preferences: String) throws -> [Feature] {
+      try archive(json: file(#""preferences": {\#(preferences)}"#)).addedPlugins(comparedTo: target)
+    }
+    func plugins(on: Set<Feature>) -> String {
+      Feature.plugins.map { #""\#($0.prefsKey)": \#(on.contains($0))"# }.joined(separator: ", ")
+    }
+    for plugin in Feature.plugins { target.set(false, forKey: plugin.prefsKey) }
+    #expect(try added(plugins(on: [])) == [])
+    // 按 Feature 的先后
+    #expect(try added(plugins(on: [.dockPreview, .notes])) == [.notes, .dockPreview])
+    // 没写的按默认值：便签这类默认添加着，程序坞预览默认不添加
+    #expect(try added("").contains(.notes) && !added("").contains(.dockPreview))
+    // 本机已经添加着的不算
+    target.set(true, forKey: Feature.notes.prefsKey)
+    #expect(try added(plugins(on: [.notes])) == [])
+    // 不带「设置」这一类的文件不提醒
+    #expect(try archive(json: file(#""hotkeys": {}"#)).addedPlugins(comparedTo: target) == [])
   }
 
   /// 功能开关（Feature）：导入会让剪贴板从关变开（又开始记）、让复制即译实际跑起来（翻译从关变开、复制即译开着）时提醒；
@@ -1558,7 +1583,8 @@ struct SettingsArchiveTests {
     #expect(!archive.notesFit)
     #expect(
       archive.exportProblem(encodedSize: 100)
-        == "便签超过 \(SettingsArchive.maxNotes) 条，先取消勾选「便签」")
+        // 条数是数量，插进句子时按语言加千分位（多语言第 7 批：「5,000 条」）
+        == "便签超过 \(SettingsArchive.maxNotes.formatted()) 条，先取消勾选「便签」")
     archive.notes = [note(1, body: String(repeating: "x", count: Note.maxBodyBytes))]
     #expect(archive.notesFit && archive.exportProblem(encodedSize: 100) == nil)
     archive.notes = [

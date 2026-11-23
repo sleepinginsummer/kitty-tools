@@ -39,8 +39,10 @@ struct SettingsListTests {
     let pages = SettingsPage.allCases
     #expect(
       pages == [
-        .general, .clipboard, .launcher, .translate, .screenshot, .record, .notes, .reminders,
-        .statusScreen, .launchpad, .dockPreview, .finderMenu, .island, .hotkeys, .about,
+        .general, .clipboard, .launcher, .translate, .screenshot, .record, .plugins, .notes,
+        .reminders, .statusScreen, .launchpad, .dockPreview, .finderMenu, .keepAwake,
+        .bluetoothSnooze, .smoothScroll, .appShortcuts, .keyRemapping, .snippetExpand, .island,
+        .hotkeys, .about,
       ])
     // 分组盖住每一页、和 allCases 同序
     #expect(SettingsPage.groups.flatMap { $0 } == pages)
@@ -49,7 +51,10 @@ struct SettingsListTests {
       SettingsPage.sidebar(SettingsPage.visible(launchpad: false), off: []).map(\.pages)
         == [
           [.general], [.clipboard, .launcher, .translate], [.screenshot, .record],
-          [.notes, .reminders, .statusScreen, .dockPreview, .finderMenu, .island],
+          [
+            .plugins, .notes, .reminders, .statusScreen, .dockPreview, .finderMenu, .keepAwake,
+            .bluetoothSnooze, .smoothScroll, .appShortcuts, .keyRemapping, .snippetExpand, .island,
+          ],
           [.hotkeys, .about],
         ])
     #expect(
@@ -60,30 +65,67 @@ struct SettingsListTests {
     #expect(
       closed.map(\.pages) == [
         [.general], [.clipboard, .launcher], [.screenshot],
-        [.notes, .reminders, .statusScreen, .launchpad, .dockPreview, .finderMenu, .island],
+        [
+          .plugins, .notes, .reminders, .statusScreen, .launchpad, .dockPreview, .finderMenu,
+          .keepAwake, .bluetoothSnooze, .smoothScroll, .appShortcuts, .keyRemapping, .snippetExpand,
+          .island,
+        ],
         [.hotkeys, .about], [.translate, .record],
       ])
-    #expect(
-      closed.map(\.title) == [nil, "文字与搜索", "截图与录制", "插件", nil, "已关闭（2）"])
+    let titles = { (groups: [SettingsPage.SidebarGroup]) in
+      groups.map { $0.title.map { String(localized: $0) } }
+    }
+    #expect(titles(closed) == [nil, "文字与搜索", "截图与录制", "插件", nil, "已关闭（2）"])
     #expect(closed.map(\.isOff) == [false, false, false, false, false, true])
     #expect(Set(closed.map(\.id)).count == closed.count)
+    // id 不跟着显示的字走（多语言）：带标题的组是 SidebarSection 的 rawValue
+    #expect(closed.map(\.id) == ["general", "text", "capture", "plugins", "hotkeys", "off"])
     // 搜索时只剩对上的：关着的那页照样在「已关闭」里
-    #expect(SettingsPage.sidebar([.record], off: [.record]).map(\.title) == ["已关闭（1）"])
-    // 组标题（2026-11-04 真机反馈）：一组里的页同一个标题；中间三组有，一头一尾两组没有
+    #expect(titles(SettingsPage.sidebar([.record], off: [.record])) == ["已关闭（1）"])
+    // 组标题（2026-11-04 真机反馈）：一组里的页同一组；中间三组有标题，一头一尾两组没有
     for group in SettingsPage.groups {
-      #expect(Set(group.map(\.groupTitle)).count == 1, "\(group)")
+      #expect(Set(group.map(\.section)).count == 1, "\(group)")
     }
-    #expect(
-      SettingsPage.groups.map(\.first?.groupTitle) == [nil, "文字与搜索", "截图与录制", "插件", nil])
+    #expect(SettingsPage.groups.map(\.first?.section) == [nil, .text, .capture, .plugins, nil])
     // 功能页对得上功能（刘海岛 2026-11-13 起是插件的页），通用 / 快捷键 / 关于不是功能
     #expect(pages.compactMap(\.feature) == Feature.allCases)
     #expect(
       SettingsPage.general.feature == nil && SettingsPage.island.feature == .island
         && SettingsPage.hotkeys.feature == nil)
-    // 插件组就是全部插件（按 Feature 的先后）
+    // 插件组：第一行「全部插件」（不是哪个功能的页），下面就是全部插件（按 Feature 的先后）
+    #expect(SettingsPage.groups[3].first == .plugins && SettingsPage.plugins.feature == nil)
     #expect(SettingsPage.groups[3].compactMap(\.feature) == Feature.allCases.filter(\.isPlugin))
     let sections = HotKeyAction.sections.map(\.title)
     #expect(sections.firstIndex(of: "翻译")! < sections.firstIndex(of: "截图与录制")!)
+  }
+
+  /// 侧栏收起了哪几组按 SidebarSection 的 rawValue 存（多语言：不存显示的标题）；0.9.0 及以前存的中文标题照样认
+  @Test func collapsedSidebarGroupsSurviveLanguage() {
+    typealias Section = SettingsPage.SidebarSection
+    #expect(Section(stored: "text") == .text && Section(stored: "plugins") == .plugins)
+    #expect(Section(stored: "文字与搜索") == .text && Section(stored: "截图与录制") == .capture)
+    #expect(Section(stored: "插件") == .plugins)
+    #expect(Section(stored: "便签与提醒") == nil && Section(stored: "") == nil)
+  }
+
+  /// 设置搜索中英都认（多语言拍板 D7）：每页的关键词有英文的一份，英文界面里中文那组照样认；页名两种都在
+  @Test func sidebarSearchWordsBothLanguages() {
+    for page in SettingsPage.allCases {
+      var english = page.keywords
+      english.locale = Locale(identifier: "en")
+      let words = String(localized: english)
+      #expect(words != page.keywords.chinese && !words.isEmpty, "\(page)")
+      #expect(
+        !words.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces).isEmpty })
+      // 单测宿主是中文：当前语言那份和中文原文一样，都在 searchWords 里
+      #expect(
+        page.searchWords.contains(page.title) && page.titles.contains(page.titleResource.chinese))
+    }
+    var general = SettingsPage.general.keywords
+    general.locale = Locale(identifier: "en")
+    #expect(String(localized: general).contains("Appearance"))
+    // 快捷键页认动作名（中文原文那份也在）
+    #expect(SettingsPage.hotkeys.matches("剪贴板历史"))
   }
 
   /// 侧栏搜索按改名后的叫法也找得到：启动器的「常用」「收藏」，翻译的「浮窗位置」「清空」，截图的「PNG」「对拷线」
@@ -99,6 +141,8 @@ struct SettingsListTests {
   @Test func sidebarSearchPrefersPageTitle() {
     #expect(SettingsPage.page(for: "录制", current: .clipboard) == .record)
     #expect(SettingsPage.page(for: " 快捷键", current: .general) == .hotkeys)
+    // 「App 快捷键」插件页排在快捷键页前面、名字里带「快捷键」：一字不差的那页优先（2026-11-17）
+    #expect(SettingsPage.page(for: "app 快捷键", current: .general) == .appShortcuts)
     #expect(SettingsPage.page(for: "帧率", current: .screenshot) == .record)
     // 刘海岛页排在前面、列着快捷动作，但搜动作的名字要停在那个功能的页（PR #17 原来把名字放进了关键词）
     #expect(SettingsPage.page(for: "录屏", current: .general) == .record)

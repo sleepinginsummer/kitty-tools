@@ -119,7 +119,10 @@ import UniformTypeIdentifiers
       entries = self.entries
     }
     selectionMotion = Style.isKeyRepeat ? .instant : .snap
-    selectedID = entries[(current + offset + entries.count) % entries.count].id
+    let entry = entries[(current + offset + entries.count) % entries.count]
+    selectedID = entry.id
+    // 焦点一直在搜索框：说出选中的原文和译文（A1）
+    Island.announceSettled(entry.source, Island.excerpt(entry.result))
   }
 
   /// 单击选中（指针驱动，glide）
@@ -192,7 +195,7 @@ import UniformTypeIdentifiers
     let editor = event.window?.firstResponder as? NSTextView
     if let editor, !editor.isFieldEditor { return false }
     let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-    let code = Int(event.keyCode)
+    let code = event.typedKeyCode  // 按打出来的字认（E2）
     if flags == [.command, .shift], code == kVK_ANSI_C {
       guard let entry = selected else {
         NSSound.beep()
@@ -241,7 +244,9 @@ import UniformTypeIdentifiers
     typealias Item = ActionMenu.Item
     let exports = HistoryMenu.exports.map { favoritesOnly, anki in
       Item(
-        title: (favoritesOnly ? "只导收藏" : "全部历史") + " · " + HistoryMenu.formatTitle(anki: anki),
+        title: favoritesOnly
+          ? "只导收藏 · \(HistoryMenu.formatTitle(anki: anki))"
+          : "全部历史 · \(HistoryMenu.formatTitle(anki: anki))",
         symbol: favoritesOnly ? "star" : "clock"
       ) { [unowned self] in
         HistoryMenu.export(store, favoritesOnly: favoritesOnly, anki: anki, island: island)
@@ -304,6 +309,7 @@ import UniformTypeIdentifiers
       guard !actions.isEmpty else { break }
       let offset = selector == #selector(NSResponder.moveUp(_:)) ? -1 : 1
       actionSelection = (actionSelection + offset + actions.count) % actions.count
+      ActionMenu.announce(actions[actionSelection])
     case #selector(NSResponder.insertNewline(_:)):
       guard let selectedAction else {
         NSSound.beep()
@@ -389,7 +395,9 @@ struct HistoryView: View {
           // 对话框式输入框：出现时抢焦点，关历史时把焦点还给原文框。⌘K 菜单开着时改成过滤动作
           CommandTextField(
             text: list.showsActions ? $list.actionQuery : $list.query,
-            placeholder: list.showsActions ? "搜索操作" : "搜索原文或译文", isDialogField: true,
+            placeholder: list.showsActions
+              ? String(localized: "搜索操作") : String(localized: "搜索原文或译文"),
+            isDialogField: true,
             fontSize: 13, onCommand: { coordinator.handleHistoryCommand($0) },
             onFocusChange: { searchFocused = $0 })
         }
@@ -397,7 +405,11 @@ struct HistoryView: View {
         .frame(height: 28)
         .modifier(InputBox(isFocused: searchFocused))
         ScopeCapsule(title: "全部", isOn: !list.favoritesOnly) { list.favoritesOnly = false }
-        ScopeCapsule(title: "收藏", isOn: list.favoritesOnly) { list.favoritesOnly = true }
+        // 范围名「收藏」（名词，英文 Favorites）和动作「收藏」分开
+        ScopeCapsule(
+          title: LocalizedStringResource("translate.scope.favorites", defaultValue: "收藏"),
+          isOn: list.favoritesOnly
+        ) { list.favoritesOnly = true }
       }
       .padding(.horizontal, 12)
       if entries.isEmpty {
@@ -586,27 +598,26 @@ struct HistoryView: View {
     return sections
   }
 
-  /// 分组标题（剪贴板按天分组也用它）
+  /// 分组标题（剪贴板按天分组也用它）：今天 / 昨天 / 月日（跨年带年），跟着界面语言（Locale.current）
   static func dayTitle(_ date: Date, now: Date, calendar: Calendar) -> String {
-    if calendar.isDate(date, inSameDayAs: now) { return "今天" }
+    if calendar.isDate(date, inSameDayAs: now) { return String(localized: "今天") }
     if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
       calendar.isDate(date, inSameDayAs: yesterday)
     {
-      return "昨天"
+      return String(localized: "昨天")
     }
     var style = Date.FormatStyle(
-      locale: Locale(identifier: "zh-Hans"), calendar: calendar, timeZone: calendar.timeZone)
+      locale: .current, calendar: calendar, timeZone: calendar.timeZone)
     style =
       calendar.isDate(date, equalTo: now, toGranularity: .year)
       ? style.month().day() : style.year().month().day()
     return date.formatted(style)
   }
 
-  /// 行右侧的时间：时、分都写两位（18:07；分钟不指定两位会显示成「18:7」）
+  /// 行右侧的时间：跟着界面语言（Locale.current），12 / 24 小时制按系统设置（中文 24 小时制是两位的 18:07、09:05，
+  /// 和以前定死 zh-Hans 时一样；英文「6:07 PM」）
   static func rowTime(_ date: Date) -> String {
-    date.formatted(
-      .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)
-        .locale(Locale(identifier: "zh-Hans")))
+    date.formatted(.dateTime.hour().minute())
   }
 
   /// 高亮的 y：前面的分组标题和行高累加
@@ -694,11 +705,11 @@ enum HistoryMenu {
   static let exports = [(false, false), (false, true), (true, false), (true, true)]
 
   static func scopeTitle(favoritesOnly: Bool) -> String {
-    favoritesOnly ? "只导收藏（生词本）" : "全部历史"
+    favoritesOnly ? String(localized: "只导收藏（生词本）") : String(localized: "全部历史")
   }
 
   static func formatTitle(anki: Bool) -> String {
-    anki ? "TSV（Anki 卡片）…" : "CSV（表格）…"
+    anki ? String(localized: "TSV（Anki 卡片）…") : String(localized: "CSV（表格）…")
   }
 
   /// 导出翻译历史 / 收藏：CSV 给表格（带 BOM，Excel 才认 UTF-8），TSV 给 Anki（正面原文、背面译文）。
@@ -712,19 +723,29 @@ enum HistoryMenu {
     }
     let panel = NSSavePanel()
     panel.allowedContentTypes = [anki ? .tabSeparatedText : .commaSeparatedText]
-    panel.nameFieldStringValue = (favoritesOnly ? "翻译收藏" : "翻译历史") + (anki ? ".tsv" : ".csv")
+    // 文件名跟导出那一刻的界面语言（只写出去、不读回来）
+    panel.nameFieldStringValue =
+      (favoritesOnly ? String(localized: "翻译收藏") : String(localized: "翻译历史"))
+      + (anki ? ".tsv" : ".csv")
     FilePanel.begin(panel) { response in
       guard response == .OK, let url = panel.url else { return }
       let text = anki ? HistoryStore.tsv(entries) : "\u{FEFF}" + HistoryStore.csv(entries)
-      do {
-        try text.write(to: url, atomically: true, encoding: .utf8)
-        island?.show(
-          "已导出 \(entries.count) 条", detail: url.lastPathComponent,
-          symbol: "square.and.arrow.up.circle.fill", actions: [.reveal(url)])
-      } catch {
-        island?.show("导出失败", detail: error.localizedDescription, tone: .error)
+      Task {
+        do {
+          try await write(text, to: url)
+          island?.show(
+            "已导出 \(entries.count) 条", detail: "\(url.lastPathComponent)",
+            symbol: "square.and.arrow.up.circle.fill", actions: [.reveal(url)])
+        } catch {
+          island?.show("导出失败", detail: "\(error.localizedDescription)", tone: .error)
+        }
       }
     }
+  }
+
+  /// 写文件在主线程外（第五轮体检 P2）：选的文件夹可能在卡住的网络盘上
+  @concurrent private static func write(_ text: String, to url: URL) async throws {
+    try text.write(to: url, atomically: true, encoding: .utf8)
   }
 
   /// 清空非收藏的历史（确认框由调用方弹，文案「清空翻译历史？」「收藏的记录会保留」）；结果用刘海说
@@ -803,14 +824,14 @@ private struct HistoryRow: View {
 
 /// 22 pt 范围胶囊：生效的品牌粉 0.16 底 + brandInk 字，没生效的无底 secondary（⇧Tab 在两者间切换）
 private struct ScopeCapsule: View {
-  let title: String
+  let title: LocalizedStringResource
   let isOn: Bool
   let action: () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     Button(action: action) {
-      Text(title)
+      Text(plain: title)
         .font(.system(size: 12, weight: .medium))
         .padding(.horizontal, 10)
         .frame(height: 22)

@@ -120,7 +120,10 @@ final class NoteEdge {
   nonisolated static func hint(
     _ edge: NoteDeckOptions.Edge
   ) -> (title: String, detail: String) {
-    ("便签在屏幕\(edge.name)边缘", "鼠标靠过去就能看到")
+    (
+      edge == .right ? String(localized: "便签在屏幕右边缘") : String(localized: "便签在屏幕左边缘"),
+      String(localized: "鼠标靠过去就能看到")
+    )
   }
 
   /// 这台电脑上说过「便签在屏幕右边缘」了吗：没说过就记成说过、返回 true（只这一次）
@@ -201,7 +204,7 @@ final class NoteEdge {
       // 刚记下第一条时岛上正说着「已记下」：等它说完，不顶掉
       if island.isOpen { try? await Task.sleep(for: .seconds(2.4)) }
       guard !Task.isCancelled, self?.decks.isEmpty == false else { return }
-      island.show(hint.title, detail: hint.detail, tone: .info, symbol: "note.text")
+      island.show("\(hint.title)", detail: "\(hint.detail)", tone: .info, symbol: "note.text")
     }
   }
 
@@ -256,11 +259,39 @@ final class NoteEdge {
     else { return false }
     let id = id ?? store.blankOrNew().id
     refresh()  // 这是第一条的话，那叠这时才有
-    let mouse = NSEvent.mouseLocation
-    let home = decks.first { $0.deck.screen.frame.contains(mouse) } ?? decks.first
+    let home =
+      NSScreen.index(containing: NSEvent.mouseLocation, in: decks.map { $0.deck.screen.frame })
+      .map { decks[$0] } ?? decks.first
     guard let deck = home?.deck else { return false }
     deck.model.open(created: id)
     return true
+  }
+
+  /// 全局快捷键「屏幕边缘的便签」叫出来的结果
+  enum Summon { case done, disabled, empty }
+
+  /// 全局快捷键「屏幕边缘的便签」（X16）：快捷键叫出来的那叠还开着、或者鼠标所在屏的那叠展开着，就收回它（别的屏上固定着
+  /// 打开的便签不动，评审 B10）；不然把鼠标所在屏的那叠扇出来、键盘给它（↑↓ ↩ Esc）。
+  /// disabled = 总开关关着、哪块屏都放不了；empty = 一条便签都没有（那叠本来就不出来，评审 B11）
+  func summon() -> Summon {
+    let options = NoteDeckOptions(defaults)
+    guard options.isEnabled,
+      !NoteDeckLayout.placements(NoteDeckScreen.attached(), options: options).isEmpty
+    else { return .disabled }
+    refresh()
+    let home =
+      NSScreen.index(containing: NSEvent.mouseLocation, in: decks.map { $0.deck.screen.frame })
+      .map { decks[$0] } ?? decks.first
+    if let open =
+      decks.first(where: { $0.deck.model.summonedByKey })
+      ?? home.flatMap({ $0.deck.model.state.isExpanded ? $0 : nil })
+    {
+      open.deck.model.dismiss()
+      return .done
+    }
+    guard let deck = home?.deck else { return .empty }
+    deck.summon()
+    return .done
   }
 
   // MARK: 药丸

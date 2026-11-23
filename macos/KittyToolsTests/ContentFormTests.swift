@@ -80,6 +80,41 @@ struct ContentFormTests {
     #expect(!asked)
   }
 
+  /// X20：日期时间的偏移（单位区分大小写：m 分钟、M 月）和自定格式、填空 {input}，认不出的 {…} 原样留着
+  @Test func snippetOffsetsFormatsAndInputs() throws {
+    let tokyo = try #require(TimeZone(identifier: "Asia/Tokyo"))
+    // 2026-09-26 13:05（周六，东京）
+    let date = Date(timeIntervalSince1970: 1_790_395_500)
+    func expand(_ text: String, inputs: [String: String] = [:]) -> String {
+      Snippet.expand(text, clipboard: { nil }, inputs: inputs, now: date, timeZone: tokyo).text
+    }
+    #expect(
+      expand("{date+1d}|{date-1w}|{DATE+1M}|{date+1y-1d}")
+        == "2026-09-27|2026-09-19|2026-10-26|2027-09-25")
+    #expect(expand("{time+30m}|{time-2h}|{datetime+1d}") == "13:35|11:05|2026-09-27 13:05")
+    #expect(
+      expand("{date:yyyy/MM/dd}|{date+3d:M月d日}|{time:HH:mm:ss}") == "2026/09/26|9月29日|13:05:00")
+    #expect(expand("{weekday+1d}") == "星期日")
+    #expect(expand("{date:}") == "2026-09-26")  // 空格式按默认
+    // 认不出的原样：JSON、单位不对、多余的字
+    #expect(expand(#"{"a":1} {date+1x} {dates}"#) == #"{"a":1} {date+1x} {dates}"#)
+    // 不像日期格式的冒号后面（JS 对象、Python f-string、全角数字的偏移）照旧原样（评审 A1 B5 B6）
+    for kept in ["{time: 30}", "{date: today}", "{date:%Y-%m-%d}", "{time: 5 min}", "{date+１d}"] {
+      #expect(expand(kept) == kept, "\(kept)")
+    }
+    #expect(expand("{date:'Day' d}") == "Day 26")
+    // 没问过的（拖出去）：{input…} 原样留着
+    #expect(
+      Snippet.expand("你好 {input:称呼}", clipboard: { nil }, inputs: nil).text == "你好 {input:称呼}")
+    // 填空：同名只问一次、几处都填；没写名字的是空串；没填的是空
+    let text = "你好 {input:称呼}，{INPUT:称呼} 的单号 {input: 单号 } {input}"
+    #expect(Snippet.inputs(in: text) == ["称呼", "单号", ""])
+    #expect(
+      expand(text, inputs: ["称呼": "张三", "单号": "42", "": "完"]) == "你好 张三，张三 的单号 42 完")
+    #expect(expand("{input:x}") == "")
+    #expect(Snippet.inputs(in: "{date} {cursor}").isEmpty)
+  }
+
   /// {cursor}：展开后它后面的字数（按字形簇，和 ← 一次挪一个字对应）；只认第一个，其余去掉
   @Test func snippetCursorOffset() {
     let result = Snippet.expand("Hi {Cursor}, see {clipboard}{cursor}!", clipboard: { "今天" })
@@ -117,6 +152,16 @@ struct ContentFormTests {
     #expect(Lens.bodyHeight(for: ClipItem(kind: .file), form: nil) == 76)
     #expect(Lens.height(for: text("{}"), form: .json) == 198)  // 最高的透镜
     #expect(Lens.reserve == 198 - ClipRowView.height)
+    // 图片行（列表里直接显示图片）：没有正文区，图在行头里长到 108；展开多出的 82 在透镜预留以内（↑↓ 不改窗口高度）
+    let picture = ClipItem(kind: .image)
+    #expect(Lens.bodyHeight(for: picture, form: nil, imageRows: true) == 0)
+    #expect(Lens.height(for: picture, form: nil, imageRows: true) == 146)
+    #expect(
+      Lens.height(for: picture, form: nil, imageRows: true)
+        - ClipRowView.height(of: picture, imageRows: true) <= Lens.reserve)
+    // 只对图片：别的条目开不开都一样
+    #expect(Lens.height(for: text("{}"), form: .json, imageRows: true) == 198)
+    #expect(Lens.height(for: ClipItem(kind: .image), form: nil) == 178)
   }
 
   /// 行标题有没有把整条文本原样显示全（透镜要不要正文区）：只看条目自己的数据。标题列最窄 352 pt

@@ -1,0 +1,150 @@
+{
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "NSAppleEventsUsageDescription" : {
+      "comment" : "Info.plist 权限说明（中文改 Config/Info.plist）",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lets Launcher system commands ask Finder to empty the Trash and show the system’s Log Out, Restart and Shut Down confirmations. When the Notch can’t read what’s playing, Kitty Tools also uses it to play, pause and skip in Music or Spotify and to read Music’s playback position. The Kitty Tools button in the Finder toolbar also uses it to ask Finder what you’ve selected in iCloud Drive and cloud-storage folders."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于启动器的系统命令：让访达清倒废纸篓，弹出退出登录、重新启动、关机的系统确认框；刘海岛读不到正在播放时，替「音乐」「Spotify」播放、暂停、切歌，读「音乐」播到哪；访达工具栏上的「Kitty Tools」按钮在 iCloud 云盘、网盘的文件夹里问访达你选中了什么"
+          }
+        }
+      }
+    },
+    "NSBluetoothAlwaysUsageDescription" : {
+      "comment" : "Info.plist 权限说明（中文改 Config/Info.plist）",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Used by the Bluetooth Sleep plugin to turn Bluetooth off when your Mac sleeps and back on at wake."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于「睡眠关蓝牙」插件：电脑睡下去时关掉蓝牙、醒来时再打开"
+          }
+        }
+      }
+    },
+    "NSCalendarsFullAccessUsageDescription" : {
+      "comment" : "Info.plist 权限说明（中文改 Config/Info.plist）",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows a countdown to your next event in the Notch (title, time, location and meeting link). Event details stay on this Mac."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于在刘海岛上显示下一个日程的倒数（标题、时间、地点和会议链接）；日程的内容只留在这台 Mac 上"
+          }
+        }
+      }
+    },
+    "NSDesktopFolderUsageDescription" : {
+      "comment" : "Info.plist 权限说明（中文改 Config/Info.plist）",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lets Kitty Tools open and reveal Desktop files you pick in the Launcher or Clipboard History, and create new files from Finder Menu."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于打开、显示你在启动器和剪贴板历史里选中的桌面文件，和在访达右键里新建文件"
+          }
+        }
+      }
+    },
+    "NSDocumentsFolderUsageDescription" : {
+      "comment" : "Info.plist 权限说明（中文改 Config/Info.plist）",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lets Kitty Tools open and reveal Documents files you pick in the Launcher or Clipboard History, and create new files from Finder Menu."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于打开、显示你在启动器和剪贴板历史里选中的文稿文件，和在访达右键里新建文件"
+          }
+        }
+      }
+    },
+    "NSDownloadsFolderUsageDescription" : {
+      "comment" : "Info.plist 权限说明（中文改 Config/Info.plist）",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lets Kitty Tools open and reveal Downloads files you pick in the Launcher or Clipboard History, and create new files from Finder Menu."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于打开、显示你在启动器和剪贴板历史里选中的下载文件，和在访达右键里新建文件"
+          }
+        }
+      }
+    },
+    "NSLocalNetworkUsageDescription" : {
+      "comment" : "Info.plist 权限说明（中文改 Config/Info.plist）",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connects to translation services running on your local network."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于连接局域网内的大模型翻译服务"
+          }
+        }
+      }
+    },
+    "NSMicrophoneUsageDescription" : {
+      "comment" : "Info.plist 权限说明（中文改 Config/Info.plist）",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Records your microphone while you record the screen or audio."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于录屏和录音时录下麦克风的声音"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

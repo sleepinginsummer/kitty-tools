@@ -273,7 +273,7 @@ extension NoteTextView {
   // MARK: 右键图片的小菜单（宽度档位、拷贝；便签未来计划 D3 / D4）
 
   /// 右键菜单「宽度」那一节的名字
-  static let imageWidthTitle = "宽度"
+  static var imageWidthTitle: String { String(localized: "宽度") }
 
   /// 选区里的每张图（字的位置，从前到后）
   func selectedImageChars() -> [Int] {
@@ -313,7 +313,8 @@ extension NoteTextView {
       title: Self.cropTitle, action: #selector(cropImageFromMenu(_:)), keyEquivalent: "")
     crop.target = self
     menu.addItem(crop)
-    let copy = NSMenuItem(title: "拷贝", action: #selector(copy(_:)), keyEquivalent: "")
+    let copy = NSMenuItem(
+      title: String(localized: "拷贝"), action: #selector(copy(_:)), keyEquivalent: "")
     copy.target = self
     menu.addItem(copy)
     return menu
@@ -345,7 +346,7 @@ extension NoteTextView {
   // MARK: 裁切（便签未来计划 D1 / D2；裁切层在 NoteImageCrop.swift）
 
   /// 右键图片小菜单里那一项
-  static let cropTitle = "裁切…"
+  static var cropTitle: String { String(localized: "裁切…") }
 
   /// 「裁切…」可不可用：选区正好一张图、文件在、没在组字、没在裁（上一次还在后台裁、还欠着没换进来也不行：
   /// 那一张换掉之后这一次就对不上了）
@@ -593,10 +594,10 @@ extension NoteTextView {
   /// 剪贴板里有没有我们处理得了的图片（右键菜单 / 主菜单「粘贴」的可用状态：只有图时也要能点）
   func canPasteImages(from pasteboard: NSPasteboard) -> Bool {
     if pasteboard.string(forType: Self.noteTextType) != nil { return true }
-    if !imageFileURLs(in: pasteboard).isEmpty { return true }
+    if !Self.imageFileURLs(in: pasteboard).isEmpty { return true }
     // 有非空的纯文字：照现在的路走（父类那边本来就可用）
     if !(pasteboard.string(forType: .string) ?? "").isEmpty { return false }
-    return firstImageData(in: pasteboard) != nil
+    return Self.firstImageData(in: pasteboard) != nil
   }
 
   /// 粘贴 / 拖进：读剪贴板的顺序见 paste(_:)。处理了返回 true
@@ -609,7 +610,7 @@ extension NoteTextView {
       return true
     }
     // ② 图片文件：每张存进目录、各插一张
-    let urls = imageFileURLs(in: pasteboard)
+    let urls = Self.imageFileURLs(in: pasteboard)
     if !urls.isEmpty {
       storeAndInsert(files: urls, at: selectedRange())
       return true
@@ -617,7 +618,7 @@ extension NoteTextView {
     // ③ 有非空的纯文字：照现在走（粘成链接 / 照常粘贴纯文本）
     if !(pasteboard.string(forType: .string) ?? "").isEmpty { return false }
     // ④ 只有图片数据（截图、浏览器里「拷贝图像」）
-    if let data = firstImageData(in: pasteboard) {
+    if let data = Self.firstImageData(in: pasteboard) {
       storeAndInsert(data: data, at: selectedRange())
       return true
     }
@@ -643,7 +644,7 @@ extension NoteTextView {
       pasteStored(stored)
       return true
     }
-    let urls = imageFileURLs(in: pboard)
+    let urls = Self.imageFileURLs(in: pboard)
     if !urls.isEmpty {
       storeAndInsert(files: urls, at: selectedRange())
       return true
@@ -658,7 +659,8 @@ extension NoteTextView {
   }
 
   /// 剪贴板里是图片的文件（UTType 属于 .image 的）
-  private func imageFileURLs(in pasteboard: NSPasteboard) -> [URL] {
+  /// 剪贴板里的图片文件（快速记一条贴图也用，X5）
+  static func imageFileURLs(in pasteboard: NSPasteboard) -> [URL] {
     let options: [NSPasteboard.ReadingOptionKey: Any] = [
       .urlReadingFileURLsOnly: true,
       .urlReadingContentsConformToTypes: [UTType.image.identifier],
@@ -668,7 +670,7 @@ extension NoteTextView {
 
   /// 剪贴板里的第一份图片数据。**先取 PNG / JPEG / HEIC / GIF**（多半就是原图、体积小），没有再取 TIFF 等：
   /// 预览、浏览器「拷贝图像」常常先给未压缩的 TIFF，一张 1200 万像素的照片约 48 MB，直接取它会说「太大了」（F14）
-  private func firstImageData(in pasteboard: NSPasteboard) -> Data? {
+  static func firstImageData(in pasteboard: NSPasteboard) -> Data? {
     let types = pasteboard.types ?? []
     let preferred = [
       "public.png", "public.jpeg", "public.heic", "public.heif", "com.compuserve.gif",
@@ -893,8 +895,8 @@ extension NoteTextView {
     panel.canChooseDirectories = false
     panel.canChooseFiles = true
     panel.allowedContentTypes = [.image]
-    panel.prompt = "插入"
-    panel.message = "选要插进便签的图片"
+    panel.prompt = String(localized: "插入")
+    panel.message = String(localized: "选要插进便签的图片")
     let range = selectedRange()
     // 激活、提到最前（不然开在前台 App 后面，看着像没反应）、关掉后还回去都在 FilePanel 里
     FilePanel.begin(panel) { [weak self] response in

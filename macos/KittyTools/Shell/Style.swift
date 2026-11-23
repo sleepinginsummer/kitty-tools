@@ -218,10 +218,22 @@ enum Style {
       light: NSColor(srgbRed: 0.90, green: 0.60, blue: 0.08, alpha: 1),
       dark: NSColor(srgbRed: 0.96, green: 0.68, blue: 0.22, alpha: 1))
 
+    /// 保持唤醒（第一个插件，2026-11-12）：系统色用完了，自定义的靛紫（夜里也醒着），比系统靛蓝偏紫、比启动器的紫偏蓝
+    static let keepAwake = Style.dynamic(
+      light: NSColor(srgbRed: 0.42, green: 0.36, blue: 0.86, alpha: 1),
+      dark: NSColor(srgbRed: 0.60, green: 0.55, blue: 1.0, alpha: 1))
     /// 访达右键（2026-11-08）：系统色用完了，自定义的石板蓝（访达文件夹的蓝压暗、去饱和），和剪贴板的系统蓝、通用的灰分得开
     static let finderMenu = Style.dynamic(
       light: NSColor(srgbRed: 0.33, green: 0.47, blue: 0.62, alpha: 1),
       dark: NSColor(srgbRed: 0.47, green: 0.61, blue: 0.76, alpha: 1))
+    /// 睡眠关蓝牙（2026-11-17）：自定义的午夜蓝（蓝牙的蓝压暗，夜里睡着），比系统靛蓝暗、比访达右键的石板蓝饱和
+    static let bluetoothSnooze = Style.dynamic(
+      light: NSColor(srgbRed: 0.15, green: 0.30, blue: 0.68, alpha: 1),
+      dark: NSColor(srgbRed: 0.43, green: 0.57, blue: 0.96, alpha: 1))
+    /// 平滑滚动（插件，2026-11-17）：系统色用完了，自定义的橄榄绿（和翻译的系统绿、启动台的薄荷分得开：偏黄、偏暗）
+    static let smoothScroll = Style.dynamic(
+      light: NSColor(srgbRed: 0.42, green: 0.58, blue: 0.16, alpha: 1),
+      dark: NSColor(srgbRed: 0.60, green: 0.78, blue: 0.32, alpha: 1))
 
     /// 种类色块上的符号色：白；便签的黄上白色只有约 1.5:1，换成 black 0.85（同强调色选黄时 onBrand 的做法）
     static func onTile(_ color: Color) -> Color { color == notes ? .black.opacity(0.85) : .white }
@@ -411,19 +423,26 @@ struct KeyCap: View {
   }
 
   var body: some View {
-    Text(text)
-      .font(.system(size: 10.5, weight: isPrimary ? .semibold : .medium, design: .rounded))
-      .monospacedDigit()
-      .padding(.horizontal, 5)
-      .frame(minWidth: 20, minHeight: 18)
-      .foregroundStyle(
-        isPrimary
-          ? AnyShapeStyle(isDanger ? Style.onDanger : Style.onBrand) : AnyShapeStyle(.secondary)
-      )
-      .background(
-        isPrimary
-          ? AnyShapeStyle(isDanger ? Style.danger : Style.brand) : AnyShapeStyle(Style.controlFill),
-        in: .rect(cornerRadius: Style.Radius.mini, style: .continuous))
+    // 🌐 🎤 画成系统符号（单色、跟着字色）：emoji 是彩色的，和别的键帽不搭（2026-11-20）
+    Group {
+      if let symbol = MenuKeys.symbols[text] {
+        Image(systemName: symbol).imageScale(.small)
+      } else {
+        Text(text)
+      }
+    }
+    .font(.system(size: 10.5, weight: isPrimary ? .semibold : .medium, design: .rounded))
+    .monospacedDigit()
+    .padding(.horizontal, 5)
+    .frame(minWidth: 20, minHeight: 18)
+    .foregroundStyle(
+      isPrimary
+        ? AnyShapeStyle(isDanger ? Style.onDanger : Style.onBrand) : AnyShapeStyle(.secondary)
+    )
+    .background(
+      isPrimary
+        ? AnyShapeStyle(isDanger ? Style.danger : Style.brand) : AnyShapeStyle(Style.controlFill),
+      in: .rect(cornerRadius: Style.Radius.mini, style: .continuous))
   }
 }
 
@@ -432,18 +451,20 @@ struct KeyCap: View {
 /// （屏外实测标题都不变色）；role 照给——旁白和系统自己的样式靠它。自己上了色的标题置灰时系统不替它变淡
 /// （屏外实测和能点时一个样）：禁用时自己乘上 disabledOpacity（设置 › 状态屏只剩一个状态时的「删除」）
 struct DangerButton: View {
-  let title: String
+  let title: LocalizedStringResource
   let action: () -> Void
   @Environment(\.isEnabled) private var isEnabled
 
-  init(_ title: String, action: @escaping () -> Void) {
+  /// 标题是能本地化的（调用处的字面量会被抽进目录）
+  init(_ title: LocalizedStringResource, action: @escaping () -> Void) {
     self.title = title
     self.action = action
   }
 
   var body: some View {
     Button(role: .destructive, action: action) {
-      Text(title).foregroundStyle(Style.danger.opacity(isEnabled ? 1 : Style.disabledOpacity))
+      Text(plain: title).foregroundStyle(
+        Style.danger.opacity(isEnabled ? 1 : Style.disabledOpacity))
     }
   }
 }
@@ -497,9 +518,10 @@ struct KeyCombo: View {
     .accessibilityLabel(combo)
   }
 
-  /// 前面的修饰键逐个拆开，其余整体一个键帽；只有修饰键时就是这几个修饰键
+  /// 前面的修饰键逐个拆开，其余整体一个键帽；只有修饰键时就是这几个修饰键。🌐（fn）也算修饰键：App 快捷键里
+  /// 系统给每个 App 加的「窗口 › 移动与调整大小」那些是 🌐⌃F 这样的
   static func caps(_ combo: String) -> [String] {
-    let modifiers = combo.prefix { "⌃⌥⇧⌘".contains($0) }
+    let modifiers = combo.prefix { "🌐⌃⌥⇧⌘".contains($0) }
     let rest = combo.dropFirst(modifiers.count).trimmingCharacters(in: .whitespaces)
     return modifiers.map(String.init) + (rest.isEmpty ? [] : [rest])
   }
@@ -654,9 +676,19 @@ extension View {
 /// 空状态（剪贴板面板、翻译浮窗、翻译历史共用，2026-10-12 由两处各写一份合成）：28 pt 符号 + 14 semibold 标题 +
 /// 下面的说明 / 文字按钮 / 键帽（12 pt），间距 8，在给它的地方里居中。四周留白由用的地方加（翻译浮窗 20：标题长了
 /// 折行时别贴边）。启动器的空结果是一行 13 secondary（有意的紧凑写法），不用它
+extension Style {
+  /// 一行字（系统字体 size 号）在 width 宽里放不放得下（多语言：英文长，固定宽的格子里放不下的才折成两行，放得下的照旧一行、
+  /// 一个像素都不变）。按 NSString 量，和 SwiftUI 的 Text 同一套字体排版
+  static func fitsOneLine(_ text: String, size: CGFloat, width: CGFloat) -> Bool {
+    let measured = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: size)])
+    return measured.width.rounded(.up) <= width
+  }
+}
+
 struct EmptyState<Detail: View>: View {
   let symbol: String
-  let title: String
+  /// 能本地化的字（调用处的字面量会被抽进目录）
+  let title: LocalizedStringResource
   @ViewBuilder var detail: Detail
 
   var body: some View {
@@ -665,7 +697,7 @@ struct EmptyState<Detail: View>: View {
         .font(.system(size: 28))
         .symbolRenderingMode(.hierarchical)
         .foregroundStyle(.tertiary)
-      Text(title)
+      Text(plain: title)
         .font(.system(size: 14, weight: .semibold))
         .multilineTextAlignment(.center)
       detail.font(.system(size: 12))

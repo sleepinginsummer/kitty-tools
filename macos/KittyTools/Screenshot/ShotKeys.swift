@@ -12,6 +12,8 @@ import Carbon.HIToolbox
 enum ShotKey: String, CaseIterable {
   case rectangle, ellipse, arrow, line, pen, highlighter, text, counter, mosaic, spotlight
   case copy, save, saveAs, pin, recognize, scroll, record, undo, redo, lastRegion, pickColor
+  /// 标注遮罩（长截图、截图历史的改标注）里的裁剪（第四轮体检 X17，默认 X，Windows 同一个键）
+  case crop
 
   /// 设置页的两组：十种标注工具，出图和别的
   static var tools: [ShotKey] { Annotation.Tool.allCases.map { ShotKey($0) } }
@@ -40,17 +42,18 @@ enum ShotKey: String, CaseIterable {
   var title: String {
     if let tool { return tool.title }
     return switch self {
-    case .copy: "拷贝"
-    case .save: "存储"
-    case .saveAs: "另存为…"
-    case .pin: "钉到屏幕"
-    case .recognize: "识字并拷贝"
-    case .scroll: "长截图"
-    case .record: "录屏"
-    case .undo: "撤销"
-    case .redo: "重做"
-    case .lastRegion: "选中上次的区域"
-    case .pickColor: "复制放大镜里的色值"
+    case .copy: String(localized: "拷贝")
+    case .save: String(localized: "存储")
+    case .saveAs: String(localized: "另存为…")
+    case .pin: String(localized: "钉到屏幕")
+    case .recognize: String(localized: "识字并拷贝")
+    case .scroll: String(localized: "长截图")
+    case .record: String(localized: "录屏")
+    case .undo: String(localized: "撤销")
+    case .redo: String(localized: "重做")
+    case .lastRegion: String(localized: "选中上次的区域")
+    case .pickColor: String(localized: "复制放大镜里的色值")
+    case .crop: String(localized: "裁剪")
     default: ""
     }
   }
@@ -70,16 +73,14 @@ enum ShotKey: String, CaseIterable {
     case .redo: "arrow.uturn.forward"
     case .lastRegion: "arrow.counterclockwise"
     case .pickColor: "eyedropper"
+    case .crop: "crop"
     default: "keyboard"
     }
   }
 
   /// 原来写死的那一套：1–0 工具，T S O R D C 单字母，⌘C ⌘S ⇧⌘S ⌘Z ⇧⌘Z
   var defaultKey: HotKey {
-    let digits = [
-      kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7,
-      kVK_ANSI_8, kVK_ANSI_9, kVK_ANSI_0,
-    ]
+    let digits = HotKey.digitKeys + [kVK_ANSI_0]
     if let tool { return HotKey(keyCode: digits[tool.rawValue - 1], modifiers: 0) }
     let (code, modifiers) =
       switch self {
@@ -94,6 +95,7 @@ enum ShotKey: String, CaseIterable {
       case .redo: (kVK_ANSI_Z, cmdKey | shiftKey)
       case .lastRegion: (kVK_ANSI_D, 0)
       case .pickColor: (kVK_ANSI_C, 0)
+      case .crop: (kVK_ANSI_X, 0)
       default: (kVK_ANSI_1, 0)
       }
     return HotKey(keyCode: code, modifiers: modifiers)
@@ -119,11 +121,30 @@ enum ShotKey: String, CaseIterable {
     }
   }
 
+  /// 改过的键（偏好里存着的）原样拷一份：设置 › 快捷键「全部恢复默认」的撤销用（第五轮体检 U5）。空的 = 本来就都是默认的
+  static func snapshot(in defaults: UserDefaults = .standard) -> [ShotKey: Data] {
+    var stored: [ShotKey: Data] = [:]
+    for key in allCases { stored[key] = defaults.data(forKey: key.prefsKey) }
+    return stored
+  }
+
+  /// 换回 snapshot 拷的那几个：只放回现在还是「没存过」（恢复默认之后没再动过）的，之后又录的、同步落下的不盖
+  static func restore(_ snapshot: [ShotKey: Data], in defaults: UserDefaults = .standard) {
+    for (key, data) in snapshot where defaults.data(forKey: key.prefsKey) == nil {
+      defaults.set(data, forKey: key.prefsKey)
+    }
+  }
+
   /// 悬停提示、菜单、速查表里写的键（清除了是 nil）
   var label: String? { key()?.display }
 
   /// 「名字（键）」：工具栏悬停提示；清除了就只写名字
-  func tip(_ name: String) -> String { label.map { "\(name)（\($0)）" } ?? name }
+  func tip(_ name: String) -> String { label.map { Self.tip(name, key: $0) } ?? name }
+
+  /// 「名字（键）」（英文「Name (key)」）：键是定死的那几处（长截图面板）也用它
+  static func tip(_ name: String, key: String) -> String {
+    String(localized: "shot.keyTip", defaultValue: "\(name)（\(key)）", comment: "悬停提示：名字（快捷键）")
+  }
 
   /// 这一下按键对应哪个动作（只比键位和 ⌘ ⌥ ⌃ ⇧，别的位不管）
   static func matching(_ event: NSEvent, in defaults: UserDefaults = .standard) -> ShotKey? {
@@ -142,9 +163,15 @@ enum ShotKey: String, CaseIterable {
   // MARK: 能录什么
 
   /// 截图里另有用处、固定不改的键：Esc ↩ ⌫ Tab 空格、方向键（带什么修饰键都算）、⌘D（复制标注）、标注遮罩的缩放
-  /// ⌘0 ⌘1 ⌘= ⇧⌘= ⌘- 和小键盘的 ⌘+ ⌘-。修饰键自己（连按两下那种）也不收
-  static func isReserved(_ hotKey: HotKey) -> Bool {
+  /// ⌘0 ⌘1 ⌘= ⇧⌘= ⌘- 和小键盘的 ⌘+ ⌘-。修饰键自己（连按两下那种）也不收。
+  /// typing：这个键在录的那台 Mac 上打出来的字（录制时给，problem）——固定的 ⌘D ⌘= ⌘- 在截图里按打出来的字认（E2），录到的物理键
+  /// 先换成它打出的字再比（法语键盘上 ⌘= 在美式 / 的位置）。不给（导入、同步的校验，isUsable）就按物理键位比：收不收不能看收的那台
+  /// 是什么布局。纯函数
+  static func isReserved(_ hotKey: HotKey, typing characters: String? = nil) -> Bool {
     let code = Int(hotKey.keyCode)
+    let typed = HotKey(
+      keyCode: UInt32(characters.map { HotKey.keyCode(code, typing: $0) } ?? code),
+      modifiers: hotKey.modifiers)
     let anyModifiers: Set<Int> = [
       kVK_Escape, kVK_Return, kVK_ANSI_KeypadEnter, kVK_Delete, kVK_ForwardDelete, kVK_Tab,
       kVK_Space, kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow,
@@ -161,7 +188,7 @@ enum ShotKey: String, CaseIterable {
       HotKey(keyCode: kVK_ANSI_KeypadPlus, modifiers: cmdKey),
       HotKey(keyCode: kVK_ANSI_KeypadMinus, modifiers: cmdKey),
     ]
-    return fixed.contains(hotKey)
+    return fixed.contains(typed)
   }
 
   /// 文件、同步里读进来的能不能用：键码、修饰键位在范围里，不是固定的键
@@ -175,17 +202,21 @@ enum ShotKey: String, CaseIterable {
   static func problem(
     with hotKey: HotKey, for shotKey: ShotKey, in defaults: UserDefaults = .standard
   ) -> String? {
-    if isReserved(hotKey) {
-      return "这个键在截图里另有用处（Esc、↩、⌫、Tab、空格、方向键、⌘D、缩放），换一个"
+    let typing = HotKey.character(
+      for: UInt16(hotKey.keyCode), modifiers: hotKey.modifiers & UInt32(cmdKey | shiftKey))
+    if isReserved(hotKey, typing: typing) {
+      return String(localized: "这个键在截图里另有用处（Esc、↩、⌫、Tab、空格、方向键、⌘D、缩放），换一个")
     }
     if let other = allCases.first(where: { $0 != shotKey && $0.key(in: defaults) == hotKey }) {
-      return "和截图里的「\(other.title)」重复"
+      return String(localized: "和截图里的「\(other.title)」重复")
     }
     let globals = HotKeyAction.allCases.filter(\.isAvailable)
     if let action = globals.first(where: {
-      $0.resolve { defaults.data(forKey: $0.prefsKey) } == hotKey
+      $0.resolve(withheld: HotKeyAction.withheld(in: defaults)) {
+        defaults.data(forKey: $0.prefsKey)
+      } == hotKey
     }) {
-      return "和全局快捷键「\(action.title)」重复"
+      return String(localized: "和全局快捷键「\(action.title)」重复")
     }
     return nil
   }

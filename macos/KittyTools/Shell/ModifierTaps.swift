@@ -10,8 +10,9 @@ import AppKit
 import Carbon.HIToolbox
 
 struct ModifierTaps {
-  /// 能连按的修饰键。HotKey 里记成「这个修饰键自己的键位（左边那个）、不带修饰键位」
-  enum Key: CaseIterable {
+  /// 能连按的修饰键。HotKey 里记成「这个修饰键自己的键位（左边那个）、不带修饰键位」。App 快捷键「按住哪个键」也用这四个，
+  /// 偏好里存 rawValue（Prefs.appShortcutsHoldKey）
+  enum Key: String, CaseIterable {
     case command, option, control, shift
 
     var flag: NSEvent.ModifierFlags {
@@ -45,8 +46,8 @@ struct ModifierTaps {
     /// 录上之后在那一行下面提醒的一句（B6）：⇧ 是输入法切中英文，别的是系统听写可能占用
     var hint: String {
       self == .shift
-        ? "中文输入法里单按 ⇧ 切中英文，连按两下会切过去再切回来"
-        : "系统听写可以设成连按这个键，设了的话两边都会响应"
+        ? String(localized: "中文输入法里单按 ⇧ 切中英文，连按两下会切过去再切回来")
+        : String(localized: "系统听写可以设成连按这个键，设了的话两边都会响应")
     }
   }
 

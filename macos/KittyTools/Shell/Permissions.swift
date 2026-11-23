@@ -2,19 +2,26 @@
 // 文件和文件夹（启动器文件搜索：Spotlight 只给本 App 能访问的文件夹里的结果）、自动化（启动器系统命令让访达清倒
 // 废纸篓、让 loginwindow 弹退出登录 / 重新启动 / 关机框；第一次用时系统自己弹框问，这里只负责被拒后打开系统设置）、
 // 完全磁盘访问（启动器读 Safari 的书签和历史；没有请求授权的 API，只能打开系统设置让用户自己加）、
-// 麦克风（录屏第 4 批：录制条打开麦克风时，按开始、遮罩收起后才问——遮罩开着时系统授权框会被压在它下面）。
+// 麦克风（录屏第 4 批：录制条打开麦克风时，按开始、遮罩收起后才问——遮罩开着时系统授权框会被压在它下面）、
+// 蓝牙（睡眠关蓝牙插件开关蓝牙要它；状态和弹框在 BluetoothSnooze，这里只有系统设置那一页）、
+// 访达扩展（访达右键插件：不是隐私授权，是 系统设置 › 登录项与扩展 里要用户自己打开一次；插件页改版 C1 把它也当一项授权）、
+// 控制访达（访达右键的工具栏按钮在 iCloud 云盘这类地方问访达选中了什么，2026-11-17；automation 看现在是哪样）。
+// isGranted：插件的「要授权」现查（2026-11-17 插件页改版，Shell/Plugin.swift）。
 
 import AVFoundation
 import AppKit
 import ApplicationServices
+import FinderSync
 
 enum Permissions {
   /// 提示里「去系统设置授权」按钮要打开的那一项
   enum Kind {
     case accessibility, screenRecording, filesAndFolders, automation, fullDiskAccess, microphone
-    case calendar
+    case calendar, bluetooth, finderExtension, inputMonitoring
 
-    var settingsTitle: String {
+    var settingsTitle: String { String(localized: settingsTitleResource) }
+
+    var settingsTitleResource: LocalizedStringResource {
       switch self {
       case .accessibility: "打开辅助功能设置"
       case .screenRecording: "打开屏幕录制设置"
@@ -23,27 +30,50 @@ enum Permissions {
       case .fullDiskAccess: "打开完全磁盘访问权限设置"
       case .microphone: "打开麦克风设置"
       case .calendar: "打开日历设置"
+      case .bluetooth: "打开蓝牙设置"
+      case .finderExtension: "打开访达扩展设置"
+      case .inputMonitoring: "打开输入监听设置"
       }
     }
 
     func openSettings() {
-      let anchor =
-        switch self {
-        case .accessibility: "Privacy_Accessibility"
-        case .screenRecording: "Privacy_ScreenCapture"
-        case .filesAndFolders: "Privacy_FilesAndFolders"
-        case .automation: "Privacy_Automation"
-        case .fullDiskAccess: "Privacy_AllFiles"
-        case .microphone: "Privacy_Microphone"
-        case .calendar: "Privacy_Calendars"
-        }
+      let anchor: String
+      switch self {
+      case .accessibility: anchor = "Privacy_Accessibility"
+      case .screenRecording: anchor = "Privacy_ScreenCapture"
+      case .filesAndFolders: anchor = "Privacy_FilesAndFolders"
+      case .automation: anchor = "Privacy_Automation"
+      case .fullDiskAccess: anchor = "Privacy_AllFiles"
+      case .microphone: anchor = "Privacy_Microphone"
+      case .calendar: anchor = "Privacy_Calendars"
+      case .bluetooth: anchor = "Privacy_Bluetooth"
+      case .inputMonitoring: anchor = "Privacy_ListenEvent"
+      // 系统设置 › 登录项与扩展 里访达扩展那一页。15.0、15.1 的系统设置里没有这个入口（点了没反应）：
+      // 访达右键页另给一条终端命令（FinderMenuTab.settingsHaveEntry）
+      case .finderExtension: return FIFinderSyncController.showExtensionManagementInterface()
+      }
       NSWorkspace.shared.open(
         URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")!)
+    }
+
+    /// 这台 Mac 给没给（不弹框）；nil = 查不了（自动化按 App 各问各的、文件夹和完全磁盘访问没有总的状态）
+    var isGranted: Bool? {
+      switch self {
+      case .accessibility: Permissions.isAccessibilityTrusted
+      case .screenRecording: Permissions.isScreenRecordingAllowed
+      case .microphone: Permissions.microphoneStatus == .authorized
+      case .calendar: NextEvent.isAuthorized
+      case .bluetooth: BluetoothSnooze.isAuthorized
+      case .finderExtension: FIFinderSyncController.isExtensionEnabled
+      case .inputMonitoring: CGPreflightListenEventAccess()
+      case .automation, .filesAndFolders, .fullDiskAccess: nil
+      }
     }
   }
 
   /// 系统设置里放这些授权的那一栏，提示里写路径用：macOS 27 起改叫「隐私与安全」（扩展的 InfoPlist.loctable）
-  nonisolated static let privacyPane = if #available(macOS 27, *) { "隐私与安全" } else { "隐私与安全性" }
+  nonisolated static let privacyPane =
+    if #available(macOS 27, *) { String(localized: "隐私与安全") } else { String(localized: "隐私与安全性") }
 
   static var isAccessibilityTrusted: Bool { AXIsProcessTrusted() }
 
@@ -104,8 +134,9 @@ enum Permissions {
   /// 文件搜索要读的受保护文件夹（显示名, 相对主目录的路径）。实测 Spotlight 按调用方的授权过滤结果：
   /// 没授权时文稿、下载、iCloud 云盘里的文件一条都搜不到，也不会因此弹框
   static let protectedFolders = [
-    ("桌面", "Desktop"), ("文稿", "Documents"), ("下载", "Downloads"),
-    ("iCloud 云盘", "Library/Mobile Documents/com~apple~CloudDocs"),
+    (String(localized: "桌面"), "Desktop"), (String(localized: "文稿"), "Documents"),
+    (String(localized: "下载"), "Downloads"),
+    (String(localized: "iCloud 云盘"), "Library/Mobile Documents/com~apple~CloudDocs"),
   ]
 
   /// 没问过返回 nil（读一下目录就会弹框，所以问之前不碰）；问过之后返回被拒绝的文件夹（系统记住了答复，
@@ -125,13 +156,22 @@ enum Permissions {
   /// 能不能给某个 App 发 Apple 事件（自动化授权），**从不弹框**：只有允许过才 true；没问过（−1744）、拒绝过（−1743）、
   /// 它没在运行（−600）都是 false。正在播放的退路读「音乐」的进度时先看它（2026-11-13，刘海岛扩展第 2-3 批：
   /// 不在放歌时凭空弹「想控制“音乐”」的框；要授权只在用户点了播放控制时由 osascript 弹）
-  static func canAutomate(_ bundleID: String) -> Bool {
+  static func canAutomate(_ bundleID: String) -> Bool { automation(bundleID) == .granted }
+
+  /// 自动化授权的三种样子（设置页那一行按它画：允许了绿勾、没问过「授权…」、拒绝过「去打开…」）
+  enum AutomationState { case granted, notAsked, denied }
+
+  /// 给某个 App 发 Apple 事件的授权现在是哪样，**从不弹框**。它没在运行（−600）、查不了的算没问过
+  static func automation(_ bundleID: String) -> AutomationState {
     // aeDesc 指向 descriptor 里面（内部指针）：descriptor 得活到调用完（临时的那个可能在 guard 之后就放掉了，评审 2）
     let descriptor = NSAppleEventDescriptor(bundleIdentifier: bundleID)
     return withExtendedLifetime(descriptor) {
-      guard let target = descriptor.aeDesc else { return false }
-      return AEDeterminePermissionToAutomateTarget(target, typeWildCard, typeWildCard, false)
-        == noErr
+      guard let target = descriptor.aeDesc else { return .notAsked }
+      switch AEDeterminePermissionToAutomateTarget(target, typeWildCard, typeWildCard, false) {
+      case noErr: return .granted
+      case OSStatus(errAEEventNotPermitted): return .denied
+      default: return .notAsked
+      }
     }
   }
 

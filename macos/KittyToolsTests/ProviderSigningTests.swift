@@ -56,6 +56,12 @@ struct ProviderSigningTests {
     #expect(DeepL.targetCode(.zhHant) == "ZH-HANT" && DeepL.targetCode(.en) == "EN-US")
     #expect(Microsoft.code(.zhHans) == "zh-Hans" && Tencent.code(.zhHant) == "zh-TW")
     #expect(Google.code(.zhHans) == "zh-CN" && Volcengine.code(.zhHant) == "zh-Hant")
+    // X1 加的语言：百度用自己的三字母码，挪威语在百度 / 有道 / Google / 火山 / 腾讯叫 no、在微软 / DeepL 叫 nb
+    #expect(Baidu.code(.vi) == "vie" && Baidu.code(.ar) == "ara" && Baidu.code(.nb) == "nor")
+    #expect(Baidu.code(.th) == "th" && Baidu.code(.he) == "heb" && Baidu.code(.ms) == "may")
+    #expect(Youdao.code(.nb) == "no" && Google.code(.nb) == "no" && Volcengine.code(.nb) == "no")
+    #expect(
+      Microsoft.code(.nb) == "nb" && DeepL.targetCode(.nb) == "NB" && Tencent.code(.vi) == "vi")
   }
 
   @Test func formEncodingEscapesReservedCharacters() {
@@ -181,6 +187,7 @@ struct ProviderSigningTests {
     let service = TranslateService.builtin(.youdaoWeb)
     #expect(service.id == "youdaoWeb" && service.name == "有道翻译（网页版·免费）")
     #expect(service.secretFields.isEmpty && !service.isEnabled && !service.isStreaming)
-    #expect(service.settingsStatus.text == "免费的网页版接口" && !service.settingsStatus.isProblem)
+    #expect(service.settingsStatus.text == "网页版接口" && !service.settingsStatus.isProblem)
+    #expect(service.kind.isFree && service.settingsIsFree)
   }
 }

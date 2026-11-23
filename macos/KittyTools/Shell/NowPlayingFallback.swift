@@ -16,7 +16,10 @@ import AppKit
 nonisolated enum NowPlayingFallback {
   /// 听哪几个分布式通知、各是哪个 App 发的
   static let notices: [(name: String, bundleID: String, appName: String)] = [
-    ("com.apple.Music.playerInfo", "com.apple.Music", "音乐"),
+    (
+      "com.apple.Music.playerInfo", "com.apple.Music",
+      String(localized: "音乐", comment: "「音乐」App 的名字")
+    ),
     ("com.spotify.client.PlaybackStateChanged", "com.spotify.client", "Spotify"),
   ]
 
@@ -96,6 +99,50 @@ extension NowPlayingFallback {
         actions: [.settings(for: .automation)])
     }
     return false
+  }
+
+  /// 「音乐」的 bundle id
+  static let musicID = "com.apple.Music"
+
+  /// 「音乐」放着的这首收藏了没有（2026-11-18，播放卡片上的收藏按钮）：只在已经允许过控制「音乐」时读（不弹框）；
+  /// 读不到是 nil
+  @MainActor static func musicFavorited() async -> Bool? {
+    guard Permissions.canAutomate(musicID) else { return nil }
+    return await musicFlag(["return favorited of current track"], island: nil)
+  }
+
+  /// 收藏 / 取消收藏「音乐」放着的这首：用户点了按钮才调（没问过时这一下会弹自动化授权框，拒绝过刘海岛说一声）；
+  /// 回新的状态，没成是 nil
+  @MainActor static func toggleMusicFavorite(island: Island?) async -> Bool? {
+    await musicFlag(
+      [
+        "set f to not (favorited of current track)", "set favorited of current track to f",
+        "return f",
+      ], island: island)
+  }
+
+  /// 在「音乐」里跑几行、回一个真假（它没开着、没在放、出错是 nil）
+  @MainActor private static func musicFlag(_ lines: [String], island: Island?) async -> Bool? {
+    let script =
+      ["if application id \"\(musicID)\" is running then", "tell application id \"\(musicID)\""]
+      + lines + ["end tell", "end if"]
+    guard
+      let result = try? await Subprocess.run(
+        "/usr/bin/osascript", script.flatMap { ["-e", $0] }, captures: true, timeout: .seconds(30))
+    else { return nil }
+    if result.status != 0 {
+      if result.error.contains("-1743") || result.error.contains("-1744") {
+        island?.show(
+          "没有权限控制「音乐」", detail: "在 系统设置 › \(Permissions.privacyPane) › 自动化 里打开",
+          tone: .warning, actions: [.settings(for: .automation)])
+      }
+      return nil
+    }
+    switch result.output.trimmingCharacters(in: .whitespacesAndNewlines) {
+    case "true": return true
+    case "false": return false
+    default: return nil
+    }
   }
 
   /// 「音乐」此刻播到哪（秒）：只在已经允许过控制「音乐」时读（Permissions.canAutomate，不弹框）；读不到是 nil。

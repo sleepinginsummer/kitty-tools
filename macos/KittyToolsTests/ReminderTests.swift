@@ -195,6 +195,33 @@ struct ReminderTests {
     #expect(away.fire == ["a"])
   }
 
+  /// 专注模式滤镜让提醒安静着（2026-11-17 拍板 B4 B6）：没开「专注模式时也照常提醒」的间隔类不攒（同离开电脑），开了的照响；
+  /// 推过的间隔类照样到点（交给执行层压着）；别的种类照常算出来，再由 heldBack 分出哪些先压着
+  @Test func focusRestsIntervalsAndHoldsBack() {
+    let anchors = ["i": Self.at(2, 8, 30), "u": Self.at(2, 8, 30), "z": Self.at(2, 8, 30)]
+    let every = Schedule(kind: .interval, time: 0, until: 1440, every: 20)
+    let quiet = Reminder(id: "i", title: "i", schedule: every)
+    let urgent = Reminder(id: "u", title: "u", schedule: every, duringFocus: true)
+    let snoozed = Reminder(id: "z", title: "z", schedule: every)
+    let weekly = Self.weekly("w")
+    let list = [quiet, urgent, snoozed, weekly]
+    var state = ReminderState()
+    state.marks["w"] = .init(at: Self.at(2, 8), schedule: weekly.schedule)
+    state.snoozed["z"] = Self.at(2, 9, 1)
+    let check = { (focus: Bool) in
+      ReminderCheck.check(
+        list, state: state, anchors: anchors, showing: [], now: Self.at(2, 9, 3), focus: focus,
+        calendar: Self.calendar)
+    }
+    #expect(check(false).fire == ["i", "u", "z", "w"])
+    #expect(check(true).fire == ["u", "z", "w"])
+    // 先压着的：没开「照常」的；滤镜照常时一条都不压
+    #expect(ReminderCheck.heldBack(["u", "z", "w"], list: list, focus: true) == ["z", "w"])
+    #expect(ReminderCheck.heldBack(["u", "z", "w"], list: list, focus: false).isEmpty)
+    // 不在列表里的（刚删掉）也压着：不会照常弹出来
+    #expect(ReminderCheck.heldBack(["gone"], list: list, focus: true) == ["gone"])
+  }
+
   @Test func reconciledFollowsList() {
     let a = Self.weekly("a")
     var state = Self.state(["a": Self.at(1, 9)], list: [a])
@@ -238,7 +265,8 @@ struct ReminderTests {
     #expect(clean.title == "有 换行")
     #expect(clean.symbol == "" && clean.fullSeconds == 0 && clean.nagMinutes == 0)
     #expect(clean.chime == Reminder.defaultChime)
-    #expect(clean.schedule.time == 1439 && clean.schedule.until == 1440)
+    // 结束早于开始的是跨过半夜（U10），留着
+    #expect(clean.schedule.time == 1439 && clean.schedule.until == 10)
     #expect(clean.schedule.days == Schedule.allDays && clean.schedule.day == 31)
     #expect(clean.schedule.every == 5)
     let many = (0..<60).map { Self.weekly("r\($0)") }
@@ -315,11 +343,49 @@ struct ReminderTests {
     #expect(list.map(\.id) == ["a", "c"])
     #expect(list[0].alert == .light && list[0].sound == .chime && list[0].isOn)
     #expect(list[1].schedule.time == 600 && list[1].schedule.days == [2] && !list[1].isOn)
+    // 2026-11-17 加的「专注模式时也照常提醒」：旧数据没有这个键 = 关；编出去再读回来留着
+    #expect(!list[0].duringFocus)
+    var urgent = list[0]
+    urgent.duringFocus = true
+    #expect(Reminder.decode(Reminder.encoded([urgent])).first?.duringFocus == true)
     #expect(Reminder.decode(nil) == Reminder.examples)
     #expect(Reminder.decode(Data("[]".utf8)).isEmpty)
     #expect(Reminder.decode(Data("not json".utf8)) == Reminder.examples)
     // 编出去再读回来一样
     #expect(Reminder.decode(Reminder.encoded(Reminder.examples)) == Reminder.examples)
+  }
+
+  /// 示例存的是中文原文（0.9.0 存下来的照样认），显示时翻；标题是示例的中文或英文写法都算没改过（拍板 D6）
+  @Test func examplesShownInInterfaceLanguage() throws {
+    let water = Reminder.examples[0]
+    let english = try #require(Reminder.exampleTitle("water")?.english)
+    #expect(english == "Drink Water" && water.title == "喝水")
+    #expect(
+      Reminder.exampleDetail("eyes")?.english == "Look at something 20 feet away for 20 seconds")
+    // 中文界面（单测宿主）照存的显示
+    #expect(water.displayTitle == "喝水" && Reminder.examples[1].displayDetail == "看看 6 米外的地方，20 秒")
+    // 0.9.0 存下来的列表：中文原文，读回来认得出、算没改过、恢复示例不重复加
+    let stored =
+      #"[{"id":"water","title":"喝水","symbol":"hot-beverage","isOn":true,"schedule":{"kind":"interval","time":540,"until":1080,"days":[2,3,4,5,6],"every":60}}]"#
+    let old = Reminder.decode(Data(stored.utf8))
+    #expect(old[0].isPristine && old[0].exampleTitle != nil && old[0].displayTitle == "喝水")
+    #expect(Reminder.restoringExamples(in: old).map(\.id) == ["water", "eyes", "walk"])
+    // 英文界面里把标题框改成英文写法：还是原样；别的字、别的 id 用了同一个标题都不算
+    var renamed = water
+    renamed.title = english
+    #expect(renamed.isPristine && renamed.exampleTitle != nil && renamed.displayTitle == "喝水")
+    renamed.title = "Drink water!"
+    #expect(
+      !renamed.isPristine && renamed.exampleTitle == nil && renamed.displayTitle == "Drink water!")
+    var mine = Reminder(id: "mine", title: "喝水", schedule: water.schedule)
+    mine.isOn = false
+    #expect(!mine.isPristine && mine.exampleTitle == nil && mine.displayTitle == "喝水")
+    // 恢复示例补回来的还是中文原文
+    #expect(Reminder.restoringExamples(in: []).map(\.title) == ["喝水", "休息眼睛", "起来走走"])
+    // 提示音的叫法：英文就是系统里的名字；不认识的照写名字
+    #expect(Reminder.chimeNames.allSatisfy { Reminder.chimeTitle($0)?.english ?? $0 == $0 })
+    #expect(
+      ReminderSound.title(of: "Glass") == "玻璃" && ReminderSound.title(of: "Sosumi") == "Sosumi")
   }
 
   @Test func examplesAreOffAndPristine() {
@@ -338,6 +404,38 @@ struct ReminderTests {
       Reminder.new(now: Self.at(2, 9, 20), calendar: Self.calendar).schedule.date == Self.at(2, 10))
     #expect(
       Reminder.new(now: Self.at(2, 9, 55), calendar: Self.calendar).schedule.date == Self.at(2, 11))
+  }
+
+  /// 详情页的「日期和时间」存整分（2026-11-17 反馈：「现在 + 1 分钟」的倒数从 58 秒起——选得比下限早时系统的选择器
+  /// 把值夹成下限本身，原来下限是带秒的「现在」）：下限是下一个整分、选到的值去掉秒，刘海上的倒数照它数
+  @Test func pickedTimeIsWholeMinute() {
+    let picked = { Reminder.picked($0, calendar: Self.calendar) }
+    let earliest = { Reminder.earliestPick(after: $0, calendar: Self.calendar) }
+    // 耳朵上的读数（卡片、菜单栏那一项是精确倒数）
+    let reading = { (at: Date, now: Date) in
+      Island.Activity.wingReading(.countdown(to: at), now: now)
+    }
+    // + 1 分钟：17:46:05.267 选「17:47」，被夹住的（下限）、带着秒改出来的都存成 17:47:00，倒数 0:55
+    let now = Self.at(2, 17, 46).addingTimeInterval(5.267)
+    #expect(earliest(now) == Self.at(2, 17, 47))
+    #expect(picked(earliest(now)) == Self.at(2, 17, 47))
+    #expect(picked(now + 60) == Self.at(2, 17, 47))
+    #expect(reading(Self.at(2, 17, 47), now) == "0:55")
+    // + 1 小时：存 18:46:00；离响不到一小时，倒数已经挂上，只到分钟（拍板 C1）
+    let hour = picked(now + 3600)
+    #expect(hour == Self.at(2, 18, 46))
+    #expect(hour - ReminderCenter.countdownWindow <= now)
+    #expect(reading(hour, now) == "60分")
+    // 跨午夜：23:59:30.5 最早能选第二天 0:00，选到的 0:00:30.5 存成 0:00:00，倒数 0:30
+    let late = Self.at(2, 23, 59).addingTimeInterval(30.5)
+    #expect(earliest(late) == Self.at(3, 0))
+    #expect(picked(late + 60) == Self.at(3, 0))
+    #expect(reading(Self.at(3, 0), late) == "0:30")
+    // 正好在整分上：这一分钟已经到了，最早是下一分钟；整分的值原样；倒数从 1:00 起
+    let exact = Self.at(2, 9, 0)
+    #expect(earliest(exact) == Self.at(2, 9, 1))
+    #expect(picked(exact) == exact)
+    #expect(reading(Self.at(2, 9, 1), exact) == "1:00")
   }
 
   /// 「+」›「新提醒」先不存：详情页第一次改动时才加到末尾（开着），之后按 id 换；别的 id、满了都不加；
@@ -458,6 +556,42 @@ struct ReminderTests {
     #expect(parse("0分钟") == nil)
   }
 
+  /// 英文（多语言第 8 批）：只补「多久之后」，英文界面的启动器预填的是「remind 」
+  @Test func phraseEnglish() {
+    let now = Self.at(2, 10)
+    func parse(_ text: String) -> ReminderPhrase.Parsed? {
+      ReminderPhrase.parse(text, now: now, calendar: Self.calendar)
+    }
+    func after(_ minutes: Double, _ title: String) -> ReminderPhrase.Parsed {
+      .init(date: now.addingTimeInterval(minutes * 60), title: title)
+    }
+    // 启动器提示行里举的两个例子
+    #expect(parse("10 min stretch") == after(10, "stretch"))
+    #expect(parse("2 h check the oven") == after(120, "check the oven"))
+    #expect(parse("in 10 minutes stretch") == after(10, "stretch"))
+    #expect(parse("stretch in 15 mins") == after(15, "stretch"))
+    #expect(parse("1.5 hours call mom") == after(90, "call mom"))
+    #expect(parse("tea 20 min later") == after(20, "tea"))
+    #expect(parse("half an hour from now tea") == after(30, "tea"))
+    #expect(parse("in an hour Lunch") == after(60, "Lunch"))
+    #expect(parse("1 hour 20 min leave") == after(80, "leave"))
+    // remind me … to …
+    #expect(ReminderPhrase.query("remind me in 10 min to stretch") == "in 10 min to stretch")
+    #expect(ReminderPhrase.query("Remind me 5m") == "5m")
+    #expect(ReminderPhrase.query("remind meeting 9:30") == "meeting 9:30")
+    #expect(parse("in 10 min to stretch") == after(10, "stretch"))
+    // 重复的去设置里建；单词里带着 every、in 的不误认
+    #expect(
+      ReminderPhrase.isRepeating("every day 9:00 pills") && parse("every 30 min stretch") == nil)
+    #expect(ReminderPhrase.isRepeating("daily standup"))
+    #expect(!ReminderPhrase.isRepeating("check everything 10 min"))
+    #expect(parse("begin 10 min") == after(10, "begin"))
+    // 英文的「哪天几点」这一版不认（ponytail，ReminderPhrase 文件头）
+    #expect(parse("tomorrow stretch") == nil)
+    // 没写内容：标题是建的那一刻的语言（单测宿主是中文）
+    #expect(parse("10 min")?.title == "时间到了")
+  }
+
   @Test func phraseMoments() {
     let now = Self.at(2, 10)  // 周一 10:00
     func parse(_ text: String, at time: Date = Self.at(2, 10)) -> ReminderPhrase.Parsed? {
@@ -544,14 +678,176 @@ struct ReminderTests {
     #expect(ReminderPhrase.keywords.allSatisfy { WebSearch.reservedKeywords[$0] == "提醒" })
   }
 
-  /// 暂停到几点跟着状态走：列表变了不丢；时间往回调过时最多收到一天
+  /// 暂停到几点跟着状态走：列表变了不丢；时间往回调过时最多收到两天（「暂停到明天」最远到后天零点之前，E6）
   @Test func pauseSurvivesReconcileAndClockBack() {
     var state = ReminderState()
     state.pausedUntil = Self.at(2, 11)
     #expect(
       ReminderCheck.reconciled(state, with: [], now: Self.at(2, 10)).pausedUntil == Self.at(2, 11))
     state.pausedUntil = Self.at(9, 10)
-    #expect(state.pulledBack(now: Self.at(2, 10), maxSnooze: 1800).pausedUntil == Self.at(3, 10))
+    #expect(state.pulledBack(now: Self.at(2, 10), maxSnooze: 1800).pausedUntil == Self.at(4, 10))
+    state.pausedUntil = Self.at(3, 22)
+    #expect(state.pulledBack(now: Self.at(2, 10), maxSnooze: 1800).pausedUntil == Self.at(3, 22))
+  }
+
+  /// 第五轮体检 E6：暂停期间间隔类不攒（执行层传 held + away），暂停到点从那一刻重新数——17:30 暂停 1 小时，
+  /// 时段到 18:00 的「喝水」原来 18:30 补响一次，现在下一次是明天时段里
+  @Test func pauseRestsIntervalsAndRestartsAfter() {
+    let water = Reminder(
+      id: "w", title: "w",
+      schedule: Schedule(
+        kind: .interval, time: 9 * 60, until: 18 * 60, days: Schedule.workdays, every: 60))
+    var state = ReminderCheck.reconciled(ReminderState(), with: [water], now: Self.at(2, 9))
+    state.pausedUntil = Self.at(2, 18, 30)
+    var anchors = ["w": Self.at(2, 16, 45)]  // 17:45 该响
+    let during = ReminderCheck.check(
+      [water], state: state, anchors: anchors, showing: [], now: Self.at(2, 17, 50), held: true,
+      away: true, calendar: Self.calendar)
+    #expect(during == .init())
+    let early = state.endPause(now: Self.at(2, 18, 29))
+    #expect(!early && state.pausedUntil == Self.at(2, 18, 30))
+    let ended = state.endPause(now: Self.at(2, 18, 30))
+    #expect(ended && state.pausedUntil == nil)
+    anchors["w"] = Self.at(2, 18, 30)
+    let after = ReminderCheck.check(
+      [water], state: state, anchors: anchors, showing: [], now: Self.at(2, 18, 30),
+      calendar: Self.calendar)
+    #expect(after.fire.isEmpty && after.next == Self.at(3, 10))
+  }
+
+  /// 「暂停到明天」到明天第一个时段开始（E6）：没设时段的 8:00；只看开着的、明天勾了的间隔提醒；全天的不算时段；
+  /// 只有一部分设了时段时取设了的里最早的；跨过半夜的按开始的钟点；每周的钟点不算时段
+  @Test func pauseUntilTomorrowWaitsForFirstWindow() {
+    let thursday = Self.at(5, 15)
+    func until(_ list: [Reminder], at now: Date = thursday) -> Date {
+      ReminderCheck.pauseUntilTomorrow(list, now: now, calendar: Self.calendar)
+    }
+    #expect(until([]) == Self.at(6, 8))
+    let water = Reminder(
+      id: "w", title: "w",
+      schedule: Schedule(kind: .interval, time: 9 * 60, until: 18 * 60, days: Schedule.workdays))
+    #expect(until([water]) == Self.at(6, 9))
+    // 周五点：明天周六不在工作日里
+    #expect(until([water], at: Self.at(6, 17)) == Self.at(7, 8))
+    var off = water
+    off.isOn = false
+    #expect(until([off]) == Self.at(6, 8))
+    let eyes = Reminder(
+      id: "e", title: "e", schedule: Schedule(kind: .interval, time: 0, until: 1440, every: 20))
+    #expect(until([eyes]) == Self.at(6, 8))
+    #expect(until([eyes, water]) == Self.at(6, 9))
+    let early = Reminder(
+      id: "x", title: "x", schedule: Schedule(kind: .interval, time: 7 * 60 + 30, until: 12 * 60))
+    #expect(until([water, early]) == Self.at(6, 7, 30))
+    let night = Reminder(
+      id: "n", title: "n", schedule: Schedule(kind: .interval, time: 22 * 60, until: 6 * 60))
+    #expect(until([night], at: Self.at(5, 23)) == Self.at(6, 22))
+    #expect(until([Self.weekly("a", time: 6 * 60)]) == Self.at(6, 8))
+    // 半夜 0:00 前后（评审 4）：23:59 点是明天的；0:01 点、今天的还没到，是今天的；今天的过了就是明天的
+    #expect(until([water], at: Self.at(5, 23, 59)) == Self.at(6, 9))
+    #expect(until([water], at: Self.at(6, 0, 1)) == Self.at(6, 9))
+    #expect(until([], at: Self.at(6, 7)) == Self.at(6, 8))
+    #expect(until([], at: Self.at(6, 8)) == Self.at(7, 8))
+    #expect(until([water], at: Self.at(6, 9, 30)) == Self.at(7, 8))
+    // 跨过半夜的那条今天 22:00 还没到：今天 22:00
+    #expect(until([night], at: Self.at(5, 15)) == Self.at(5, 22))
+  }
+
+  /// 全屏倒数完自己收起（E7）：出来之后有人碰过键盘鼠标才算知道了；一直没人碰、会话不在用户手里时，不是间隔类的挂到岛上；
+  /// 间隔类照旧算知道了、重新数（评审 1：「休息眼睛」照做的人正好 20 秒不碰键鼠，挂到岛上的话之后不再数）
+  @Test func fullScreenExpiryNeedsSomeoneThere() {
+    let once = Reminder(id: "o", title: "o", schedule: Schedule(kind: .once, date: Self.at(2, 9)))
+    let eyes = Reminder(
+      id: "e", title: "e", schedule: Schedule(kind: .interval, time: 0, until: 1440, every: 20))
+    let list = [once, Self.weekly("d"), eyes]
+    let ids = ["o", "d", "e"]
+    func pending(_ ids: [String], idle: TimeInterval, away: Bool = false) -> [String] {
+      ReminderCenter.unattended(ids, list: list, idle: idle, shown: 20, away: away)
+    }
+    #expect(pending(ids, idle: 3).isEmpty)
+    #expect(pending(ids, idle: 25) == ["o", "d"])
+    #expect(pending(ids, idle: 20) == ["o", "d"])
+    #expect(pending(ids, idle: 3, away: true) == ["o", "d"])
+    #expect(pending(["e"], idle: 25).isEmpty)
+    #expect(pending(["e"], idle: 3, away: true).isEmpty)
+  }
+
+  /// 过了点、此刻已经出了时段的间隔类不补响（评审 3：从状态屏出来、时钟往前跳、醒得晚），从现在数、交给下一个时段；
+  /// 时段里的照响；推过的照响（那是自己要的时刻）
+  @Test func lateIntervalOutsideWindowWaitsForNextWindow() {
+    let water = Reminder(
+      id: "w", title: "w",
+      schedule: Schedule(
+        kind: .interval, time: 9 * 60, until: 18 * 60, days: Schedule.workdays, every: 60))
+    var state = ReminderCheck.reconciled(ReminderState(), with: [water], now: Self.at(2, 9))
+    let anchors = ["w": Self.at(2, 16, 45)]  // 17:45 该响
+    func check(_ now: Date) -> ReminderCheck.Result {
+      ReminderCheck.check(
+        [water], state: state, anchors: anchors, showing: [], now: now, calendar: Self.calendar)
+    }
+    #expect(check(Self.at(2, 17, 50)).fire == ["w"])
+    let late = check(Self.at(2, 18, 30))
+    #expect(late.fire.isEmpty && late.rested == ["w"] && late.next == Self.at(3, 10))
+    state.snoozed["w"] = Self.at(2, 18, 5)
+    #expect(check(Self.at(2, 18, 30)).fire == ["w"])
+  }
+
+  /// 跨过半夜的时段（U10，评审 2）编码多一个 overnight：自己往返一致；别的编出来的字节和以前自动生成的一样；
+  /// 旧版本（不认识这个键）解了再编对不上，同步时整类停下，不会把它收拾成到半夜再推回来
+  @Test func overnightEncodingStopsOldVersions() throws {
+    let encoder = SyncRecords.encoder
+    let plain = [
+      Schedule(kind: .interval, days: Schedule.workdays), Schedule(kind: .weekly, time: 20 * 60),
+      Schedule(kind: .once, date: Self.at(5, 9)), Schedule(kind: .monthly, day: 31),
+      Schedule(kind: .interval, time: 0, until: 1440, every: 20),
+    ]
+    for schedule in plain.map(\.sanitized) {
+      let old = OldSchedule(
+        kind: schedule.kind.rawValue, date: schedule.date, time: schedule.time,
+        until: schedule.until, days: schedule.days, day: schedule.day, every: schedule.every)
+      #expect(try encoder.encode(schedule) == encoder.encode(old))
+    }
+    // 不是间隔类的没有时段：结束早于开始照旧收拾成到半夜（和以前一样）
+    #expect(Schedule(kind: .weekly, time: 20 * 60).sanitized.until == 1440)
+    let night = Schedule(kind: .interval, time: 22 * 60, until: 6 * 60, days: Schedule.workdays)
+      .sanitized
+    let json = String(decoding: try encoder.encode(night), as: UTF8.self)
+    #expect(json.contains(#""overnight":true"#))
+    #expect(SyncRecords.decodeExact(Schedule.self, from: json) == night)
+    #expect(SyncRecords.decodeExact(OldSchedule.self, from: json) == nil)
+    let reminder = Reminder(id: "n", title: "夜班", schedule: night)
+    let value = String(decoding: try encoder.encode(reminder), as: UTF8.self)
+    #expect(SyncRecords.decodeExact(Reminder.self, from: value) == reminder)
+  }
+
+  /// 跨过半夜的时段（U10）：22:00–6:00 存得下、算到第二天、归开始的那一天；页头不误报「比间隔还短」
+  @Test func windowCrossesMidnight() {
+    let night = Schedule(
+      kind: .interval, time: 22 * 60, until: 6 * 60, days: Schedule.workdays, every: 60)
+    #expect(night.sanitized == night)
+    #expect(night.windowMinutes == 480)
+    let next = { (anchor: Date) in night.next(fromAnchor: anchor, calendar: Self.calendar) }
+    // 周一 22:30 → 23:30；半夜接着数（周一开始的那段）；6:00 出了时段 → 当天 22:00 + 60
+    #expect(next(Self.at(2, 22, 30)) == Self.at(2, 23, 30))
+    #expect(next(Self.at(3, 0, 30)) == Self.at(3, 1, 30))
+    #expect(next(Self.at(3, 5, 30)) == Self.at(3, 23))
+    #expect(next(Self.at(3, 12)) == Self.at(3, 23))
+    // 周五晚上开始的那段到周六早上照响；周六晚上不响（周六没勾）：下一段是周一 22:00
+    #expect(next(Self.at(7, 2)) == Self.at(7, 3))
+    #expect(next(Self.at(7, 5, 30)) == Self.at(9, 23))
+    #expect(
+      night.window(containing: Self.at(7, 3), calendar: Self.calendar)
+        == Self.at(6, 22)..<Self.at(7, 6))
+    // 周一 0:00–6:00 是周日开始的那段（周日没勾）
+    #expect(night.window(containing: Self.at(9, 3), calendar: Self.calendar) == nil)
+    // 页头：8 小时、每 60 分钟不算「比间隔还短」；真的短的照报
+    var reminder = Reminder(id: "n", title: "夜班", schedule: night)
+    #expect(reminder.problem(now: Self.at(2, 8)) == nil)
+    reminder.schedule = Schedule(kind: .interval, time: 23 * 60 + 30, until: 30, every: 90)
+    #expect(reminder.problem(now: Self.at(2, 8)) == "这段时间比间隔还短，可能一次都不提醒")
+    // 收拾：结束和开始一样、0:00 都当到半夜
+    #expect(Schedule(kind: .interval, time: 9 * 60, until: 9 * 60).sanitized.until == 1440)
+    #expect(Schedule(kind: .interval, time: 9 * 60, until: 0).sanitized.until == 1440)
   }
 
   /// 同步（E3）：交出去的一条一条、顺序一条，落到另一台（空的偏好域）一个字不差；更新版本写的（多了字段）整个不落
@@ -636,17 +932,23 @@ struct ReminderTests {
     #expect(result.fire == ["w"] && result.missed.isEmpty)
   }
 
-  /// 评审 5：系统时间往回调过，记在将来的时刻收回来
+  /// 评审 5 + 第五轮体检 E5：系统时间明显往回调过（超过 1 分钟），记在将来的处理时刻收回来，差几十秒的对时不动；
+  /// 推到的时刻只截掉实际推不到的（最远 65 分钟：倒数一小时以内 + 推后 5 分钟）——14:00 推后到 15:05 的一对时照旧 15:05
   @Test func clockMovedBackPullsStateIn() {
     let a = Self.weekly("a")
-    var state = Self.state(["a": Self.at(5, 9)], list: [a])
-    state.snoozed["a"] = Self.at(5, 9, 10)
-    state.snoozed["b"] = Self.at(2, 8, 10)
+    let b = Self.weekly("b")
     let now = Self.at(2, 8)
-    let pulled = state.pulledBack(now: now, maxSnooze: 30 * 60)
+    var state = Self.state(["a": Self.at(5, 9), "b": now.addingTimeInterval(30)], list: [a, b])
+    state.snoozed["a"] = Self.at(5, 9, 10)
+    state.snoozed["b"] = Self.at(2, 9, 5)
+    state.snoozed["c"] = Self.at(2, 8, 10)
+    #expect(ReminderCenter.farthestSnooze == 65 * 60)
+    let pulled = state.pulledBack(now: now, maxSnooze: ReminderCenter.farthestSnooze)
     #expect(pulled.marks["a"]?.at == now)
-    #expect(pulled.snoozed["a"] == Self.at(2, 8, 30))
-    #expect(pulled.snoozed["b"] == Self.at(2, 8, 10))
+    #expect(pulled.marks["b"]?.at == now.addingTimeInterval(30))
+    #expect(pulled.snoozed["a"] == Self.at(2, 9, 5))
+    #expect(pulled.snoozed["b"] == Self.at(2, 9, 5))
+    #expect(pulled.snoozed["c"] == Self.at(2, 8, 10))
   }
 
   /// 评审 4、6：时段比间隔还短的有橙字；不认识的时间种类不会变成「每天」
@@ -748,4 +1050,15 @@ struct ReminderTests {
       try JSONDecoder().decode(SettingsArchive.Value.self, from: JSONEncoder().encode(statuses))
         == statuses)
   }
+}
+
+/// 0.10.0 的提醒时间规则：自动生成的编解码、同样的字段顺序（overnightEncodingStopsOldVersions 拿它比字节、模拟旧版本往返）
+private nonisolated struct OldSchedule: Codable {
+  var kind: String
+  var date: Date
+  var time: Int
+  var until: Int
+  var days: [Int]
+  var day: Int
+  var every: Int
 }

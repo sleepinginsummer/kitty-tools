@@ -19,14 +19,14 @@ struct StatusPresetDetail: View {
   @State private var draft: StatusPreset?
   @State private var confirmsDelete = false
 
-  static let deleteMessage = "自己加的、改过的状态删掉就找不回来了。"
+  static var deleteMessage: String { String(localized: "自己加的、改过的状态删掉就找不回来了。") }
 
   var body: some View {
     let list = fixed ?? StatusPreset.decode(data)
     // 删掉之后、退回列表之前的这一帧没有这一条：什么都不画
     if let stored = list.first(where: { $0.id == id }) {
       form(editing: draft ?? stored, stored: stored, isOnly: list.count <= 1)
-        .navigationTitle(stored.title)
+        .navigationTitle(stored.displayTitle)
         .toolbar { SettingsBackButton { dismiss() } }
     }
   }
@@ -40,14 +40,14 @@ struct StatusPresetDetail: View {
     }
     return VStack(spacing: 0) {
       DetailHeader(
-        title: stored.title, status: editing.problem ?? stored.summary,
+        title: "\(stored.displayTitle)", status: "\(editing.problem ?? stored.summary)",
         isProblem: editing.problem != nil
       ) {
         StatusPresetIcon(symbol: stored.symbol, size: 40)
       }
       fields(binding, editing: editing, stored: stored, isOnly: isOnly)
     }
-    .confirmationDialog("删除「\(stored.title)」？", isPresented: $confirmsDelete) {
+    .confirmationDialog("删除「\(stored.displayTitle)」？", isPresented: $confirmsDelete) {
       Button("删除", role: .destructive, action: delete)
     } message: {
       Text(Self.deleteMessage)
@@ -59,13 +59,22 @@ struct StatusPresetDetail: View {
   ) -> some View {
     Form {
       Section {
-        TextField("标题", text: binding.title, prompt: Text("如 马上回来"))
+        // 没改过的自带状态显示翻好的（「清洁屏幕」在英文界面是 Clean Screen），不动它就照存的中文留着（D6：只翻显示）
+        TextField(
+          "标题",
+          text: Binding {
+            editing.displayTitle
+          } set: { text in
+            guard text != editing.displayTitle else { return }
+            binding.wrappedValue.title = text
+          }, prompt: Text("如 马上回来"))
         TextField(
           "说明",
           text: Binding {
-            editing.detail ?? ""
-          } set: {
-            binding.wrappedValue.detail = $0
+            editing.displayDetail ?? ""
+          } set: { text in
+            guard text != (editing.displayDetail ?? "") else { return }
+            binding.wrappedValue.detail = text
           }, prompt: Text("可不填"))
         SymbolGrid(selection: binding.symbol)
       } footer: {
@@ -132,6 +141,7 @@ struct StatusPresetDetail: View {
 /// 整个是一行「图标」：标题在左上（和别的行一样），格子靠右，中间空着的那一大块是预览（2026-11-04 用户要看得出动画是什么，
 /// 又说「左边位置大，放大居中」）——放大放选中的那个的动画、下面写它的名字（EmojiPreview），在空着的那块里居中。2026-11-05 用户
 /// 「选择后就自动播放动画，不要 hover」：预览只跟着选中的走、一直在播，鼠标停在格子上不换。格子本身一直是静止画面
+/// （2026-11-17 起包里只带自带的状态和示例提醒用的几个，别的动画第一次用到时才下：没下好的格子画缩略图，选上了预览会去下）
 struct SymbolGrid: View {
   @Binding var selection: String
   @Environment(\.colorScheme) private var scheme
@@ -153,6 +163,7 @@ struct SymbolGrid: View {
   }
 
   private var grid: some View {
+    let _ = EmojiPack.shared.generation  // 选上的那个下好了换成它的静止画面
     let column = GridItem(.fixed(Self.cell + Self.ring * 2), spacing: 4)
     return LazyVGrid(columns: Array(repeating: column, count: 7), spacing: 4) {
       ForEach([""] + StatusEmoji.ids, id: \.self) { cell($0) }
@@ -172,13 +183,15 @@ struct SymbolGrid: View {
       selection = symbol
     } label: {
       Group {
-        if let still = StatusEmoji.still(symbol) {
+        // 没下好动画的（包里没带的格子只在选上时才下）画缩略图，格子这么小看不出差别
+        if let still = StatusEmoji.still(symbol) ?? StatusEmoji.thumbnail(symbol) {
           Image(decorative: still, scale: 1)
             .resizable()
             .interpolation(.high)
             .frame(width: Self.cell - 6, height: Self.cell - 6)
         } else {
-          Text("无").font(.system(size: 12, weight: .medium))
+          // 英文「None」比格子宽：缩到放得下（中文「无」放得下，不缩）
+          Text("无").font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.7)
         }
       }
       .foregroundStyle(selected ? .primary : .secondary)
@@ -201,8 +214,8 @@ struct SymbolGrid: View {
     .buttonStyle(.plain)
     .animation(.easeOut(duration: Style.fadeIn), value: selected)
     // 旁白读表情的中文名（「举手」「闹钟」…），「无」那一格读它的字
-    .accessibilityLabel(StatusEmoji.name(symbol) ?? "无")
-    .help(StatusEmoji.name(symbol) ?? "不要图标")
+    .accessibilityLabel(StatusEmoji.name(symbol) ?? String(localized: "无"))
+    .help(StatusEmoji.name(symbol) ?? String(localized: "不要图标"))
     .accessibilityAddTraits(selected ? .isSelected : [])
   }
 
@@ -250,7 +263,10 @@ struct SymbolGrid: View {
         },
         section: StatusEmoji.packID(current).flatMap { EmojiPack.entries[$0]?.group })
     }
-    .accessibilityLabel(pack.flatMap { StatusEmoji.name($0) }.map { "动画表情：\($0)" } ?? "动画表情")
+    .accessibilityLabel(
+      pack.flatMap { StatusEmoji.name($0) }.map { String(localized: "动画表情：\($0)") }
+        ?? String(localized: "动画表情")
+    )
     .help("从动画表情里挑一个（会动，第一次用到时下载）")
     .accessibilityAddTraits(pack != nil ? .isSelected : [])
   }
@@ -293,7 +309,9 @@ struct SymbolGrid: View {
     }
     .buttonStyle(.plain)
     .animation(.easeOut(duration: Style.fadeIn), value: custom)
-    .accessibilityLabel(custom.map { "系统表情：\($0)" } ?? "系统表情")
+    .accessibilityLabel(
+      custom.map { String(localized: "系统表情：\($0)") } ?? String(localized: "系统表情")
+    )
     .help("从系统表情里挑一个（按系统的样子画，不会动）")
     .accessibilityAddTraits(custom != nil ? .isSelected : [])
   }
@@ -333,14 +351,16 @@ struct EmojiPreview: View {
 struct EmojiPackToggle: View {
   @AppStorage(Prefs.emojiPackDownloads) private var downloads = true
 
-  static let footnote =
-    "在「动画表情」里挑的，第一次用到时从 Kitty Tools 在 GitHub 上的发布页下载那个动画（一个约 0.2 MB，不带任何个人信息），"
-    + "存在这台 Mac 上、最多 50 MB；没下好、没联网时先显示缩略图。"
+  static let footnote: LocalizedStringResource =
+    "除了自带的状态和示例提醒用的几个，表情的动画第一次用到时从 Kitty Tools 在 GitHub 上的发布页下载（一个约 0.2 MB，不带任何个人信息），存在这台 Mac 上、最多 50 MB；没下好、没联网时先显示缩略图。"
 
   var body: some View {
-    Toggle(isOn: $downloads) {
-      Text("自动下载动画表情")
-      Text("关掉后还没下好的动画表情先显示缩略图、不动，已经下好的照样动")
+    // 联网下载、存多少在 ⓘ 里（设置改版 S5）
+    SettingRow(
+      title: "自动下载动画表情", subtitle: "关掉后没下好的先显示缩略图", info: Self.footnote
+    ) {
+      Toggle("自动下载动画表情", isOn: $downloads)
+        .toggleStyle(.switch)
     }
   }
 }

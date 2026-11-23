@@ -12,7 +12,7 @@ nonisolated enum Baidu {
     -> AsyncThrowingStream<String, Error>
   {
     guard let appID = service.secret("appId"), let secret = service.secret("secret") else {
-      return Signing.missing("百度翻译的 App ID 和密钥")
+      return Signing.missing("请先在设置里填写百度翻译的 App ID 和密钥")
     }
     guard request.text.count <= limit else { return Signing.tooLong(limit) }
     return Signing.oneShot {
@@ -36,14 +36,14 @@ nonisolated enum Baidu {
   /// 错误码 → 用户看得懂的中文（mac-translate §3；按百度翻译开放平台的错误码表）。密钥类是配置错误（橙色、去设置）
   static func error(code: String) -> TranslateError {
     switch code {
-    case "52001": TranslateError(message: "百度翻译请求超时，请重试")
-    case "52002": TranslateError(message: "百度翻译系统出错，请重试")
-    case "52003", "54001", "90107": .config("App ID 或密钥不对")
-    case "54003": TranslateError(message: "请求太频繁，稍后再试")
-    case "54004": TranslateError(message: "百度翻译账户余额不足")
-    case "58001": TranslateError(message: "百度翻译不支持这个语言方向")
-    case "58002": .config("服务已关闭，请到百度翻译开放平台开通")
-    default: TranslateError(message: "百度翻译出错（错误码 \(code)）")
+    case "52001": TranslateError(message: String(localized: "百度翻译请求超时，请重试"))
+    case "52002": TranslateError(message: String(localized: "百度翻译系统出错，请重试"))
+    case "52003", "54001", "90107": .config(String(localized: "App ID 或密钥不对"))
+    case "54003": TranslateError(message: String(localized: "请求太频繁，稍后再试"))
+    case "54004": TranslateError(message: String(localized: "百度翻译账户余额不足"))
+    case "58001": TranslateError(message: String(localized: "百度翻译不支持这个语言方向"))
+    case "58002": .config(String(localized: "服务已关闭，请到百度翻译开放平台开通"))
+    default: TranslateError(message: String(localized: "百度翻译出错（错误码 \(code)）"))
     }
   }
 
@@ -61,6 +61,16 @@ nonisolated enum Baidu {
     case .ko: "kor"
     case .fr: "fra"
     case .es: "spa"
+    case .vi: "vie"
+    case .ar: "ara"
+    case .ms: "may"
+    case .uk: "ukr"
+    case .sv: "swe"
+    case .da: "dan"
+    case .fi: "fin"
+    case .nb: "nor"
+    case .ro: "rom"
+    case .he: "heb"
     case let lang?: lang.rawValue
     }
   }
@@ -73,7 +83,7 @@ nonisolated enum Youdao {
     -> AsyncThrowingStream<String, Error>
   {
     guard let appKey = service.secret("appKey"), let appSecret = service.secret("appSecret") else {
-      return Signing.missing("有道翻译的应用 ID 和应用密钥")
+      return Signing.missing("请先在设置里填写有道翻译的应用 ID 和应用密钥")
     }
     guard request.text.count <= limit else { return Signing.tooLong(limit) }
     return Signing.oneShot {
@@ -92,7 +102,7 @@ nonisolated enum Youdao {
       ])
       let object = try await HTTP.send(urlRequest)
       guard "\(object["errorCode"] ?? "")" == "0" else {
-        throw error(code: "\(object["errorCode"] ?? "未知")")
+        throw error(code: object["errorCode"].map { "\($0)" } ?? String(localized: "未知"))
       }
       return (object["translation"] as? [String] ?? []).joined(separator: "\n")
     }
@@ -101,10 +111,10 @@ nonisolated enum Youdao {
   /// 错误码 → 用户看得懂的中文（按有道智云的错误码表）；应用 ID / 密钥类是配置错误
   static func error(code: String) -> TranslateError {
     switch code {
-    case "101", "108", "202": .config("应用 ID 或应用密钥不对")
-    case "401": TranslateError(message: "有道翻译账户已欠费")
-    case "411": TranslateError(message: "请求太频繁，稍后再试")
-    default: TranslateError(message: "有道翻译出错（错误码 \(code)）")
+    case "101", "108", "202": .config(String(localized: "应用 ID 或应用密钥不对"))
+    case "401": TranslateError(message: String(localized: "有道翻译账户已欠费"))
+    case "411": TranslateError(message: String(localized: "请求太频繁，稍后再试"))
+    default: TranslateError(message: String(localized: "有道翻译出错（错误码 \(code)）"))
     }
   }
 
@@ -121,6 +131,7 @@ nonisolated enum Youdao {
     case nil: "auto"
     case .zhHans: "zh-CHS"
     case .zhHant: "zh-CHT"
+    case .nb: "no"
     case let lang?: lang.rawValue
     }
   }
@@ -173,7 +184,7 @@ nonisolated enum YoudaoWeb {
     // 正常是加密的 base64；风控或参数不对时直接回明文 JSON（`{"code":50}`），解不开就按明文解析
     let plain = (try? decrypt(body, key: key.aesKey, iv: key.aesIv)) ?? body
     guard let object = try? JSONSerialization.jsonObject(with: Data(plain.utf8)) as? [String: Any]
-    else { throw TranslateError(message: "有道翻译（网页版）返回的数据看不懂") }
+    else { throw TranslateError(message: String(localized: "有道翻译（网页版）返回的数据看不懂")) }
     return try parse(object)
   }
 
@@ -222,7 +233,7 @@ nonisolated enum YoudaoWeb {
     guard let data = object["data"] as? [String: Any],
       let secret = data["secretKey"] as? String,
       let aesKey = data["aesKey"] as? String, let aesIv = data["aesIv"] as? String
-    else { throw TranslateError(message: "有道翻译（网页版）没给密钥，接口可能改版了") }
+    else { throw TranslateError(message: String(localized: "有道翻译（网页版）没给密钥，接口可能改版了")) }
     return Key(secret: secret, aesKey: aesKey, aesIv: aesIv)
   }
 
@@ -238,7 +249,8 @@ nonisolated enum YoudaoWeb {
     }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     guard (200..<300).contains(status) else {
-      throw TranslateError(message: "有道翻译（网页版）拒绝了这个请求（\(status)）", status: status)
+      throw TranslateError(
+        message: String(localized: "有道翻译（网页版）拒绝了这个请求（\(String(status))）"), status: status)
     }
     return String(decoding: data, as: UTF8.self)
   }
@@ -254,9 +266,12 @@ nonisolated enum YoudaoWeb {
   static func error(code: Int) -> TranslateError {
     switch code {
     case 50:
-      TranslateError(message: "有道翻译（网页版）拒绝了请求：接口可能已经改版，这个免费通道暂时不能用")
-    case 101, 108: TranslateError(message: "有道翻译（网页版）认不出这个语种", kind: .config)
-    default: TranslateError(message: "有道翻译（网页版）出错（错误码 \(code)）")
+      TranslateError(
+        message: String(localized: "有道翻译（网页版）拒绝了请求：接口可能已经改版，这个免费通道暂时不能用"))
+    case 101, 108:
+      TranslateError(message: String(localized: "有道翻译（网页版）认不出这个语种"), kind: .config)
+    default:
+      TranslateError(message: String(localized: "有道翻译（网页版）出错（错误码 \(String(code))）"))
     }
   }
 
@@ -294,14 +309,14 @@ nonisolated enum YoudaoWeb {
     return text
   }
 
-  static let undecryptable = TranslateError(message: "有道翻译（网页版）的响应解不开")
+  static let undecryptable = TranslateError(message: String(localized: "有道翻译（网页版）的响应解不开"))
 }
 
 nonisolated enum Google {
   static func stream(_ request: TranslateRequest, service: TranslateService)
     -> AsyncThrowingStream<String, Error>
   {
-    guard let key = service.secret() else { return Signing.missing("Google 的 API Key") }
+    guard let key = service.secret() else { return Signing.missing("请先在设置里填写 Google 的 API Key") }
     return Signing.oneShot {
       var components = URLComponents(
         string: "https://translation.googleapis.com/language/translate/v2")!
@@ -318,6 +333,7 @@ nonisolated enum Google {
     switch lang {
     case .zhHans: "zh-CN"
     case .zhHant: "zh-TW"
+    case .nb: "no"
     default: lang.rawValue
     }
   }
@@ -337,7 +353,7 @@ nonisolated enum DeepL {
     -> AsyncThrowingStream<String, Error>
   {
     if service.usesDeepLX == true {
-      guard let url = deepLXURL(service) else { return Signing.missing("DeepLX 地址") }
+      guard let url = deepLXURL(service) else { return Signing.missing("请先在设置里填写 DeepLX 地址") }
       return Signing.oneShot {
         let json: [String: Any] = [
           "text": request.text, "source_lang": request.from.map(sourceCode) ?? "auto",
@@ -347,7 +363,9 @@ nonisolated enum DeepL {
         return object["data"] as? String ?? ""
       }
     }
-    guard let key = service.secret("authKey") else { return Signing.missing("DeepL 的 Auth Key") }
+    guard let key = service.secret("authKey") else {
+      return Signing.missing("请先在设置里填写 DeepL 的 Auth Key")
+    }
     return Signing.oneShot {
       // 免费版 key 以 :fx 结尾，走 api-free 域名
       let host = key.hasSuffix(":fx") ? "api-free.deepl.com" : "api.deepl.com"

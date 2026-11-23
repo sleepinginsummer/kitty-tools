@@ -131,6 +131,8 @@ struct ScriptCommandTests {
       environment == [
         "HOME": "/Users/me", "USER": "me", "PATH": "/usr/bin", "LANG": "zh_CN.UTF-8",
         "KITTY_SCRIPT_DIR": "/tmp/scripts", "KITTY_DATA_DIR": "/data", "KITTY_VERSION": "0.8.0",
+        // 单测宿主是中文界面
+        "KITTY_LANGUAGE": "zh-Hans",
       ])
     #expect(ScriptCommand.language(Locale(identifier: "zh_CN")) == "zh_CN.UTF-8")
     // 系统里没有的组合（en_CN）退回 en_US.UTF-8：要紧的是 UTF-8
@@ -409,12 +411,12 @@ struct ScriptRunTests {
     // 只打了关键词：普通那一行，↩ 先补「tq 空格」
     model.query = "tq"
     let row = try #require(model.results.first)
-    #expect(model.primaryAction(for: row).title == "补全关键词")
+    #expect(String(localized: model.primaryAction(for: row).title) == "补全关键词")
     model.execute(row)
     #expect(model.query == "tq " && given.isEmpty)
     // 没填参数：副标题写要填什么，↩ 不跑
     #expect(model.results.first?.subtitle == "输入「tq 空格 城市」")
-    #expect(model.primaryAction(for: try #require(model.results.first)).title == "先填参数")
+    #expect(String(localized: model.primaryAction(for: try #require(model.results.first)).title) == "先填参数")
     model.execute(try #require(model.results.first))
     #expect(given.isEmpty)
     model.query = "tq 北京"
@@ -440,8 +442,8 @@ struct ScriptRunTests {
     #expect(runs == 1)
     #expect(model.results.prefix(2).map(\.title) == ["YUdrPQ==", "hi"])
     #expect(model.results.prefix(2).map(\.payload) == ["YUdrPQ==", "hi"])
-    #expect(model.primaryAction(for: model.results[0]).title == "粘贴")
-    #expect(model.copyTitle(for: model.results[0]) == "复制结果")
+    #expect(String(localized: model.primaryAction(for: model.results[0]).title) == "粘贴")
+    #expect(model.copyTitle(for: model.results[0]).map { String(localized: $0) } == "复制结果")
     // 再打一个字：跑完之前留着这条脚本上一次的结果
     model.query = "b64 bad"
     #expect(model.results.prefix(2).map(\.title) == ["YUdrPQ==", "hi"])
@@ -596,7 +598,8 @@ struct ScriptRunTests {
   }
 }
 
-/// 自带的 9 个脚本（Resources/scripts，拍板 D1）：都读得出来、都标着自带；会改系统设置的两个（深色模式、防止睡眠）只读不跑，
+/// 自带的 8 个脚本（Resources/scripts，拍板 D1；防止睡眠 2026-11-12 换成了保持唤醒插件）：都读得出来、都标着自带；会改系统设置的
+/// 深色模式只读不跑，
 /// 别的真跑一遍（只用 zsh 和 osascript，PATH 给最小的）。正则测试给第二个参数，不读剪贴板
 struct BundledScriptTests {
   private func bundled() async throws -> [String: ScriptCommand] {
@@ -610,10 +613,10 @@ struct BundledScriptTests {
     await ScriptRunner.run(try #require(script), arguments: arguments, path: "/usr/bin:/bin")
   }
 
-  @Test func allNineParse() async throws {
+  @Test func allEightParse() async throws {
     let scripts = try await bundled()
     #expect(
-      Set(scripts.keys) == ["time", "json", "uuid", "bcvt", "url", "b64", "regt", "dark", "awake"])
+      Set(scripts.keys) == ["time", "json", "uuid", "bcvt", "url", "b64", "regt", "dark"])
     #expect(scripts.values.allSatisfy { $0.isBundled && !$0.isDownloaded })
     #expect(scripts["time"]?.mode == .list && scripts["json"]?.mode == .full)
     #expect(scripts["uuid"]?.mode == .paste && scripts["dark"]?.mode == .island)
@@ -708,7 +711,7 @@ struct BundledScriptTests {
     // 只打了关键词：↩ 先补「time 」，补上就跑、列出 4 行
     model.query = "time"
     let row = try #require(model.results.first { $0.kind == .script })
-    #expect(model.primaryAction(for: row).title == "补全关键词")
+    #expect(String(localized: model.primaryAction(for: row).title) == "补全关键词")
     model.execute(row)
     #expect(model.query == "time ")
     await model.listRun()
@@ -960,8 +963,8 @@ struct SubprocessStopTests {
     var bundled = ScriptCommand(path: "/b/script-time.sh", title: "时间戳", interpreter: ["/bin/sh"])
     bundled.isBundled = true
     let rows = LauncherCommandsSection.rows(scripts: [mine, bundled, other])
-    // 我的脚本 → 自带脚本 → 关键词命令 → 系统命令；组里按名字
-    #expect(rows.prefix(3).map(\.title) == ["Alpha", "测试", "时间戳"])
+    // 我的脚本 → 自带脚本 → 关键词命令 → 系统命令；组里按名字（本地化顺序：单测宿主固定简体中文，中文的排法汉字在拉丁字母前）
+    #expect(rows.prefix(3).map(\.title) == ["测试", "Alpha", "时间戳"])
     let groups = rows.map(\.group)
     #expect(
       groups
@@ -972,7 +975,7 @@ struct SubprocessStopTests {
     let settings = LauncherCommands.Settings(off: [LauncherCommands.scriptID(mine), "system:lock"])
     #expect(
       LauncherCommandsSection.filter(rows, by: "", scope: .mine, settings: settings).map(\.title)
-        == ["Alpha", "测试"])
+        == ["测试", "Alpha"])
     #expect(
       LauncherCommandsSection.filter(rows, by: "", scope: .mine, onlyOn: true, settings: settings)
         .map(\.title) == ["Alpha"])
@@ -1599,9 +1602,9 @@ struct SubprocessStopTests {
     let rows = LauncherModel.resultRows(
       .init(end: .finished(0), output: output), of: script, keyword: "PR")
     let model = try model(script)
-    #expect(rows.map { model.primaryAction(for: $0).title } == ["打开", "打开", "粘贴"])
+    #expect(rows.map { String(localized: model.primaryAction(for: $0).title) } == ["打开", "打开", "粘贴"])
     #expect(
-      rows.map { model.commandReturnAction(for: $0)?.title } == ["复制网址", "在访达中显示", "只复制，不粘贴"])
+      rows.map { model.commandReturnAction(for: $0).map { String(localized: $0.title) } } == ["复制网址", "在访达中显示", "只复制，不粘贴"])
     #expect(rows.map { model.copyTitle(for: $0) } == ["复制网址", "复制路径", "复制结果"])
     // ⇥ 接在打的关键词后面；文件结果没写图标时用它在访达里的图标
     #expect(LauncherModel.completion(for: rows[0]) == "PR 12")

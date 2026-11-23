@@ -1,5 +1,5 @@
 // 快捷键界面的纯函数单测：键帽拆分（速查表 / 录制框 / 引导共用）、注册失败原因（-9868 只在只带 ⌥ 时才是系统限制）、
-// 速查表 sheet 的高度放得进设置窗、录制时拒绝各 App 通用的编辑键、默认键（输入翻译 ⌥T）。
+// 速查表 sheet 的高度放得进设置窗、录制时拒绝各 App 通用的编辑键、默认键（输入翻译 ⌥T）、安全输入挡哪些组合（issue #27）。
 
 import Carbon.HIToolbox
 import Testing
@@ -37,7 +37,7 @@ struct ShortcutsTests {
     // 功能全开着时的样子（不读宿主 App 的偏好：用户在 Dev 版里关过哪个功能也不影响）
     let all = Set(Feature.allCases)
     let groups = ShortcutsSheet.groups(enabled: all)
-    let titles = groups.map(\.title)
+    let titles = groups.map(\.id)
     #expect(Set(titles).count == titles.count)
     #expect(groups.allSatisfy { !$0.entries.isEmpty })
     // 每个全局快捷键都出现在速查表里，且只出现一次
@@ -60,6 +60,64 @@ struct ShortcutsTests {
   }
 
   /// ⌘C、⇧⌘Z 这类各 App 通用的键设成全局会在所有 App 里失效：录制时拒绝；⌥C、⌘⇧C 照常能录
+  /// 安全输入开着时收不到的：只带 ⌥ / ⌥⇧ 的出字的键（字母、数字、符号；macOS 27.0.1 实测 2026-11-16、11-20）；带 ⌘ / ⌃ 的、
+  /// 不出字的键（⌥空格、⌥↩、⌥↓、F 键）、连按两下照常。默认键除了启动器的 ⌥空格全是这种
+  @Test func secureInputYields() {
+    let yields = { (key: Int, modifiers: Int) in
+      HotKey(keyCode: key, modifiers: modifiers).yieldsToSecureInput
+    }
+    #expect(yields(kVK_ANSI_A, optionKey))
+    #expect(yields(kVK_ANSI_A, optionKey | shiftKey))
+    #expect(yields(kVK_ANSI_1, optionKey))
+    #expect(yields(kVK_ANSI_Slash, optionKey))
+    #expect(!yields(kVK_Space, optionKey))
+    #expect(!yields(kVK_Return, optionKey))
+    #expect(!yields(kVK_DownArrow, optionKey))
+    #expect(!yields(kVK_ANSI_A, optionKey | controlKey))
+    #expect(!yields(kVK_ANSI_A, optionKey | cmdKey))
+    #expect(!yields(kVK_ANSI_A, cmdKey | shiftKey))
+    #expect(!yields(kVK_F5, optionKey))
+    #expect(!HotKey(doubleTap: .option).yieldsToSecureInput)
+    let defaults = HotKeyAction.allCases.compactMap { action in
+      action.defaultHotKey.map { (action, $0) }
+    }
+    #expect(!defaults.isEmpty)
+    for (action, key) in defaults {
+      #expect(key.yieldsToSecureInput == (action != .launcher), "\(action)")
+    }
+    // 录制框的提示跟着同一个判断走
+    #expect(
+      HotKey(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey)).secureInputHint != nil)
+    #expect(HotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)).secureInputHint == nil)
+    #expect(
+      HotKey(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey | controlKey)).secureInputHint
+        == nil)
+  }
+
+  /// 按开着安全输入的 App 给关法：认 bundle id（不分大小写、浏览器和 1Password 认前缀），认不出的说切回那个 App
+  @Test func secureInputAdvice() {
+    typealias Block = HotKeyCenter.SecureInputBlock
+    let holder = { (id: String?) in Block.Holder(bundleID: id) }
+    #expect(holder("com.apple.Terminal") == .terminal)
+    #expect(holder("com.googlecode.iterm2") == .iTerm)
+    #expect(holder("com.google.Chrome") == .browser)
+    #expect(holder("com.google.Chrome.canary") == .browser)
+    #expect(holder("com.microsoft.edgemac.Dev") == .browser)
+    #expect(holder("company.thebrowser.Browser") == .browser)
+    #expect(holder("com.1password.1password") == .onePassword)
+    #expect(holder("com.agilebits.onepassword7") == .onePassword)
+    #expect(holder("com.apple.loginwindow") == .loginWindow)
+    #expect(holder("com.tencent.xinWeChat") == .other)
+    #expect(holder(nil) == .other)
+    let other = Block(holder: "WeChat", bundleID: "com.tencent.xinWeChat")
+    #expect(other.advice.contains("WeChat"))
+    #expect(other.summary.contains("WeChat"))
+    #expect(other.explanation.contains(other.advice))
+    let unknown = Block(holder: nil)
+    #expect(unknown.advice != other.advice && !unknown.summary.isEmpty)
+    #expect(Block(holder: "终端", bundleID: "com.apple.Terminal").advice != other.advice)
+  }
+
   @Test func reservedEditKeys() {
     #expect(HotKey(keyCode: kVK_ANSI_C, modifiers: cmdKey).isReservedEditKey)
     #expect(HotKey(keyCode: kVK_ANSI_Z, modifiers: cmdKey | shiftKey).isReservedEditKey)
@@ -106,20 +164,20 @@ struct ShortcutsTests {
     #expect(
       ShortcutsSheet.sections(groups) == [
         .clipboard, .launcher, .translate, .screenshot, .record, .notes, .reminders, .statusScreen,
-        .launchpad, .island, .general,
+        .launchpad, .keepAwake, .appShortcuts, .island, .general,
       ])
-    #expect(groups.first { $0.title == "提醒" }?.page == .reminders)
-    func page(_ title: String) -> SettingsPage? { groups.first { $0.title == title }?.page }
+    #expect(groups.first { $0.title.key == "提醒" }?.page == .reminders)
+    func page(_ title: String) -> SettingsPage? { groups.first { $0.title.key == title }?.page }
     #expect(page("钉图") == .screenshot && page("截图 · 框选") == .screenshot)
     #expect(page("录音") == .record && page("系统命令") == .launcher)
     #expect(page("刘海岛") == .island && page("主界面") == .general && page("设置") == .general)
 
     let pin = ShortcutsSheet.matching(groups, query: "钉")
-    let pinGroup = try #require(groups.first { $0.title == "钉图" })
-    #expect(pin.first { $0.title == "钉图" }?.entries == pinGroup.entries)
-    #expect(pin.first { $0.title == "截图 · 出图" }?.entries.map(\.keys) == [["T"]])
+    let pinGroup = try #require(groups.first { $0.title.key == "钉图" })
+    #expect(pin.first { $0.title.key == "钉图" }?.entries == pinGroup.entries)
+    #expect(pin.first { $0.title.key == "截图 · 出图" }?.entries.map(\.keys) == [["T"]])
     let menu = ShortcutsSheet.matching(groups, query: "剪贴板 ⌘K")
-    #expect(menu.map(\.title) == ["剪贴板"])
+    #expect(menu.map(\.title.key) == ["剪贴板"])
     #expect(menu.first?.globals.isEmpty == true && menu.first?.entries.count == 1)
     #expect(!ShortcutsSheet.matching(groups, query: "esc").isEmpty)
     #expect(ShortcutsSheet.matching(groups, query: "没有这种键").isEmpty)

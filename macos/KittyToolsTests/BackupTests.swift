@@ -587,13 +587,18 @@ struct BackupTests {
     #expect(stores.clipboard.items.isEmpty)
     #expect(Backup.list(in: directory, calendar: calendar).isEmpty)
     #expect(snapshot(of: directory.appending(path: "damaged-20261002-213045")) == before)
-    // 那份 JSON 在挪开的 backups 里（弹框说的就是去那里选），新的 backups/ 里没有
+    // 那份 JSON 在挪开的 backups 里，也拷了一份回新的 backups/（T5：「从备份恢复」里直接选得到），导入前那份同样
     #expect(
       FileManager.default.fileExists(
         atPath: directory.appending(
           path: "damaged-20261002-213045/backups/\(json.lastPathComponent)"
         ).path))
-    #expect(SettingsBackup.list(in: folder, calendar: calendar).isEmpty)
+    #expect(
+      SettingsBackup.list(in: folder, calendar: calendar).map(\.url.lastPathComponent).sorted()
+        == SettingsBackup.list(
+          in: directory.appending(path: "damaged-20261002-213045/backups"), calendar: calendar
+        ).map(\.url.lastPathComponent).sorted())
+    #expect(SettingsBackup.list(in: folder, calendar: calendar).count == 2)
     #expect(await run(10, 2) == .made(backup(10, 2)))
     #expect(Backup.list(in: directory, calendar: calendar).count == 1)
   }
@@ -770,12 +775,12 @@ struct BackupTests {
 
   @Test func describesHowOldTheBackupIs() {
     let now = at(10, 2, 0, 0, 1)
-    #expect(Recovery.describe(at(10, 2), now: now, calendar: calendar) == "10 月 2 日（今天）")
+    #expect(Recovery.describe(at(10, 2), now: now, calendar: calendar) == "10月2日（今天）")
     #expect(
-      Recovery.describe(at(10, 1, 23, 59, 59), now: now, calendar: calendar) == "10 月 1 日（昨天）")
-    #expect(Recovery.describe(at(9, 28), now: now, calendar: calendar) == "9 月 28 日（4 天前）")
+      Recovery.describe(at(10, 1, 23, 59, 59), now: now, calendar: calendar) == "10月1日（昨天）")
+    #expect(Recovery.describe(at(9, 28), now: now, calendar: calendar) == "9月28日（4 天前）")
     // 时钟往回调过：备份比现在还「新」
-    #expect(Recovery.describe(at(10, 5), now: now, calendar: calendar) == "10 月 5 日（今天）")
+    #expect(Recovery.describe(at(10, 5), now: now, calendar: calendar) == "10月5日（今天）")
   }
 
   @Test func wordingSaysWhatEachChoiceDoes() {
@@ -784,10 +789,10 @@ struct BackupTests {
     let with = Recovery.wording(
       for: .init(reason: "database disk image is malformed", backup: copy), directory: home,
       now: at(10, 2), calendar: calendar)
-    #expect(with.buttons == ["用 10 月 1 日（昨天）的备份", "重新开始", "退出"])
+    #expect(with.buttons == ["用 10月1日（昨天）的备份", "重新开始", "退出"])
     #expect(with.choices == [.restore, .startFresh, .quit])
     for part in [
-      "片段、收藏、收藏夹、生词本和启动器的收藏回到 10 月 1 日（昨天）备份时的样子",
+      "片段、收藏、收藏夹、生词本和启动器的收藏回到 10月1日（昨天）备份时的样子",
       "普通剪贴板历史、翻译历史和启动器的使用记录不在备份里，会从空的开始", "出问题的数据库和当时的图片都留在", "重新开始：全部从空的开始", "不会删",
       "~/Library/Application Support/示例", "damaged-", "钥匙串", "原因：database disk image is malformed",
     ] {
@@ -813,11 +818,13 @@ struct BackupTests {
     // backups/ 里有设置与数据的自动备份：多一段说重新开始之后怎么导回来，接在「挪开的文件在哪」后面、原因前面；
     // 按钮不变。没有那种备份时一个字都不多
     let note =
-      "选了重新开始，片段、文字收藏和生词本之后还能导回来：到 设置 › 通用 点「导入…」，选上面那个文件夹的 backups 里最新的「Kitty Tools 自动备份 日期.json」。"
+      "选了重新开始，片段、文字收藏和生词本之后还能导回来：每天的自动备份会留一份在原处，到 设置 › 通用 › 备份与导出导入 点「从备份恢复」，选 10月1日（昨天）那一份。"
     #expect(!with.text.contains("导回来") && !lost.text.contains("导回来"))
     #expect(!without.text.contains("导回来"))
     let withText = Recovery.wording(
-      for: .init(reason: "database disk image is malformed", backup: copy, hasSettingsBackup: true),
+      for: .init(
+        reason: "database disk image is malformed", backup: copy,
+        settingsBackupDay: at(10, 1)),
       directory: home, now: at(10, 2), calendar: calendar)
     #expect(withText.buttons == with.buttons && withText.choices == with.choices)
     #expect(
@@ -825,7 +832,9 @@ struct BackupTests {
         == with.text.replacingOccurrences(of: "\n\n原因：", with: "\n\n\(note)\n\n原因："))
     // 数据库没有备份、只有那种备份：别说成「没有可用的备份」
     let onlyText = Recovery.wording(
-      for: .init(reason: "file is not a database", backup: nil, hasSettingsBackup: true),
+      for: .init(
+        reason: "file is not a database", backup: nil,
+        settingsBackupDay: at(10, 1)),
       directory: home, now: at(10, 2), calendar: calendar)
     #expect(onlyText.buttons == ["重新开始", "退出"])
     #expect(onlyText.text.contains("也没有可用的数据库备份。") && !onlyText.text.contains("也没有可用的备份。"))

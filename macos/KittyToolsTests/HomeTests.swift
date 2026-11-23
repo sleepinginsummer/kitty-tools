@@ -24,8 +24,10 @@ struct HomeTests {
     #expect(sections[1].tiles.last?.target == .action(.screenshotTranslate))
     #expect(
       sections.last?.tiles.map(\.target) == [
-        .action(.noteCapture), .action(.noteNew), .action(.noteAll), .action(.reminderNew),
-        .action(.statusScreen), .action(.launchpad), .action(.island),
+        .action(.noteCapture), .action(.noteNew), .action(.noteAll), .action(.noteDeck),
+        .action(.reminderNew),
+        .action(.statusScreen), .action(.launchpad), .action(.keepAwake), .action(.appShortcuts),
+        .action(.island),
       ])
     #expect(tiles.first { $0.target == .action(.screenshot) }?.key == "⌥A")
     #expect(tiles.first { $0.target == .action(.clipboard) }?.key == nil)
@@ -107,7 +109,7 @@ struct HomeTests {
       Home.offCount(enabled: all.subtracting([.dockPreview, .finderMenu]), available: all) == 0)
     #expect(Home.offCount(enabled: all.subtracting([.translate, .record]), available: all) == 2)
     // 没添加的插件不算「关着的功能」（2026-11-12 拍板 A1；2026-11-13 起便签这些也是插件）
-    #expect(Home.offCount(enabled: all.subtracting([.finderMenu, .notes]), available: all) == 0)
+    #expect(Home.offCount(enabled: all.subtracting([.keepAwake, .notes]), available: all) == 0)
     let noLaunchpad = all.subtracting([.launchpad])
     #expect(Home.offCount(enabled: noLaunchpad, available: noLaunchpad) == 0)
   }
@@ -117,16 +119,51 @@ struct HomeTests {
     var state = LauncherItem.ActionState()
     state.features = all
     let sections = Home.sections(state: state, keys: [:])
-    // 2 / 4 / 7 / 7（截图与录制 7 格折成 5 + 2；插件 7 格折成 5 + 2：便签三格、新建提醒、状态屏、启动台、刘海岛）
-    #expect(Home.rows(sections).map(\.count) == [2, 4, 5, 2, 5, 2])
-    #expect(Home.rows(sections).flatMap { $0 } == Array(0..<20))
+    // 2 / 4 / 8 / 9（截图与录制 8 格折成 5 + 3，第五轮体检 N2 加了延时截图；插件 9 格折成 5 + 4：便签三格、新建提醒、
+    // 状态屏、启动台、保持唤醒、显示 App 快捷键、刘海岛）
+    #expect(Home.rows(sections).map(\.count) == [2, 4, 5, 3, 5, 5])
+    #expect(Home.rows(sections).flatMap { $0 } == Array(0..<24))
     let rows: CGFloat = 6
     let expected =
       Home.top + Home.bottom + 4 * Home.titleHeight + rows * Home.tile.height
       + (rows - 4) * Home.gap + Home.barHeight
     #expect(Home.height(sections, offCount: 0) == expected)
     #expect(Home.height(sections, offCount: 2) == expected + Home.noteHeight)
+    // 安全输入挡着快捷键那一行（issue #27）：和关着的功能那一行各占一行
+    #expect(Home.height(sections, offCount: 0, secureInput: true) == expected + Home.noteHeight)
+    #expect(Home.height(sections, offCount: 2, secureInput: true) == expected + 2 * Home.noteHeight)
     #expect(Home.width == 2 * Home.inset + 5 * Home.tile.width + 4 * Home.gap)
+  }
+
+  /// 名字一行放不下（英文）：整块面板的格子都高一行、面板跟着高；中文都是一行，高度不变（多语言第 1 批）
+  @Test func longNamesWrapToTwoLines() {
+    var state = LauncherItem.ActionState()
+    state.features = all
+    #expect(Home.tileHeight(Home.sections(state: state, keys: [:])) == Home.tile.height)
+    let long = Home.Tile(
+      target: .action(.translateReplace), title: "Translate and Replace Selection",
+      symbol: "kitty.translate.replace", color: HotKeyAction.translateReplace.color, key: nil)
+    let short = Home.Tile(
+      target: .action(.launcher), title: "Launcher", symbol: "kitty.launcher",
+      color: HotKeyAction.launcher.color, key: nil)
+    #expect(Home.fitsOneLine(short) && !Home.fitsOneLine(long))
+    let wide = [Home.Section(title: nil, tiles: [short, long])]
+    #expect(Home.tileHeight(wide) == Home.tile.height + Home.secondLine)
+    #expect(
+      Home.height(wide, offCount: 0)
+        == Home.top + Home.bottom + Home.tile.height + Home.secondLine + Home.barHeight)
+  }
+
+  /// 菜单栏菜单「只有一项、节标题和它同名的不画节标题」按目录的 key 比（不比显示的字）：启动台那一节、只剩启动器的那一节
+  @Test func sectionKeysMatchTheirOnlyAction() {
+    let launchpad = HotKeyAction.visibleSections(enabled: [.launchpad]).first
+    #expect(launchpad?.key == HotKeyAction.launchpad.titleResource.key)
+    let launcher = HotKeyAction.visibleSections(enabled: [.launcher]).first
+    #expect(launcher?.actions == [.launcher])
+    #expect(launcher?.key == HotKeyAction.launcher.titleResource.key)
+    // 动作「截图」和页名「截图」是两个 key（英文不同）
+    #expect(HotKeyAction.screenshot.titleResource.key != SettingsPage.screenshot.titleResource.key)
+    #expect(HotKeyAction.screenshot.title == SettingsPage.screenshot.title)
   }
 
   /// 点菜单栏图标打开的挂在图标下面：右边对着图标的右边、顶边在菜单栏下面 6 pt；靠屏幕左边的图标往里挪

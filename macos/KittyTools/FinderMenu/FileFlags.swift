@@ -42,8 +42,10 @@ import Carbon.HIToolbox
 
   /// 隐藏 / 取消隐藏（点开头的跳过）
   static func setHidden(_ files: [URL], _ hidden: Bool, island: Island?) {
+    // 保护的那几样只取一次（第五轮体检 P4：两千项时每一项都重新列一遍根目录）
+    let isProtected = FileMoves.protection()
     let changed = change(
-      files.filter { !$0.lastPathComponent.hasPrefix(".") && !FileMoves.protected($0) }
+      files.filter { !$0.lastPathComponent.hasPrefix(".") && !isProtected($0) }
     ) {
       $0.isHidden = hidden
     }
@@ -54,7 +56,9 @@ import Carbon.HIToolbox
       return
     }
     island?.show(
-      (hidden ? "已隐藏" : "已取消隐藏") + (changed == 1 ? "" : " \(changed) 项"),
+      changed == 1
+        ? (hidden ? "已隐藏" : "已取消隐藏")
+        : (hidden ? "已隐藏 \(changed) 项" : "已取消隐藏 \(changed) 项"),
       detail: hidden ? "在访达里按 ⇧⌘. 能看到隐藏的东西" : nil)
   }
 
@@ -68,7 +72,9 @@ import Carbon.HIToolbox
       return
     }
     island?.show(
-      (hidden ? "已隐藏扩展名" : "已显示扩展名") + (changed == 1 ? "" : "（\(changed) 项）"))
+      changed == 1
+        ? (hidden ? "已隐藏扩展名" : "已显示扩展名")
+        : (hidden ? "已隐藏扩展名（\(changed) 项）" : "已显示扩展名（\(changed) 项）"))
   }
 
   /// 给每一样设一下属性；返回设成了几样

@@ -1,13 +1,17 @@
 // 设置 › 通用「同步」（2026-10-23 全局同步拍板 A1：从 设置 › 便签 挪过来，整个 App 的同步都在这一节。执行在 NoteSyncer）。
 // 没开时一行「连接服务器…」「选择文件夹…」（WebDAV 服务器：issue #18，2026-11-13，表单在 SyncServerForm）；开着时文件夹或
-// 服务器、状态、停止 / 立即同步，「同步的内容」每类一个勾（A3，这台电脑自己的），其他电脑。
+// 服务器、状态、停止 / 立即同步，「同步的内容」每类一个勾（A3，这台电脑自己的），其他电脑。第五轮体检：服务器不认密码时
+// 「更新密码…」（E1，表单 SyncPasswordForm 在 SyncServerForm.swift）、连服务器时「停止同步…」先确认、http 连着时服务器名后面
+// 一个橙色的「未加密」（U2）；刘海岛「打开同步设置」推进到 设置 › 通用 › 同步 这一页（U1，设置改版起这一节在子页里）。
 
 import AppKit
 import SwiftUI
 
 /// 没开时一行「连接服务器…」（WebDAV，SyncServerForm）+「选择文件夹…」（打开面板先指到 iCloud 云盘）；选的文件夹里已经有
 /// 别的电脑在同步，先问一句合不合在一起。
-/// 开着时：文件夹（悬停看路径）或服务器（悬停看网址和用户名）+「停止同步」+「立即同步」（刹车时换成「继续同步」），
+/// 开着时：文件夹（悬停看路径）或服务器（悬停看网址和用户名；http 的后面橙字「未加密」）+「停止同步」（连服务器时是
+/// 「停止同步…」，先确认：会删掉钥匙串里的密码和本机的镜像）+「立即同步」（刹车时换成「继续同步」；服务器不认密码时前面
+/// 多一个「更新密码…」），
 /// 说明是状态（上次同步、还在下载几个、连服务器时还有几个没传上去），
 /// 出了问题橙字说为什么、能怎么办；下面一行列出别的 Mac 和它们上次有改动的时刻。勾上一类会是它第一次合（升级上来的那台
 /// 新加的几类先没勾，NoteSyncer.isUpgrade）时先问合不合在一起，说明和选文件夹时那段一样。**这一节不去碰那个文件夹**（可能在卡住的
@@ -37,6 +41,15 @@ struct SyncSection: View {
   @State private var confirming: String?
   /// 「连接服务器」的表单开着
   @State private var connecting = false
+  /// 连服务器时「停止同步…」的确认框开着
+  @State private var stopping = false
+  /// 「更新密码…」的表单开着
+  @State private var updatingPassword = false
+
+  /// 连服务器时「停止同步…」的确认框（截图自检照同样的字画一个系统确认框）
+  static let stopTitle: LocalizedStringResource = "停止和服务器同步？"
+  static let stopMessage: LocalizedStringResource =
+    "会删掉钥匙串里存的密码和这台 Mac 上那份服务器文件的副本，再连接要重新填写、重新下载；服务器上的文件留着，这台 Mac 上的便签和别的数据也不动。"
 
   struct Joining {
     var folder: URL
@@ -62,33 +75,34 @@ struct SyncSection: View {
             Text(Self.joinNote)
           }
         part(
-          SyncRecords.Kind.settings.rawValue, title: SyncRecords.Kind.settings.title,
-          detail: "各页的设置、全局快捷键和功能开关；启动台、录音的麦克风、菜单栏图标这些跟着这台 Mac 的不同步")
+          SyncRecords.Kind.settings.rawValue, title: SyncRecords.Kind.settings.titleResource,
+          detail: "各页的设置、快捷键和功能开关", info: "启动台、录音的麦克风、菜单栏图标这些跟着这台 Mac 的不同步。")
         part(
           NoteSyncer.notesPart, title: "便签", detail: "连同正文里的图片", feature: .notes,
           isOn: notesOn)
         part(
-          SyncRecords.Kind.clips.rawValue, title: SyncRecords.Kind.clips.title,
+          SyncRecords.Kind.clips.rawValue, title: SyncRecords.Kind.clips.titleResource,
           detail: "文字的片段、收藏和收藏夹；图片和文件的收藏不同步", feature: .clipboard, isOn: clipboardOn)
         part(
-          SyncRecords.Kind.vocabulary.rawValue, title: SyncRecords.Kind.vocabulary.title,
+          SyncRecords.Kind.vocabulary.rawValue, title: SyncRecords.Kind.vocabulary.titleResource,
           detail: "翻译里收藏的词句", feature: .translate, isOn: translateOn)
         part(
-          SyncRecords.Kind.engines.rawValue, title: SyncRecords.Kind.engines.title,
+          SyncRecords.Kind.engines.rawValue, title: SyncRecords.Kind.engines.titleResource,
           detail: "启动器里的网页搜索和快捷链接", feature: .launcher, isOn: launcherOn)
         part(
-          SyncRecords.Kind.services.rawValue, title: SyncRecords.Kind.services.title,
-          detail: "哪几个服务、顺序和设置；密钥不同步，别的 Mac 上要自己填一次", feature: .translate,
+          SyncRecords.Kind.services.rawValue, title: SyncRecords.Kind.services.titleResource,
+          detail: "服务、顺序和设置，密钥不同步", info: "别的 Mac 上要自己填一次密钥。", feature: .translate,
           isOn: translateOn)
         part(
-          SyncRecords.Kind.statuses.rawValue, title: SyncRecords.Kind.statuses.title,
+          SyncRecords.Kind.statuses.rawValue, title: SyncRecords.Kind.statuses.titleResource,
           detail: "状态屏里自己写的那几个状态", feature: .statusScreen, isOn: statusScreenOn)
         part(
-          SyncRecords.Kind.reminders.rawValue, title: SyncRecords.Kind.reminders.title,
-          detail: "有哪些提醒、各自的时间和方式；两台都开着时两台都响", feature: .reminders, isOn: remindersOn)
+          SyncRecords.Kind.reminders.rawValue, title: SyncRecords.Kind.reminders.titleResource,
+          detail: "提醒和各自的时间，几台都会响", info: "有哪些提醒、各自的时间和方式都同步；几台都开着时几台都响。",
+          feature: .reminders, isOn: remindersOn)
         part(
-          SyncRecords.Kind.launcher.rawValue, title: SyncRecords.Kind.launcher.title,
-          detail: "空搜索框里收藏的那几个；这台没装的 App 不显示，装上就回来", feature: .launcher,
+          SyncRecords.Kind.launcher.rawValue, title: SyncRecords.Kind.launcher.titleResource,
+          detail: "空搜索框里收藏的那几个", info: "这台没装的 App 不显示，装上就回来。", feature: .launcher,
           isOn: launcherOn)
         LabeledContent {
           EmptyView()
@@ -96,15 +110,20 @@ struct SyncSection: View {
           Text("其他电脑")
           Text(peersLine)
         }
+        .settingsAnchor(.generalSyncPeers)
       } else {
         offRow
       }
     } header: {
-      NewTitle("同步", page: .general, fresh: navigation?.fresh ?? [])
+      HStack(spacing: 6) {
+        NewTitle("同步", page: .general, fresh: navigation?.fresh ?? [])
+        InfoButton(
+          "勾上的几类在几台电脑之间保持一样，取消一类只是不再同步它。每台电脑只往自己的那份里写、读所有电脑的，改动一般几十秒到几分钟传过去（看同步盘多快；连服务器时大约一分钟一轮）。两台都改了同一条时，后改的留下（便签的另一版放进「最近删除」）；别处删掉的片段、收藏和生词，这台 Mac 上只是不再收藏；一轮要删的太多会先停下来问。停止同步后，文件夹里的东西留着，这台 Mac 上的也不动。",
+          about: "同步")
+      }
+      .settingsAnchor(.generalSync)
     } footer: {
-      SectionFootnote(
-        "勾上的几类在几台电脑之间保持一样，取消一类只是不再同步它。同步文件夹（连服务器时是服务器上那个文件夹）里放的是不加密的文本文件和图片，能打开这个文件夹的人都看得到。每台电脑只往自己的那份里写、读所有电脑的，改动一般几十秒到几分钟传过去（看同步盘多快；连服务器时大约一分钟一轮）。两台都改了同一条时，后改的留下（便签的另一版放进「最近删除」）；别处删掉的片段、收藏和生词，这台 Mac 上只是不再收藏；一轮要删的太多会先停下来问。停止同步后，文件夹里的东西留着，这台 Mac 上的也不动。"
-      )
+      SectionFootnote("同步文件夹（连服务器时是服务器上那个文件夹）里是不加密的文本文件和图片，能打开它的人都看得到。")
     }
   }
 
@@ -142,11 +161,7 @@ struct SyncSection: View {
     ) { joining in
       Button("合在一起") { start(joining.folder) }
     } message: { joining in
-      Text(
-        (joining.notes > 0
-          ? "这个文件夹里已经有 \(joining.devices) 台电脑在同步，有 \(joining.notes) 条便签（含「最近删除」里的）。"
-          : "这个文件夹里已经有 \(joining.devices) 台电脑在同步。")
-          + Self.joinNote)
+      Text(Self.joinMessage(devices: joining.devices, notes: joining.notes))
     }
     .sheet(isPresented: $connecting) {
       SyncServerForm(syncer: syncer) {
@@ -157,8 +172,19 @@ struct SyncSection: View {
   }
 
   /// 「合在一起？」的说明：第一次选文件夹时、开着同步时勾上还没合过的一类时（升级上来的那台）共用
-  static let joinNote =
-    "合在一起后，这台 Mac 上的便签、片段、收藏、生词和状态屏的状态和它们的会出现在每台电脑上（同样的不重复）；设置、快捷键、功能开关（连同内置的网页搜索、翻译服务）换成已经在同步的那几台的——剪贴板的保留天数、「不记录」的 App 也跟着换，超出新保留天数的历史会清掉。之后同一条两边都改过的，后改的留下。"
+  static var joinNote: String {
+    String(
+      localized:
+        "合在一起后，这台 Mac 上的便签、片段、收藏、生词和状态屏的状态和它们的会出现在每台电脑上（同样的不重复）；设置、快捷键、功能开关（连同内置的网页搜索、翻译服务）换成已经在同步的那几台的——剪贴板的保留天数、「不记录」的 App 也跟着换，超出新保留天数的历史会清掉。之后同一条两边都改过的，后改的留下。"
+    )
+  }
+
+  /// 选文件夹 / 连服务器时「合在一起？」的说明：那里已经有几台电脑、几条便签，再接 joinNote（选文件夹、连服务器共用）
+  static func joinMessage(devices: Int, notes: Int) -> String {
+    notes > 0
+      ? String(localized: "这个文件夹里已经有 \(devices) 台电脑在同步，有 \(notes) 条便签（含「最近删除」里的）。\(joinNote)")
+      : String(localized: "这个文件夹里已经有 \(devices) 台电脑在同步。\(joinNote)")
+  }
 
   /// 选文件夹：先看一眼（主线程外），已经有别的 Mac 在用就先问，不然直接开。面板是设置窗上的表单（开着时点不到
   /// 便签的开关、换不了页：不然关掉便签之后还会把同步起起来，换了页这一节的状态也丢了）
@@ -170,8 +196,9 @@ struct SyncSection: View {
     if FileManager.default.fileExists(atPath: Self.iCloudDrive.path) {
       panel.directoryURL = Self.iCloudDrive
     }
-    panel.message = "选一个几台 Mac 都看得到的空文件夹（比如在 iCloud 云盘里新建一个「Kitty Tools 同步」），每台 Mac 选同一个"
-    panel.prompt = "用这个文件夹同步"
+    panel.message = String(
+      localized: "选一个几台 Mac 都看得到的空文件夹（比如在 iCloud 云盘里新建一个「Kitty Tools 同步」），每台 Mac 选同一个")
+    panel.prompt = String(localized: "用这个文件夹同步")
     problem = nil
     isBusy = true
     let chosen: (NSApplication.ModalResponse) -> Void = { response in
@@ -227,16 +254,44 @@ struct SyncSection: View {
         .lineLimit(1)
         .truncationMode(.middle)
         .foregroundStyle(.secondary)
-        Button("停止同步") { syncer.disable() }
-          .buttonStyle(.plain)
-          .foregroundStyle(Style.brandInk)
-          .pointerStyle(.link)
-          .help("文件夹里的东西留着，这台 Mac 上的数据也不动")
+        // 明文连着（http，U2④）：服务器名后面一个橙字
+        if syncer.server?.scheme == "http" {
+          // 带锁的符号：别和旁边能点的「停止同步…」看成一样的文字按钮
+          Label("未加密", systemImage: "lock.open")
+            .foregroundStyle(Color(nsColor: .systemOrange))
+            .fixedSize()
+            .help("这个地址没加密（http），密码和同步的内容在网上都是明文的")
+        }
+        // 连服务器时先确认（U2②）：会删掉钥匙串里的密码和整份镜像，再连要重填、整份重新下载
+        Button(syncer.server == nil ? "停止同步" : "停止同步…") {
+          if syncer.server == nil { syncer.disable() } else { stopping = true }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Style.brandInk)
+        .pointerStyle(.link)
+        .help(
+          syncer.server == nil
+            ? "文件夹里的东西留着，这台 Mac 上的数据也不动"
+            : "服务器上的东西留着，这台 Mac 上的数据也不动；钥匙串里的密码和这台 Mac 上的副本会删掉"
+        )
+        .confirmationDialog(Text(plain: Self.stopTitle), isPresented: $stopping) {
+          Button("停止同步", role: .destructive) { syncer.disable() }
+        } message: {
+          Text(plain: Self.stopMessage)
+        }
         if case .waiting = syncer.status {
-          Button("继续同步") { syncer.confirmTrashing() }
+          Button(
+            String(
+              localized: "sync.resume", defaultValue: "继续同步",
+              comment: "短说法：同步停下来等确认时那个按钮（英文全称把这一行挤成两行）")
+          ) { syncer.confirmTrashing() }
         } else {
-          // 不停用：一轮没完时按它排在后面（停用的话每 20 秒闪一下灰）
-          Button("立即同步") { syncer.syncNow() }
+          // 服务器不认密码（E1）：只换钥匙串里的密码，镜像留着
+          if syncer.needsPassword {
+            Button("更新密码…") { updatingPassword = true }
+          }
+          // 不停用：一轮没完时按它排在后面（停用的话每 20 秒闪一下灰）。用户主动的一轮：拒过密码也照发（E1）
+          Button("立即同步") { syncer.syncNow(manual: true) }
         }
       }
     } label: {
@@ -257,47 +312,59 @@ struct SyncSection: View {
     }
     // 「现在也能同步…」那句看过了：离开这一节就不再说
     .onDisappear { syncer.dismissHint() }
+    .sheet(isPresented: $updatingPassword) { SyncPasswordForm(syncer: syncer) }
   }
 
   /// 「同步的内容」里的一类：勾上才同步；它跟着的功能关着（插件没添加）时说一声（勾着也先不同步）
   private func part(
-    _ name: String, title: String, detail: String, feature: Feature? = nil,
+    _ name: String, title: LocalizedStringResource, detail: LocalizedStringResource,
+    info: LocalizedStringResource? = nil, feature: Feature? = nil,
     isOn featureOn: Bool = true
   ) -> some View {
-    Toggle(
-      isOn: Binding {
-        syncer.syncs(name)
-      } set: {
-        if $0, syncer.joins(name) { confirming = name } else { syncer.setSyncs(name, $0) }
-      }
+    SettingRow(
+      title: title, subtitle: Self.partDetail(detail, feature: feature, isOn: featureOn), info: info
     ) {
-      Text(title)
-      Text(
-        featureOn
-          ? detail
-          : feature?.isPlugin == true
-            ? "\(feature?.title ?? "")插件没添加，先不同步；在上面「功能」里添加就接着同步"
-            : "\(feature?.title ?? "")关着，先不同步；在上面「功能」里打开就接着同步")
+      Toggle(
+        String(localized: title),
+        isOn: Binding {
+          syncer.syncs(name)
+        } set: {
+          if $0, syncer.joins(name) { confirming = name } else { syncer.setSyncs(name, $0) }
+        }
+      )
+      .toggleStyle(.switch)
     }
+  }
+
+  /// 一类的那一句：它跟着的功能关着（插件没添加）时说先不同步、去哪打开（别写成三元式：抽字会漏）
+  static func partDetail(
+    _ detail: LocalizedStringResource, feature: Feature?, isOn: Bool
+  ) -> LocalizedStringResource {
+    guard !isOn, let feature else { return detail }
+    if feature.isPlugin { return "\(feature.title)插件没添加，先不同步；到 设置 › 全部插件 里添加就接着同步" }
+    return "\(feature.title)关着，先不同步；到 设置 › 通用 › 功能 里打开就接着同步"
   }
 
   /// 状态：上次同步的时刻（第一轮还没完时说正在同步）、还在下载几个
   private var statusLine: String {
-    var line: String
+    var clauses: [String] = []
     if let lastSync = syncer.lastSync {
-      line = "上次同步：\(Self.ago(lastSync, now: tick))"
+      clauses.append(String(localized: "上次同步：\(Self.ago(lastSync, now: tick))"))
     } else if syncer.status == .syncing {
-      line = "正在同步…"
+      clauses.append(String(localized: "正在同步…"))
     } else {
-      line = "还没同步过"
+      clauses.append(String(localized: "还没同步过"))
     }
     if syncer.downloading > 0 {
-      line +=
+      clauses.append(
         syncer.server == nil
-        ? "；还有 \(syncer.downloading) 个文件在下载" : "；还有 \(syncer.downloading) 个文件没从服务器拿下来"
+          ? String(localized: "还有 \(syncer.downloading) 个文件在下载")
+          : String(localized: "还有 \(syncer.downloading) 个文件没从服务器拿下来"))
     }
-    if syncer.uploading > 0 { line += "；还有 \(syncer.uploading) 个等着传上去" }
-    return line
+    if syncer.uploading > 0 {
+      clauses.append(String(localized: "还有 \(syncer.uploading) 个等着传上去"))
+    }
+    return clauses.joinedAsClauses()
   }
 
   /// 停了、等确认：为什么、能怎么办（橙字）
@@ -305,26 +372,36 @@ struct SyncSection: View {
     switch syncer.status {
     case .off, .syncing, .idle: nil
     case .waiting(let trashing):
-      "这一轮要删掉 \(trashing) 条（便签是放进「最近删除」），先停下来等你确认"
+      String(localized: "这一轮要删掉 \(trashing) 条（便签是放进「最近删除」），先停下来等你确认")
     case .stopped(let problem):
       switch problem {
       case .missingFolder:
         syncer.server == nil
-          ? "找不到同步文件夹：没接上、被挪走或删了，找到了自己接着同步"
-          : "服务器上找不到同步的那个文件夹：被挪走或删了，找到了自己接着同步"
+          ? String(localized: "找不到同步文件夹：没接上、被挪走或删了，找到了自己接着同步")
+          : String(localized: "服务器上找不到同步的那个文件夹：被挪走或删了，找到了自己接着同步")
       case .notTheFolder:
         syncer.server == nil
-          ? "同步文件夹里的同步记录被换掉或删了：先停止同步，再选一个新的空文件夹（每台电脑都换过去）"
-          : "服务器上那个文件夹里的同步记录被换掉或删了：先停止同步，再连一个新的空文件夹（每台电脑都换过去）"
-      case .newerFormat: "文件夹里有更新版本的 Kitty Tools 写的东西，先更新这台 Mac 上的 Kitty Tools"
+          ? String(localized: "同步文件夹里的同步记录被换掉或删了：先停止同步，再选一个新的空文件夹（每台电脑都换过去）")
+          : String(localized: "服务器上那个文件夹里的同步记录被换掉或删了：先停止同步，再连一个新的空文件夹（每台电脑都换过去）")
+      case .newerFormat: String(localized: "文件夹里有更新版本的 Kitty Tools 写的东西，先更新这台 Mac 上的 Kitty Tools")
       case .unreadable(let name):
-        "\(name.map { "「\($0)」" } ?? "另一台电脑")那份同步记录还读不出来（多半是还没下载完），读到了自己接着同步"
+        name.map { String(localized: "「\($0)」那份同步记录还读不出来（多半是还没下载完），读到了自己接着同步") }
+          ?? String(localized: "另一台电脑那份同步记录还读不出来（多半是还没下载完），读到了自己接着同步")
       case .downloading:
         syncer.server == nil
-          ? "同步文件夹里有文件还没下载到这台 Mac，下载完自己接着同步" : "服务器上有文件还没拿下来，拿下来了自己接着同步"
-      case .failed(let reason): "上一轮没同步成：\(Self.clause(reason))"
+          ? String(localized: "同步文件夹里有文件还没下载到这台 Mac，下载完自己接着同步")
+          : String(localized: "服务器上有文件还没拿下来，拿下来了自己接着同步")
+      case .failed(let reason): String(localized: "上一轮没同步成：\(Self.clause(reason))")
       case .busy(let until):
-        "服务器说请求太多，\(until.formatted(date: .omitted, time: .shortened)) 后接着同步"
+        String(localized: "服务器说请求太多，\(until.formatted(date: .omitted, time: .shortened)) 后接着同步")
+      case .unauthorized:
+        String(
+          localized:
+            "服务器不认这个用户名或密码，先不自动重试了（免得被当成在试密码）：点「更新密码…」填新的（有的服务要用网页上另外生成的应用密码）")
+      case .noPassword:
+        String(localized: "钥匙串里没有服务器的密码：点「更新密码…」重新填")
+      case .forbidden:
+        String(localized: "服务器不让这个账号读写同步的那个文件夹，先不自动重试了：在服务器上给了权限再点「立即同步」，或者「更新密码…」")
       }
     }
   }
@@ -333,22 +410,24 @@ struct SyncSection: View {
     guard !syncer.peers.isEmpty else {
       // 第一轮还没合完（或者合之前就停了）时不知道有没有
       return syncer.lastSync == nil
-        ? "同步一轮之后列在这里"
+        ? String(localized: "同步一轮之后列在这里")
         : syncer.server == nil
-          ? "还没有——在另一台电脑的 设置 › 通用 里选同一个文件夹"
-          : "还没有——在另一台电脑的 设置 › 通用 里连同一个服务器上的同一个文件夹"
+          ? String(localized: "还没有——在另一台电脑的 设置 › 通用 › 同步 里选同一个文件夹")
+          : String(localized: "还没有——在另一台电脑的 设置 › 通用 › 同步 里连同一个服务器上的同一个文件夹")
     }
     return syncer.peers.map { peer in
-      let name = peer.name ?? "没写名字的一台"
-      return peer.seen.map { "\(name)（\(Self.ago($0, now: tick))有改动）" } ?? name
-    }.joined(separator: "、")
+      let name = peer.name ?? String(localized: "没写名字的一台")
+      return peer.seen.map {
+        String(localized: "\(name)（\(Self.ago($0, now: tick))有改动）", comment: "其他电脑那一行：名字（多久之前有改动）")
+      } ?? name
+    }.joinedAsList()
   }
 
   /// 「刚刚」「3 分钟前」「昨天」
   private static func ago(_ date: Date, now: Date) -> String {
     let now = max(now, .now)
     return now.timeIntervalSince(date) < 60
-      ? "刚刚" : date.formatted(.relative(presentation: .named, unitsStyle: .wide))
+      ? String(localized: "刚刚") : date.formatted(.relative(presentation: .named, unitsStyle: .wide))
   }
 
   /// 系统给的原因（localizedDescription）带句号：行副标题一句话不加
@@ -371,7 +450,8 @@ struct SyncSection: View {
     let drive = iCloudDrive.path(percentEncoded: false)
     let path = folder.path(percentEncoded: false)
     if path.hasPrefix(drive) {
-      return "iCloud 云盘/" + path.dropFirst(drive.count).trimmingCharacters(in: ["/"])
+      return String(localized: "iCloud 云盘") + "/"
+        + path.dropFirst(drive.count).trimmingCharacters(in: ["/"])
     }
     return (path as NSString).abbreviatingWithTildeInPath
   }

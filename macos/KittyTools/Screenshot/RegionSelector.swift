@@ -2,7 +2,8 @@
 // - 截图翻译 / 识字 select：拖动框选（⇧ 正方形、⌥ 从中心、空格平移、吸附窗口边），松手确认，Esc / 右键取消；
 // - 截图 capture：悬停高亮窗口，或窗口里指针下的元素（设置 › 截图开着、有辅助功能授权时：滚轮换大小、Tab 只认窗口，
 //   ElementFinder）/ 单击截下那一块、确认后可调整选区和标注，↩ 复制、⌘S 保存、⇧⌘S 另存为、T 钉图、
-//   S 长截图、工具栏识字 / 翻译，C 复制放大镜中心的色值，D 选中上次的区域；
+//   S 长截图、工具栏识字 / 翻译，C 复制放大镜中心的色值，D 选中上次的区域；⌥S 盖回截图的截图翻译（autoTranslate）
+//   也走它，悬停、认元素同截图，框完松手 / 单击选中就直接翻；
 // - 录屏 record：框选同截图（悬停、单击窗口 / 整屏、调整、尺寸胶囊、D），没有标注和出图键，↩ / 双击 / 录制条的 ● 交回选区；
 //   截图调整时按 R / 工具栏「录屏」也会切到它（选区不变，录屏第 2 批）。
 // 遮罩是不激活前台的 NSPanel（和 OverlayPanel 一样不抢前台 App），会话结束立即 orderOut 释放，不常驻
@@ -33,6 +34,11 @@ enum RegionSelector {
     var original: CGImage?
     /// 画了哪些标注，坐标已经挪成「相对这张图的左下角」（历史和标注窗口按它摆）
     var annotations: [Annotation] = []
+    /// 单击选中的整扇窗口（第五轮体检 N1，设置开着「窗口截图带阴影」、选区没再动过、按的是拷贝 / 存储 / 另存为 / 钉图）：
+    /// 交出时已经开始单独截它，出图前 WindowShot.dress 换成透明圆角带阴影的那一张；nil = 照旧是上面这张矩形裁切
+    var window: WindowShot.Pending?
+    /// 已经换成了透明圆角带阴影的窗口截图（钉图不套圆角和描边、记进历史时带上这个标记）
+    var isWindow = false
 
     /// 像素 / 点
     var scale: CGFloat { frame.width > 0 ? CGFloat(image.width) / frame.width : 1 }
@@ -59,14 +65,15 @@ enum RegionSelector {
   /// recordingBlocker 见 SelectionSession
   static func capture(
     _ shots: [ScreenCapture.Shot], lastRegion: CGRect?, preselect: Bool,
-    hint: String? = nil, autoTranslate: Bool = false,
+    autoTranslate: Bool = false,
     recordingBlocker: @escaping () -> (title: String, detail: String)? = { nil },
     translate: ((CGImage, CGFloat) async -> ScreenshotOverlay.Outcome)? = nil
   ) async -> Outcome? {
-    let session = SelectionSession(
-      mode: .capture, hint: hint ?? "", lastRegion: lastRegion)
-    // ⌥S 截图翻译（autoTranslate）照拍板 C3 不认元素：它的顶部提示也没写滚轮和 Tab
-    session.findsElements = !autoTranslate && SelectionSession.elementsAllowed
+    let session = SelectionSession(mode: .capture, lastRegion: lastRegion)
+    // ⌥S 盖回截图的截图翻译（autoTranslate）也认元素（2026-11-16 用户：悬停框出那一块、单击就翻它，同截图）。
+    // 拍板 C3「截图翻译不加」说的是没有悬停的那条（select），这条本来就有窗口悬停
+    session.findsElements = SelectionSession.elementsAllowed
+    session.wakesWebContent = session.findsElements && SelectionSession.webElementsAllowed
     session.preselectsLastRegion = preselect
     session.recordingBlocker = recordingBlocker
     session.translate = translate
@@ -78,6 +85,7 @@ enum RegionSelector {
   static func record(_ shots: [ScreenCapture.Shot], lastRegion: CGRect?) async -> Outcome? {
     let session = SelectionSession(mode: .record, lastRegion: lastRegion)
     session.findsElements = SelectionSession.elementsAllowed
+    session.wakesWebContent = session.findsElements && SelectionSession.webElementsAllowed
     return await run(shots, session)
   }
 
@@ -295,11 +303,12 @@ enum RegionSelector {
 
   /// 比例预设（尺寸胶囊的菜单）：宽 / 高，nil = 自由
   static let ratios: [(title: String, value: CGFloat?)] = [
-    ("自由", nil), ("1:1", 1), ("4:3", 4.0 / 3), ("3:2", 1.5), ("16:9", 16.0 / 9), ("9:16", 9.0 / 16),
+    (String(localized: "自由", comment: "截图比例：不锁定"), nil), ("1:1", 1), ("4:3", 4.0 / 3), ("3:2", 1.5),
+    ("16:9", 16.0 / 9), ("9:16", 9.0 / 16),
   ]
 
   static func ratioTitle(_ ratio: CGFloat?) -> String {
-    ratios.first { $0.value == ratio }?.title ?? "自由"
+    ratios.first { $0.value == ratio }?.title ?? String(localized: "自由", comment: "截图比例：不锁定")
   }
 
   /// 套用比例预设：宽不变、高按比例，顶边和水平中心不动；下面放不下就按剩下的高反推宽（只会变窄，不会出屏）
@@ -359,7 +368,7 @@ enum RegionSelector {
 final class SelectionSession {
   /// 截图调整时按 R 切成录屏（SelectionView.switchToRecording），其余一直不变
   var mode: SelectionView.Mode
-  /// 松手即确认时屏幕上方的提示，几段之间用「 · 」隔开（截图、录屏模式自己拼）
+  /// 松手即确认时屏幕上方的提示，几段之间用「 · 」隔开（截图、录屏、⌥S 模式自己拼）
   let hint: String
   /// 上次截图的区域（全局坐标）
   let lastRegion: CGRect?
@@ -371,8 +380,11 @@ final class SelectionSession {
   /// 工具栏「翻译」的就地翻译（AppDelegate 给）：给选区的图，交回覆盖了译文的图；失败时带一句原因。
   /// nil = 没有翻译能力，点翻译时退回原来的「收起遮罩、翻完再开编辑窗」
   var translate: ((CGImage, CGFloat) async -> ScreenshotOverlay.Outcome)?
-  /// 框完松手就直接翻（⌥S：截图翻译 = 截图 + 自动点「翻译」）
+  /// 框完松手、单击选中就直接翻（⌥S：截图翻译 = 截图 + 自动点「翻译」）
   var autoTranslates = false
+  /// 画过标注时退出要按两下（第五轮体检 E8，SelectionView.cancel）：上膛记在会话上，几块屏共用——在一块屏上按 Esc、
+  /// 到另一块屏点 ✕ 也是两下
+  var discardArm = RecordingHUD.Discard()
   /// 尺寸胶囊里锁着的比例（宽 / 高，RegionSelector.ratios 里的一个）：之后框选、拖边都按它，选「自由」解锁。整个会话共用
   var lockedRatio: CGFloat?
   /// 悬停时认窗口里的元素（截图、录屏开始时按 elementsAllowed 定；单测、截图自检直接设）
@@ -383,14 +395,66 @@ final class SelectionSession {
   lazy var findElements: (pid_t, CGPoint) -> ElementFinder.Answer = { [hits] pid, point in
     ElementFinder.query(pid: pid, at: point, cache: hits)
   }
-  private let hits = ElementFinder.Cache()
+  /// 单击窗口出图时单独截那扇窗口（N1，WindowShot.snapshot）；单测、截图自检换成假的——真的会去问 ScreenCaptureKit
+  var snapshotWindow: (CGWindowID) async -> CGImage? = { await WindowShot.snapshot($0) }
+  /// 量窗口的圆角（WindowShot.cornerRadius）；单测、截图自检换成假的
+  var measureRadius: (CGWindowID) async -> CGFloat? = { await WindowShot.cornerRadius(of: $0) }
+  /// 这次框选量过的窗口圆角（点），和正在量的那一扇（一次只量一扇）
+  private var radii: [CGWindowID: CGFloat] = [:]
+  private var measuring: CGWindowID?
+
+  /// 那扇窗口的圆角（点）：量过的直接给；没量过的先给 WindowShot.defaultRadius、开始量（前一扇还没量完就等下一次问），
+  /// 量完各屏重画一次（还悬停 / 选着它的就换成量出来的；量不出的按默认的记下，不再量）
+  func windowRadius(_ id: CGWindowID) -> CGFloat {
+    if let known = radii[id] { return known }
+    if measuring == nil {
+      measuring = id
+      let measure = measureRadius
+      Task { [weak self] in
+        let radius = await measure(id)
+        guard let self else { return }
+        measuring = nil
+        radii[id] = radius ?? WindowShot.defaultRadius
+        for view in views { view.refresh() }
+      }
+    }
+    return WindowShot.defaultRadius
+  }
+  /// 这次框选问元素的缓存（单测直接设 woken）
+  let hits = ElementFinder.Cache()
   /// 问过超时的 App：这次框选不再问它，只认窗口（卡住的 App 每动一下鼠标都等一次就卡成幻灯片了）
   var silentApps: Set<pid_t> = []
+  /// 也认网页里的元素（设置 › 截图的子开关；截图、录屏开始时定）：第一次问一个 App 前读一次它的角色，浏览器内核的 App
+  /// 才打开辅助功能（ElementFinder.Cache.wakes）
+  var wakesWebContent = false {
+    didSet { hits.wakes = wakesWebContent }
+  }
+
+  /// 刚叫醒过 pid：离下一个该再问的时刻（ElementFinder.settles）还差多久（指针停着不动时，SelectionView 到点再问一次）；
+  /// 不是刚叫醒的 nil
+  func recheckDelay(for pid: pid_t) -> Duration? {
+    hits.woken[pid].flatMap { ElementFinder.recheckDelay(wokenAt: $0, now: .now) }
+  }
+
+  /// pid 刚叫醒不久（ElementFinder.wakeGrace）：问超时了也不记成卡住
+  func spares(_ pid: pid_t) -> Bool {
+    hits.woken[pid].map { $0.duration(to: .now) < ElementFinder.wakeGrace } ?? false
+  }
+
+  /// 丢掉 pid 那个 App 上次问的结果（叫醒后它的界面元素换了一批）
+  func forget(_ pid: pid_t) {
+    hits.entries[pid] = nil
+  }
 
   /// 设置 › 截图开着、且有辅助功能授权（没授权照旧只认窗口，不弹框、不催：拍板 D2）
   static var elementsAllowed: Bool {
     UserDefaults.standard.bool(forKey: Prefs.screenshotFindsElements)
       && Permissions.isAccessibilityTrusted
+  }
+
+  /// 设置 › 截图「也认网页里的元素」开着（总开关和授权看 elementsAllowed）
+  static var webElementsAllowed: Bool {
+    UserDefaults.standard.bool(forKey: Prefs.screenshotFindsWebElements)
   }
   private var overlays: [SelectionOverlay] = []
   /// 各屏的画面（start 时填上；单测直接放几个屏外窗口里的视图进来，不弹遮罩）
@@ -411,18 +475,17 @@ final class SelectionSession {
     self.continuation = continuation
     overlays = shots.map { SelectionOverlay(shot: $0, session: self) }
     views = overlays.map(\.selectionView)
-    for view in views {
-      view.translateHandler = translate
-      view.autoTranslates = autoTranslates
-    }
+    for view in views { view.translateHandler = translate }
     guard !overlays.isEmpty else { return finish(nil) }
     for overlay in overlays { overlay.orderFrontRegardless() }
     // 鼠标不动时收不到 mouseMoved：先设一次十字光标
     NSCursor.crosshair.set()
     // 鼠标所在屏的遮罩接收按键；其它屏的遮罩靠 acceptsFirstMouse 直接响应拖动。
-    // 含上边（NSMouseInRect）：光标在屏幕最上一行时 y 正好等于 frame.maxY
+    // 含上边（NSScreen.index）：光标在屏幕最上一行时 y 正好等于 frame.maxY
     let mouse = NSEvent.mouseLocation
-    let key = overlays.first { NSMouseInRect(mouse, $0.frame, false) } ?? overlays[0]
+    let key =
+      NSScreen.index(containing: mouse, in: overlays.map(\.frame)).map { overlays[$0] }
+      ?? overlays[0]
     key.makeKey()
     // 放大镜一出来就在光标处
     let view = key.selectionView
@@ -492,7 +555,8 @@ final class SelectionOverlay: NSPanel {
 
   init(shot: ScreenCapture.Shot, session: SelectionSession) {
     selectionView = SelectionView(
-      image: shot.image, windows: shot.windows, owners: shot.owners, session: session)
+      image: shot.image, windows: shot.windows, owners: shot.owners, windowIDs: shot.windowIDs,
+      session: session)
     // styleMask 必须在 init 里一次写全：.nonactivatingPanel 初始化后再加不生效
     super.init(
       contentRect: shot.screen.frame, styleMask: [.borderless, .nonactivatingPanel],

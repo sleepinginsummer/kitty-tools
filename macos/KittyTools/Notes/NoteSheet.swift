@@ -82,7 +82,7 @@ struct NoteSheet: View {
     .contentShape(.rect)
     .gesture(grip(.tab))
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(model.tuckTitle ?? "关闭便签")
+    .accessibilityLabel(model.tuckTitle ?? String(localized: "关闭便签"))
     .accessibilityAddTraits(.isButton)
     .accessibilityAction { model.close() }
   }
@@ -142,18 +142,22 @@ struct NoteSheet: View {
         model.toggleTask()
       }
       // 浮着的便签固定不固定都在别的窗口上面，固定只管重启后回不回来：提示单独说这一句
+      // （先给不是可选的 let：三目直接写在可选参数里只有第一个分支被抽进目录，TRANSLATION.md 二）
+      let pinHelp: LocalizedStringResource =
+        note.isPinned ? "取消固定（⌘P）：重启后不再浮在这里" : "固定（⌘P）：重启后还浮在这里"
       NoteIconButton(
         symbol: note.isPinned ? "pin.fill" : "pin",
         label: "\(NotesWindowModel.pinTitle(note))（⌘P）", ink: paper.ink,
-        help: model.isFloating
-          ? (note.isPinned ? "取消固定（⌘P）：重启后不再浮在这里" : "固定（⌘P）：重启后还浮在这里") : nil
+        help: model.isFloating ? pinHelp : nil
       ) {
         model.togglePinned()
       }
       NoteIconButton(symbol: "ellipsis", label: "操作（⌘K）", ink: paper.ink) {
         model.toggleMenu()
       }
-      NoteIconButton(symbol: "xmark", label: "\(model.tuckTitle ?? "关闭")（Esc）", ink: paper.ink) {
+      NoteIconButton(
+        symbol: "xmark", label: "\(model.tuckTitle ?? String(localized: "关闭"))（Esc）", ink: paper.ink
+      ) {
         model.close()
       }
     }
@@ -197,10 +201,10 @@ struct NoteSheet: View {
 /// 便签头部的图标按钮：墨色的符号，鼠标停着时垫一块墨色的淡底
 private struct NoteIconButton: View {
   let symbol: String
-  let label: String
+  let label: LocalizedStringResource
   let ink: Color
   /// 悬停提示另写一句时给（不给 = 就是 label）
-  var help: String? = nil
+  var help: LocalizedStringResource? = nil
   let action: () -> Void
   @State private var isHovered = false
 
@@ -223,7 +227,7 @@ private struct NoteIconButton: View {
         withAnimation(.easeOut(duration: 0.10)) { isHovered = inside }
       }
     }
-    .accessibilityLabel(label)
-    .help(help ?? label)
+    .accessibilityLabel(Text(plain: label))
+    .help(Text(help ?? label))
   }
 }

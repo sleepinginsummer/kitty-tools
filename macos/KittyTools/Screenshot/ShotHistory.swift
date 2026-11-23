@@ -44,15 +44,18 @@ import UniformTypeIdentifiers
   enum Kind: String, Codable, CaseIterable, Sendable {
     case shot, scroll, video, audio, gif
 
-    var title: String {
+    /// 种类的名字（卡片角上、旁白、搜索）：录屏 / 录音是名词，同 ScreenRecorder.Medium.nounResource
+    var titleResource: LocalizedStringResource {
       switch self {
       case .shot: "截图"
       case .scroll: "长截图"
-      case .video: "录屏"
-      case .audio: "录音"
+      case .video: ScreenRecorder.Medium.screen.nounResource
+      case .audio: ScreenRecorder.Medium.audio.nounResource
       case .gif: "GIF"
       }
     }
+
+    var title: String { String(localized: titleResource) }
   }
 
   struct Item: Identifiable, Equatable, Sendable {
@@ -77,6 +80,8 @@ import UniformTypeIdentifiers
     var frame: CGRect?
     /// 原图 + 缩略图占多少字节（算总量上限用）
     var bytes: Int = 0
+    /// 透明圆角带阴影的窗口截图（第五轮体检 N1）：再钉出来时不套圆角和描边、圆钮放在窗口里；裁过就不算了
+    var isWindow = false
   }
 
   /// 新的在前
@@ -112,11 +117,16 @@ import UniformTypeIdentifiers
         source_name TEXT, saved_path TEXT, file_path TEXT,
         annotations TEXT, -- [Annotation] 的 JSON（拍板 A1）
         pinned_at REAL, bytes INTEGER NOT NULL DEFAULT 0,
-        frame TEXT) -- 当初框的那一块（NSStringFromRect），钉回原位用
+        frame TEXT, -- 当初框的那一块（NSStringFromRect），钉回原位用
+        window INTEGER) -- 1 = 透明圆角带阴影的窗口截图（第五轮体检 N1）
       """)
-    // 旧库补列（幂等，每次启动都跑）
-    if try !db.query("PRAGMA table_info(shots)", row: { $0.text(1) }).contains("frame") {
+    // 旧库补列（幂等，每次启动都跑；旧版本读写都写明列名，碰不到新加的列）
+    let columns = try db.query("PRAGMA table_info(shots)", row: { $0.text(1) })
+    if !columns.contains("frame") {
       try db.execute("ALTER TABLE shots ADD COLUMN frame TEXT")
+    }
+    if !columns.contains("window") {
+      try db.execute("ALTER TABLE shots ADD COLUMN window INTEGER")
     }
     try db.execute("CREATE INDEX IF NOT EXISTS shots_created_at ON shots(created_at DESC)")
     try reload()
@@ -138,7 +148,7 @@ import UniformTypeIdentifiers
   @discardableResult func record(
     _ image: CGImage, png: Data? = nil, composed: CGImage? = nil, scale: CGFloat,
     kind: Kind = .shot, annotations: [Annotation] = [], source: String? = nil, saved: URL? = nil,
-    pinned: Bool = false, frame: CGRect? = nil
+    pinned: Bool = false, frame: CGRect? = nil, window: Bool = false
   ) async -> UUID? {
     guard isOn else { return nil }
     let id = UUID()
@@ -153,7 +163,7 @@ import UniformTypeIdentifiers
         id: id, kind: kind, createdAt: .now,
         pixelSize: CGSize(width: image.width, height: image.height), scale: scale, source: source,
         savedPath: saved?.path, filePath: nil, annotations: kept,
-        pinnedAt: pinned ? .now : nil, frame: frame, bytes: bytes))
+        pinnedAt: pinned ? .now : nil, frame: frame, bytes: bytes, isWindow: window))
     return id
   }
 
@@ -199,9 +209,16 @@ import UniformTypeIdentifiers
   /// 最多是盘上的图已经打过码、标注里又叠一层，不会露出明文。
   /// 同一扇遮罩里拷贝过带马赛克的、再删掉马赛克拷贝：标注和上次一样（码已经不在标注里），什么都不做，历史里照样有码——
   /// 往多打码的方向错，留着
+  /// cropped（第四轮体检 X17）：original 是裁好的原图、标注已经平移到它的坐标里——这时一定重写原图（马赛克照样打进去），
+  /// 写完盘才连同标注、尺寸一起换（同上「先写原图、再改标注」：换之前读到的还是旧原图 + 旧标注，对得上）；当初框的那一块
+  /// （钉回原位用）裁过就不对了，清掉
   func update(
-    _ id: UUID, annotations: [Annotation], composed: CGImage, original: CGImage? = nil
+    _ id: UUID, annotations: [Annotation], composed: CGImage, original: CGImage? = nil,
+    cropped: Bool = false
   ) {
+    if cropped, let original {
+      return updateCropped(id, annotations: annotations, composed: composed, original: original)
+    }
     let hasMosaic = annotations.contains { $0.tool == .mosaic }
     guard let index = items.firstIndex(where: { $0.id == id }),
       hasMosaic || items[index].annotations != annotations
@@ -245,6 +262,40 @@ import UniformTypeIdentifiers
       }
       guard edits[id] == edit else { return }
       if let baked { commitBaked(id, annotations, bytes: baked.count + small.count) }
+      onThumbnailChanged(id)
+    }
+  }
+
+  /// 裁过的回写（update 的 cropped）：原图（打好码）→ 缩略图 → 一条 UPDATE 换标注、尺寸、占用，清掉框
+  private func updateCropped(
+    _ id: UUID, annotations: [Annotation], composed: CGImage, original: CGImage
+  ) {
+    guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+    let scale = items[index].scale
+    let edit = UUID()
+    edits[id] = edit
+    let isLatest = { [weak self] in self?.edits[id] == edit && self?.item(id) != nil }
+    Task {
+      defer { if edits[id] == edit { edits[id] = nil } }
+      let baked = Self.bakingMosaics(original, annotations: annotations, scale: scale)
+      guard let png = await ScreenshotOutput.png(baked.image, scale: scale), isLatest(),
+        await Self.write(png, to: url(for: id))
+      else { return }
+      guard item(id) != nil else {
+        try? FileManager.default.removeItem(at: url(for: id))
+        return
+      }
+      let small = await Self.thumbnail(of: composed)
+      if let small { _ = await Self.write(small, to: thumbnailURL(for: id)) }
+      guard isLatest(), let index = items.firstIndex(where: { $0.id == id }) else { return }
+      let size = CGSize(width: baked.image.width, height: baked.image.height)
+      items[index].pixelSize = size
+      items[index].frame = nil
+      items[index].isWindow = false  // 裁过：四周的阴影留边不在了
+      try? db.execute(
+        "UPDATE shots SET pixel_width = ?, pixel_height = ?, frame = NULL, window = NULL WHERE id = ?",
+        [Int(size.width), Int(size.height), id.uuidString])
+      store(id, annotations: baked.annotations, bytes: png.count + (small?.count ?? 0))
       onThumbnailChanged(id)
     }
   }
@@ -444,7 +495,8 @@ import UniformTypeIdentifiers
     provider.registerFileRepresentation(
       for: type, visibility: .all, openInPlace: false
     ) { [weak self] completion in
-      // 系统给的回调没标 sending，挪进 Task 里编译器拦；只在主 actor 上调一次，安全
+      // 系统给的回调没标 sending，挪进 Task 里编译器拦（Mutex 也装不进去：初值要 sending，第五轮体检 H3 实测；mac-native §3
+      // 写明的例外）；只在主 actor 上调一次，安全
       nonisolated(unsafe) let finish = completion
       Task { @MainActor in
         guard let url = await self?.dragFile(for: item) else {
@@ -499,9 +551,9 @@ import UniformTypeIdentifiers
   /// 「点了没反应」（2026-10-26 用户手测报的）
   static func reveal(_ item: Item, notice: (String, Bool) -> Void) {
     guard let path = item.filePath ?? item.savedPath else {
-      return notice("这张还没存成文件，先存储一下", false)
+      return notice(String(localized: "这张还没存成文件，先存储一下"), false)
     }
-    guard fileExists(item) else { return notice("文件已经不在了", true) }
+    guard fileExists(item) else { return notice(String(localized: "文件已经不在了"), true) }
     NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: path)])
   }
 
@@ -515,14 +567,16 @@ import UniformTypeIdentifiers
       .compactMap { $0.filePath ?? $0.savedPath }
       .filter { FileManager.default.fileExists(atPath: $0) }
       .map { URL(filePath: $0) }
-    guard !urls.isEmpty else { return notice("这几条都还没存成文件，先存储一下", false) }
+    guard !urls.isEmpty else {
+      return notice(String(localized: "这几条都还没存成文件，先存储一下"), false)
+    }
     NSWorkspace.shared.activateFileViewerSelecting(urls)
   }
 
   /// 用默认 App 打开（录制的那几条）
   static func open(_ item: Item, notice: (String, Bool) -> Void) {
     guard let path = item.filePath, fileExists(item) else {
-      return notice("文件已经不在了", true)
+      return notice(String(localized: "文件已经不在了"), true)
     }
     NSWorkspace.shared.open(URL(filePath: path))
   }
@@ -601,15 +655,15 @@ import UniformTypeIdentifiers
     try? db.execute(
       """
       INSERT INTO shots(id, kind, created_at, pixel_width, pixel_height, scale, source_name,
-        saved_path, file_path, annotations, pinned_at, bytes, frame)
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        saved_path, file_path, annotations, pinned_at, bytes, frame, window)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       """,
       [
         item.id.uuidString, item.kind.rawValue, item.createdAt.timeIntervalSinceReferenceDate,
         Int(item.pixelSize.width), Int(item.pixelSize.height), Double(item.scale), item.source,
         item.savedPath, item.filePath, Self.encode(item.annotations),
         item.pinnedAt?.timeIntervalSinceReferenceDate, item.bytes,
-        item.frame.map(NSStringFromRect),
+        item.frame.map(NSStringFromRect), item.isWindow ? 1 : nil,
       ])
     prune()
   }
@@ -618,7 +672,7 @@ import UniformTypeIdentifiers
     items = try db.query(
       """
       SELECT id, kind, created_at, pixel_width, pixel_height, scale, source_name, saved_path,
-        file_path, annotations, pinned_at, bytes, frame FROM shots ORDER BY created_at DESC
+        file_path, annotations, pinned_at, bytes, frame, window FROM shots ORDER BY created_at DESC
       """
     ) { row -> Item? in
       guard let id = row.text(0).flatMap(UUID.init(uuidString:)),
@@ -630,7 +684,8 @@ import UniformTypeIdentifiers
         scale: CGFloat(row.double(5) ?? 2), source: row.text(6), savedPath: row.text(7),
         filePath: row.text(8), annotations: row.text(9).flatMap(Self.decode) ?? [],
         pinnedAt: row.double(10).map(Date.init(timeIntervalSinceReferenceDate:)),
-        frame: row.text(12).map(NSRectFromString), bytes: Int(row.int(11) ?? 0))
+        frame: row.text(12).map(NSRectFromString), bytes: Int(row.int(11) ?? 0),
+        isWindow: row.int(13) == 1)
     }.compactMap { $0 }
   }
 
@@ -719,7 +774,7 @@ private final class ShotPromise: NSObject, NSFilePromiseProviderDelegate {
   func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String)
     -> String
   {
-    history?.dragName(for: item) ?? "截图.png"
+    history?.dragName(for: item) ?? ScreenshotOutput.fileNoun + ".png"
   }
 
   nonisolated func filePromiseProvider(

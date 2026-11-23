@@ -6,6 +6,8 @@
 // 替换原文（划词来的会话）都以这里的状态为准；静默替换走 translateOnce（按顺序用启用的服务、失败换下一个，不开浮窗）。
 // 原文改过还没重译（needsTranslate）时浮窗才出「翻译 ↩」胶囊（N5）；翻译历史的列表状态在 historyList，
 // 它的搜索框命令和 ⌘ 键（N7）也从这里分发。
+// 折叠着的服务不自动翻译（2026-11-15，有用户问折叠了还耗不耗 token）：开会话时它们是「没翻」的卡（.idle）、不发请求，
+// 点开（expand）才翻当前原文；点开后才翻的卡不当主结果（不写历史、不自动复制），静默替换和截图盖回先用没折叠的服务。
 
 import AppKit
 import Carbon.HIToolbox
@@ -13,6 +15,8 @@ import Observation
 
 @Observable final class TranslateCoordinator {
   enum CardState: Equatable {
+    /// 没翻：服务折叠着，这次会话不自动翻译，点开才翻（expand）
+    case idle
     case waiting
     /// 生成中：到目前为止的译文；空串 = 模型在思考、还没有正文（卡片显示「思考中」，mac-whisker S3）
     case running(String)
@@ -36,6 +40,8 @@ import Observation
     /// 开跑时的那一份配置；重试 / 重跑时换成设置里现在的（E20）
     var service: TranslateService
     var state: CardState
+    /// 折叠着、点开后才翻的：不当主结果（点开一张卡不该换掉剪贴板、再写一条历史）
+    var opened = false
     var id: String { service.id }
   }
 
@@ -89,6 +95,9 @@ import Observation
   private(set) var notice: String?
   /// 提示要引导去授权的那一项；nil 就不显示授权按钮
   private(set) var noticePermission: Permissions.Kind?
+  /// 这次的原文不是单词、启用的服务却都只能查词（有道词典这类）：一张卡都没开，结果区说「启用的服务只能查单词」、
+  /// 带「打开翻译设置」，不当成还没开始翻译（第五轮体检 U8）。setter 不设 private 只为截图自检
+  var onlyDictionaries = false
 
   /// 查单个词时系统词典的释义（不是单个词、查不到、设置关掉时为 nil）；setter 不设 private 只为截图自检
   var dictionary: DictionaryEntry?
@@ -111,6 +120,29 @@ import Observation
   @ObservationIgnored
   var stream: (TranslateService, TranslateRequest) -> AsyncThrowingStream<String, Error> = {
     $0.translate($1)
+  }
+  /// 折叠着的服务 id（浮窗按服务记住，和 TranslatePanelView 读写同一个偏好；单测换成固定的，不读用户偏好）
+  @ObservationIgnored
+  var collapsed: () -> Set<String> = {
+    TranslateCoordinator.collapsedIDs(
+      UserDefaults.standard.string(forKey: Prefs.translateCollapsedServices) ?? "")
+  }
+
+  /// 偏好里存的是换行分隔的 id。纯函数，浮窗视图也用它
+  static func collapsedIDs(_ stored: String) -> Set<String> {
+    Set(stored.split(separator: "\n").map(String.init))
+  }
+
+  /// 不开浮窗的两条路（静默替换、截图翻译盖回）按这个顺序试服务：没折叠的在前、折叠的垫底，各自保持列表顺序。
+  /// 纯函数，配单测
+  static func ordered(_ services: [TranslateService], collapsed: Set<String>) -> [TranslateService]
+  {
+    services.filter { !collapsed.contains($0.id) } + services.filter { collapsed.contains($0.id) }
+  }
+
+  /// 启用的服务，没折叠的在前（静默替换、截图翻译盖回用）
+  var orderedServices: [TranslateService] {
+    Self.ordered(services.enabled, collapsed: collapsed())
   }
 
   /// 原文上限（字节）：再长的文本请求和渲染都不划算
@@ -143,7 +175,8 @@ import Observation
   }
 
   /// 主结果：按列表顺序第一个翻成功的服务（写历史、自动复制、收藏、替换原文都认它）。排在它前面的都得已经没成
-  /// （出错、截断、中断）才轮到它——前面的还在跑就先等，免得先认了第二个、第一个出来又换（U1）
+  /// （出错、截断、中断）才轮到它——前面的还在跑就先等，免得先认了第二个、第一个出来又换（U1）。
+  /// 没翻的折叠卡不挡着等，点开后才翻的也不认（不然点开一张卡剪贴板就被换掉）
   var primaryResult: (service: TranslateService, text: String)? {
     Self.primary(of: cards)
   }
@@ -152,22 +185,35 @@ import Observation
   static func primary(of cards: [Card]) -> (service: TranslateService, text: String)? {
     for card in cards {
       // 词典类服务给的是释义，不是译文（S2）
-      if card.service.kind.isDictionary { continue }
+      if card.service.kind.isDictionary || card.opened { continue }
       switch card.state {
       case .done(let text) where !text.isEmpty: return (card.service, text)
       case .waiting, .running: return nil
-      case .done, .truncated, .failed: continue
+      case .idle, .done, .truncated, .failed: continue
       }
     }
     return nil
   }
 
-  /// 这次翻译收藏了没有（星标）；读 history.revision 让收藏变化时刷新
+  /// 这次翻译收藏了没有（星标）；读 history.revision 让收藏变化时刷新。
+  /// 记下来的那一份（第五轮体检 P3）：流式时每来一段字浮窗都重算，原来每次都对库查一次「原文 + 目标语言」
+  /// （4 张生成中的卡、32 KB 原文时浮窗更新一遍中位 4.1 ms，记下来以后 3.6 ms，TranslateFavoriteProbeTests）。
+  /// 原文、目标语言、历史的修订号都没变就用它；
+  /// 收藏、取消收藏、定稿写历史、别处删改历史都会让修订号变，下一次读就重查
   var isFavorite: Bool {
-    _ = history.revision
+    let revision = history.revision
     guard let request, let target else { return false }
-    return history.isFavorite(source: request.text, target: target)
+    if let cached = favoriteCache, cached.revision == revision, cached.target == target,
+      cached.text == request.text
+    {
+      return cached.value
+    }
+    let value = history.isFavorite(source: request.text, target: target)
+    favoriteCache = (request.text, target, revision, value)
+    return value
   }
+  @ObservationIgnored private var favoriteCache:
+    (text: String, target: Lang, revision: Int, value: Bool)?
 
   /// ⌘D / 星标：收藏或取消这次翻译（主结果定下来后才能收藏）；返回是否做了。
   /// 关着历史时取消收藏就把这条删掉（收藏时才记进去的，留着就成了「关了历史却有历史」）。
@@ -234,6 +280,7 @@ import Observation
     abandonedTarget = nil
     notice = nil
     noticePermission = nil
+    onlyDictionaries = false
     showsHistory = false
   }
 
@@ -244,14 +291,30 @@ import Observation
   }
 
   /// 输入翻译热键 / 菜单再打开浮窗（体检 A14）：保留上次的原文和结果（调用方把原文全选，打字即替换），
-  /// 收起提示、关上历史；上次收起时被中断的卡片重新跑。收着时换过语言的整个重译
+  /// 收起提示、关上历史；上次收起时被中断的卡片重新跑——折叠着的不跑、回到「没翻」，点开再翻。收着时换过语言的整个重译
   func resumeInput() {
     notice = nil
     noticePermission = nil
     missedSelection = false
     showsHistory = false
     if languageChanged, !sourceText.isEmpty { return start() }
-    for card in cards where card.state == .failed(.interrupted) { retry(card.id) }
+    let collapsed = collapsed()
+    // 按一份拷贝走：retry 会把删掉 / 关掉的服务的卡收掉
+    for card in cards where card.state == .failed(.interrupted) {
+      if collapsed.contains(card.id) {
+        update(card.id, .idle)
+      } else {
+        retry(card.id)
+      }
+    }
+  }
+
+  /// 点开一张没翻的折叠卡：现在才翻当前原文（这张卡记成「点开后才翻的」，不当主结果）；已经翻过 / 在翻的不动
+  func expand(_ id: String) {
+    guard let index = cards.firstIndex(where: { $0.id == id }), cards[index].state == .idle
+    else { return }
+    cards[index].opened = true
+    retry(id)
   }
 
   /// selectedIn：原文是从这个 App 划词取来的（浮窗里给「替换原文」）；fromCopy：复制即译带来的（不自动复制）
@@ -269,12 +332,13 @@ import Observation
     showsHistory = false
     notice = nil
     noticePermission = nil
+    onlyDictionaries = false
     missedSelection = false
     translatedSource = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
     let text = Self.preprocess(sourceText)
     guard !text.isEmpty else { return }
     guard text.utf8.count <= Self.maxSourceBytes else {
-      notice = "原文太长（上限 32 KB），请分段翻译"
+      notice = String(localized: "原文太长（上限 32 KB），请分段翻译")
       cards = []
       return
     }
@@ -286,11 +350,13 @@ import Observation
     request = plan.request
     isWordLookup = plan.request.isWord
     recordedPrimary = nil
-    // 词典类服务只查单词和短语（S2）
+    // 词典类服务只查单词和短语（S2）；折叠着的不自动翻译，点开再翻
     let lookup = WordLookup.isWord(text) || WordLookup.isPhrase(text)
+    let collapsed = collapsed()
     cards = services.enabled.filter { lookup || !$0.kind.isDictionary }.map {
-      Card(service: $0, state: .waiting)
+      Card(service: $0, state: collapsed.contains($0.id) ? .idle : .waiting)
     }
+    onlyDictionaries = cards.isEmpty && !services.enabled.isEmpty
     runAll(text)
   }
 
@@ -303,7 +369,7 @@ import Observation
     let showsDictionary = defaults.bool(forKey: Prefs.translateSystemDictionary)
     let wordMode = defaults.bool(forKey: Prefs.translateWordMode)
     guard WordLookup.isPhrase(text), showsDictionary || wordMode else {
-      for card in cards { run(card.service) }
+      for card in cards where card.state != .idle { run(card.service) }
       guard WordLookup.isWord(text), showsDictionary else { return }
       dictionaryTask = Task {
         let entry = await WordLookup.systemDictionary(text)
@@ -323,7 +389,7 @@ import Observation
           isWordLookup = true
         }
       }
-      for card in cards { run(card.service) }
+      for card in cards where card.state != .idle { run(card.service) }
     }
   }
 
@@ -355,9 +421,10 @@ import Observation
     return Lang.detect(trimmed, preferring: [first, second]) != nil
   }
 
-  /// 按浮窗上选的源 / 目标（全局记住的）和检测结果定这次的请求；wordMode：单个词时让大模型按词典格式回答。
+  /// 按浮窗上选的源 / 目标（全局记住的）和检测结果定这次的请求。inPanel：翻译浮窗里的请求——单个词时让大模型按词典格式回答、
+  /// 一句外文时打开了讲解的服务讲解、服务的附加要求接上（issue #35）；静默替换和截图翻译的原位覆盖传 false，只要干净的译文。
   /// 截图翻译的原位覆盖按整图文字定一次方向，各段共用（TranslateSegments）
-  static func plan(for text: String, wordMode: Bool = true) -> (
+  static func plan(for text: String, inPanel: Bool = true) -> (
     request: TranslateRequest, detected: Lang?, fixedSource: Lang?, abandonedTarget: Lang?
   ) {
     let defaults = UserDefaults.standard
@@ -368,24 +435,43 @@ import Observation
     let plan = Lang.resolve(
       source: fixedSource, target: chosenTarget, detected: detected, first: first, second: second)
     let isWord =
-      wordMode && defaults.bool(forKey: Prefs.translateWordMode) && WordLookup.isWord(text)
+      inPanel && defaults.bool(forKey: Prefs.translateWordMode) && WordLookup.isWord(text)
+    let explainable =
+      inPanel && !WordLookup.isWord(text)
+      && SentenceExplain.applies(text, source: plan.from ?? detected, target: plan.to, first: first)
     return (
-      TranslateRequest(text: text, from: plan.from, to: plan.to, isWord: isWord), detected,
-      fixedSource, plan.fellBack ? chosenTarget : nil
+      TranslateRequest(
+        text: text, from: plan.from, to: plan.to, isWord: isWord, inPanel: inPanel,
+        explainable: explainable),
+      detected, fixedSource, plan.fellBack ? chosenTarget : nil
     )
   }
 
-  /// 静默替换：不开浮窗、不动当前会话，按列表顺序用启用的服务、等完整结果；记历史（开着的话）。
+  /// 这个服务这次是在讲解（结果是讲解不是译文：同单词卡，不自动复制、不给「替换原文」，喇叭只读第一段）
+  func explains(_ service: TranslateService) -> Bool {
+    request.map(service.explains) ?? false
+  }
+
+  /// 主结果是讲解卡（不给「替换原文」）
+  var primaryExplains: Bool {
+    primaryResult.map { explains($0.service) } ?? false
+  }
+
+  /// 静默替换：不开浮窗、不动当前会话，按列表顺序用启用的服务（没折叠的先试）、等完整结果；记历史（开着的话）。
   /// 一个服务失败就试下一个（第四轮体检 U14），都失败才抛最后一个的错误；被取消、输出被截断的不往下试（截断换一家多半也一样长）。
   /// 不套「把换行合成一段」：要替换回去的文字，段落得保住；也不用单词模式（替换回去的要是译文，不是释义）
   func translateOnce(_ source: String) async throws -> String {
     let text = source.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, text.utf8.count <= Self.maxSourceBytes else {
-      throw TranslateError(message: "原文为空或太长")
+      throw TranslateError(message: String(localized: "原文为空或太长"))
     }
-    let request = Self.plan(for: text, wordMode: false).request
-    var failure: Error = TranslateError.config("没有启用的翻译服务")
-    for service in services.enabled where !service.kind.isDictionary {
+    let request = Self.plan(for: text, inPanel: false).request
+    let services = orderedServices
+    // 只启用了词典类服务（有道词典）：它们只查单词，替换不了一段话（第五轮体检 U8，原来报「没有启用的翻译服务」）
+    var failure: Error = TranslateError.config(
+      services.isEmpty
+        ? String(localized: "没有启用的翻译服务") : String(localized: "启用的服务只能查单词，翻译句子要再启用一个翻译服务"))
+    for service in services where !service.kind.isDictionary {
       do {
         var latest = ""
         for try await partial in stream(service, request) { latest = partial }
@@ -492,7 +578,8 @@ import Observation
     recordedPrimary = service.id
     // 焦点在原文框，结果出来了读屏不知道（第四轮体检 U12）：浮窗是 key 时把译文开头读出来（自动复制不另播）
     if isPanelKey() {
-      Island.announce(Self.announcement(service: ProviderCardView.displayName(service), text: text))
+      Island.announce(
+        "\(Self.announcement(service: service.shortName, text: text))")
     }
     let defaults = UserDefaults.standard
     if defaults.bool(forKey: Prefs.translateHistoryEnabled) {
@@ -500,10 +587,11 @@ import Observation
         source: request.text, target: request.to, result: text, service: service.name,
         limit: defaults.integer(forKey: Prefs.translateHistoryLimit))
     }
-    // 单词模式的结果是一段释义，不自动复制（划个词查一下，剪贴板不该被换掉）
+    // 单词模式的结果是一段释义、讲解卡是一段讲解（issue #35），都不自动复制（划个词查一下，剪贴板不该被换掉）
     // 和 ⌘1–9 一样对勾 + 整卡闪一下：剪贴板被换掉了要看得出来
     if Self.autoCopies(
-      enabled: defaults.bool(forKey: Prefs.translateAutoCopy), isWord: request.isWord,
+      enabled: defaults.bool(forKey: Prefs.translateAutoCopy),
+      isWord: request.isWord || service.explains(request),
       copied: copiedSource, translated: translatedSource)
     {
       copyCard(service.id, announces: false)
@@ -524,7 +612,8 @@ import Observation
       }
     }
     let head = text[..<end].trimmingCharacters(in: .whitespacesAndNewlines)
-    return service + "：" + (head.count > 80 ? String(head.prefix(80)) + "…" : head)
+    let shown = head.count > 80 ? String(head.prefix(80)) + "…" : head
+    return String(localized: "\(service)：\(shown)")
   }
 
   /// 这次的结果自动复制吗（纯函数，配单测）：设置开着、不是查词（释义不该换掉剪贴板）、原文不是复制即译带来又没改过的
@@ -551,7 +640,8 @@ import Observation
   func handleKeyEquivalent(_ event: NSEvent) -> Bool {
     if showsHistory, historyList.handleKeyEquivalent(event) { return true }
     let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-    let code = Int(event.keyCode)
+    // 字母、标点按打出来的字认（E2）；数字照旧按键位
+    let code = event.typedKeyCode
     // ⌘+ 在多数键盘上要按 ⇧（⌘⇧=），两种都认
     guard flags == .command || (flags == [.command, .shift] && code == kVK_ANSI_Equal) else {
       return false
@@ -581,16 +671,11 @@ import Observation
     case kVK_ANSI_0:
       defaults.set(1.0, forKey: Prefs.translateFontScale)
     default:
-      guard let digit = Self.digitKeys.firstIndex(of: code) else { return false }
+      guard let digit = HotKey.digitKeys.firstIndex(of: code) else { return false }
       if !(cards.indices.contains(digit) && copyCard(cards[digit].id)) { NSSound.beep() }
     }
     return true
   }
-
-  private static let digitKeys = [
-    kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8,
-    kVK_ANSI_9,
-  ]
 
   /// 历史搜索框的编辑命令（doCommandBy，输入法组字时不会来）：↑↓ 选、↩ 重新翻译这条、⇧Tab 换范围、
   /// → 在搜索词末尾时打开动作菜单（同剪贴板 / 启动器）、Esc 先清搜索词再关历史（回到浮窗）；

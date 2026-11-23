@@ -11,12 +11,18 @@ import Observation
 nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
   enum Kind: String, Codable, CaseIterable, Sendable {
     // 新的种类只能加在 ai 前面的末尾：原值就是存下来的 id，顺序是设置「+」菜单的顺序
-    case zhipu, baidu, youdao, google, deepl, microsoft, volcengine, tencent, apple, youdaoDict, youdaoWeb, ai
+    case zhipu, baidu, youdao, google, deepl, microsoft, volcengine, tencent, apple, youdaoDict,
+      youdaoWeb, ai
 
     /// 只查单词和短语的词典类服务：不是单词时不开卡片，不当主结果、不进静默替换（S2）
     var isDictionary: Bool { self == .youdaoDict }
 
-    var defaultName: String {
+    /// 不花钱、不用自己申请 key 就能用的（2026-11-15）：智谱内置的免费模型、微软的 Edge 接口（没填 Key 时）、系统翻译、
+    /// 有道词典。设置「+」菜单里排最前、服务行标「免费」
+    var isFree: Bool { [.zhipu, .microsoft, .apple, .youdaoDict, .youdaoWeb].contains(self) }
+
+    /// 默认名（显示用，跟界面语言）。存进 name 的是 defaultName（中文原文）
+    var nameResource: LocalizedStringResource {
       switch self {
       case .zhipu: "智谱 GLM（免费）"
       case .baidu: "百度翻译"
@@ -32,18 +38,32 @@ nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
       case .ai: "AI 服务"
       }
     }
+
+    /// 存进 name 的默认名：永远是中文原文（跟着同步、导出走；显示时按它认出没改过名的内置服务再翻，多语言第 4 批）
+    var defaultName: String { nameResource.key }
+
+    /// 卡片、「+」菜单、标着「免费」的服务行里用的短默认名：去掉括号里的说明（智谱 GLM（免费）→ 智谱 GLM）
+    var shortNameResource: LocalizedStringResource {
+      switch self {
+      case .zhipu: "智谱 GLM"
+      case .youdaoWeb: "有道翻译（网页版）"
+      default: nameResource
+      }
+    }
   }
 
   enum AIProtocol: String, Codable, CaseIterable, Sendable {
     case openai, azure, anthropic
 
-    var title: String {
+    var titleResource: LocalizedStringResource {
       switch self {
       case .openai: "OpenAI 兼容"
       case .azure: "Azure OpenAI"
       case .anthropic: "Anthropic"
       }
     }
+
+    var title: String { String(localized: titleResource) }
   }
 
   /// 一个要存进钥匙串的字段
@@ -67,6 +87,11 @@ nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
   var region: String?
   /// DeepL 走自建的 DeepLX 而不是官方接口
   var usesDeepLX: Bool?
+  /// 浮窗里遇到一句外文时讲解（issue #35，只有大模型服务有，默认关）：译文 + 重点词 + 句型（SentenceExplain）。
+  /// 关着存 nil，空着的附加要求也存 nil：都不编码，没设过的服务编出来和以前一字不差（旧版本同步不会当成「更新版本写的」）
+  var explainsSentences: Bool?
+  /// 附加要求（issue #35）：用户写的一段话，浮窗里接在内置提示词后面（翻译、单词、讲解都接），上限 maxExtraPrompt 个字
+  var extraPrompt: String?
 
   /// 内置智谱的两档免费纯文本模型（体检 A17，查智谱开放文档 2026-09：GLM-4.7-Flash 是免费模型、纯文本、能关思考，
   /// 替代了 GLM-4.5-Flash）。以前的第二档是识图用的 glm-4.6v-flash，读到它（或别的不认识的）回落第一档
@@ -74,6 +99,24 @@ nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
 
   static func zhipuModel(_ stored: String?) -> String {
     stored.flatMap { zhipuModels.contains($0) ? $0 : nil } ?? zhipuModels[0]
+  }
+
+  /// 没改过名（存的还是中文默认名）时不是用户写的字：显示跟界面语言（存的不动）。AI 服务没改名的「AI 服务」也算
+  private var isDefaultName: Bool { name == kind.defaultName }
+
+  /// 显示的名字：没改过名的换成当前语言的默认名；改过的是用户的（AI 服务的预设名按建的那一刻的语言写），原样
+  var displayName: String { isDefaultName ? String(localized: kind.nameResource) : name }
+
+  /// 卡片标题、主结果播报、设置「+」菜单里的短名字：默认名去掉括号里的说明，AI 服务名字末尾全角括号里的说明也去掉
+  var shortName: String {
+    isDefaultName ? String(localized: kind.shortNameResource) : name.replacing(/（.*）$/, with: "")
+  }
+
+  /// 存在翻译历史里的服务名（写入那一刻的 name）显示时同样翻：是内置服务的中文默认名就换成当前语言的
+  static func displayName(stored: String) -> String {
+    Kind.allCases.first { $0.defaultName == stored }.map {
+      String(localized: $0.nameResource)
+    } ?? stored
   }
 
   static var zhipu: TranslateService { builtin(.zhipu) }
@@ -86,12 +129,14 @@ nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
 
   static func newAI() -> TranslateService {
     TranslateService(
-      id: "ai:" + UUID().uuidString.prefix(8).lowercased(), kind: .ai, name: "AI 服务",
+      // 名字是用户的：按建的那一刻的界面语言写
+      id: "ai:" + UUID().uuidString.prefix(8).lowercased(), kind: .ai,
+      name: String(localized: Kind.ai.nameResource),
       isEnabled: false, model: "", baseURL: "", aiProtocol: .openai)
   }
 
   /// 「+ › AI 服务」里的厂商预设（D15）：只用来填好名称、协议和地址（经 AIService.endpoint 补全），不持久化；
-  /// 模型留空（进详情页后填了 Key 自动取模型列表）
+  /// 模型留空（进详情页后填了 Key 自动取模型列表）。名称是加进去那一刻界面语言的写法（通义千问 / Qwen），之后是用户的数据
   struct AIPreset: Identifiable, Sendable {
     let name: String
     let aiProtocol: AIProtocol
@@ -111,10 +156,12 @@ nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
     AIPreset(name: "OpenAI", aiProtocol: .openai, baseURL: "https://api.openai.com/v1"),
     AIPreset(name: "DeepSeek", aiProtocol: .openai, baseURL: "https://api.deepseek.com/v1"),
     AIPreset(
-      name: "通义千问", aiProtocol: .openai,
+      name: String(localized: "通义千问"), aiProtocol: .openai,
       baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"),
     AIPreset(name: "Kimi", aiProtocol: .openai, baseURL: "https://api.moonshot.cn/v1"),
-    AIPreset(name: "硅基流动", aiProtocol: .openai, baseURL: "https://api.siliconflow.cn/v1"),
+    AIPreset(
+      name: String(localized: "硅基流动"), aiProtocol: .openai,
+      baseURL: "https://api.siliconflow.cn/v1"),
     AIPreset(name: "OpenRouter", aiProtocol: .openai, baseURL: "https://openrouter.ai/api/v1"),
     AIPreset(
       name: "Gemini", aiProtocol: .openai,
@@ -126,19 +173,60 @@ nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
   /// 流式输出（逐字显示、按行内 Markdown 渲染）的服务：大模型类
   var isStreaming: Bool { kind == .zhipu || kind == .ai }
 
+  /// 附加要求最多多少个字（设置页、导入的文件都截到它）
+  static let maxExtraPrompt = 1000
+
+  /// 设置页写进去的附加要求：去掉 NUL、截到上限，空的存 nil（首尾空白不去：正在打的字后面那个空格不能被吃掉）
+  static func storedExtraPrompt(_ text: String) -> String? {
+    let text = String(text.replacing("\0", with: "").prefix(maxExtraPrompt))
+    return text.isEmpty ? nil : text
+  }
+
+  /// 真要用的附加要求（发请求、导入文件时）：再去掉首尾空白，空的是 nil
+  static func cleanedExtraPrompt(_ text: String?) -> String? {
+    guard let text = text.flatMap(storedExtraPrompt) else { return nil }
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  /// 这次请求这个服务讲不讲解：浮窗里、一句外文（request.explainable）、不是查词、打开了讲解
+  func explains(_ request: TranslateRequest) -> Bool {
+    isStreaming && request.inPanel && request.explainable && !request.isWord
+      && explainsSentences == true
+  }
+
+  /// 这次请求要接上的附加要求：只在浮窗里（划词翻译并替换、截图盖回要干净的译文）
+  func extraPrompt(for request: TranslateRequest) -> String? {
+    guard isStreaming, request.inPanel else { return nil }
+    return Self.cleanedExtraPrompt(extraPrompt)
+  }
+
   var secretFields: [SecretField] {
     switch kind {
-    case .zhipu: [SecretField(name: "apiKey", label: "API Key", prompt: "留空使用内置免费额度")]
-    case .ai: [SecretField(name: "apiKey", label: "API Key", prompt: "本机模型可留空")]
+    case .zhipu:
+      [SecretField(name: "apiKey", label: "API Key", prompt: String(localized: "留空使用内置免费额度"))]
+    case .ai: [SecretField(name: "apiKey", label: "API Key", prompt: String(localized: "本机模型可留空"))]
     case .baidu:
-      [SecretField(name: "appId", label: "App ID"), SecretField(name: "secret", label: "密钥")]
+      [
+        SecretField(name: "appId", label: "App ID"),
+        SecretField(
+          // 百度的「密钥」是一格（英文 Secret Key），和详情页那一节的标题「密钥」（Keys）分开
+          name: "secret", label: String(localized: "translate.baidu.secret", defaultValue: "密钥")),
+      ]
     case .youdao:
-      [SecretField(name: "appKey", label: "应用 ID"), SecretField(name: "appSecret", label: "应用密钥")]
+      [
+        SecretField(name: "appKey", label: String(localized: "应用 ID")),
+        SecretField(name: "appSecret", label: String(localized: "应用密钥")),
+      ]
     case .youdaoWeb: []
     case .google: [SecretField(name: "apiKey", label: "API Key")]
-    case .deepl: [SecretField(name: "authKey", label: "Auth Key", prompt: "免费版以 :fx 结尾")]
+    case .deepl:
+      [SecretField(name: "authKey", label: "Auth Key", prompt: String(localized: "免费版以 :fx 结尾"))]
     case .microsoft:
-      [SecretField(name: "subscriptionKey", label: "Key", prompt: "留空使用免费的 Edge 接口")]
+      [
+        SecretField(
+          name: "subscriptionKey", label: "Key", prompt: String(localized: "留空使用免费的 Edge 接口"))
+      ]
     case .volcengine:
       [
         SecretField(name: "accessKey", label: "Access Key"),
@@ -153,8 +241,35 @@ nonisolated struct TranslateService: Codable, Identifiable, Hashable, Sendable {
     }
   }
 
-  /// 服务分发：翻译会话和设置页「测试连接」共用这一个 switch
+  /// 翻译会话、静默替换、截图翻译和设置页「测试连接」都从这里发：大模型的原文太长时先按段切开、依次翻（X2，`LongText`）。
+  /// 单词模式、讲解不切（讲解只给一句不长的原文，SentenceExplain.maxWeight）
   func translate(_ request: TranslateRequest) -> AsyncThrowingStream<String, Error> {
+    if !request.isWord, !explains(request), let tokens = outputTokens {
+      let pieces = LongText.split(request.text, budget: LongText.budget(outputTokens: tokens))
+      if pieces.count > 1 {
+        return LongText.stream(request, pieces: pieces) { [self] in dispatch($0) }
+      }
+    }
+    return dispatch(request)
+  }
+
+  /// 一次最多出多少 token 的译文（大模型才有；传统接口按字数限、整段一次给）：智谱 1024，AI 服务同它发的 max_tokens，
+  /// 没传 max_tokens 的（OpenAI 官方、Azure）由模型自己定、不切
+  var outputTokens: Int? {
+    switch kind {
+    case .zhipu: return Zhipu.maxTokens
+    case .ai:
+      let aiProtocol = aiProtocol ?? .openai
+      if aiProtocol == .anthropic { return 4096 }
+      return AIService.endpoint(baseURL ?? "", aiProtocol).flatMap {
+        AIService.maxTokens($0, aiProtocol)
+      }
+    default: return nil
+    }
+  }
+
+  /// 服务分发：只有这一个 switch
+  private func dispatch(_ request: TranslateRequest) -> AsyncThrowingStream<String, Error> {
     switch kind {
     case .zhipu: Zhipu.stream(request, service: self)
     case .ai: AIService.stream(request, service: self)

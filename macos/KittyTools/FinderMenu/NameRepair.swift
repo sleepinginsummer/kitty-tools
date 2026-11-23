@@ -93,11 +93,10 @@ extension NameRepair {
     return renamed
   }
 
-  /// 改回去（倒着来）；返回改回了几个
+  /// 改回去（倒着来）；返回改回了几个。原来的名字被占了的不改（FileMoves.land 那一步 renamex_np(RENAME_EXCL)，
+  /// 不走 land 的换名重试：改成「原名 2」不算撤销）
   @MainActor static func undo(_ renamed: [(from: URL, to: URL)]) -> Int {
-    renamed.reversed().filter {
-      (try? FileManager.default.moveItem(at: $0.to, to: $0.from)) != nil
-    }.count
+    renamed.reversed().filter { FileMoves.rename($0.to, to: $0.from) == 0 }.count
   }
 
   @MainActor static func fix(_ files: [URL], island: Island?) {
@@ -108,7 +107,7 @@ extension NameRepair {
     }
     island?.show(
       renamed.count == 1 ? "已修复文件名" : "已修复 \(renamed.count) 个文件名",
-      detail: renamed.count == 1 ? renamed[0].to.lastPathComponent : nil,
+      detail: renamed.count == 1 ? "\(renamed[0].to.lastPathComponent)" : nil,
       actions: [
         Island.Action("撤销") {
           let back = undo(renamed)

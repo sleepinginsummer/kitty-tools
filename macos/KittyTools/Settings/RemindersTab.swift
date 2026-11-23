@@ -1,5 +1,7 @@
 // 设置 › 提醒（PLAN §10「提醒」D1，排在「状态屏」后面）：启用开关、提醒列表（行 = 表情的静止画面 / 标题 / 一行摘要 / 开关，
 // 拖动排序，「+ −」增删，单击一行推进到 ReminderDetail 编辑——和状态屏的状态同一套 OrderedList 交互）、「稍后」推多久。
+// 下面一节「专注模式」：开着任何专注模式时到点的提醒怎么出、现在生没生效、按模式另选的滤镜在系统设置哪里（2026-11-17，
+// ReminderFocus / SystemFocus）。
 // 页头画在自己的 NavigationStack 里，推进时一起换掉。列表直接读写偏好里的 JSON（Prefs.reminders）：ReminderCenter 看着偏好变化跟上，
 // 它删掉响过的一次性提醒时这一页也跟着变。「+」›「新提醒」先不存：推进详情页，第一次改动时才加进列表（Reminder.saving）。
 
@@ -33,7 +35,7 @@ struct RemindersTab: View {
     }
     .task { await StatusEmoji.warmStills() }
     .confirmationDialog(
-      "删除「\(reminders.first { $0.id == removing }?.title ?? "")」？",
+      "删除「\(reminders.first { $0.id == removing }?.displayTitle ?? "")」？",
       isPresented: Binding {
         removing != nil
       } set: {
@@ -68,18 +70,16 @@ struct RemindersTab: View {
             addMenu(list, isFull: isFull)
           }
         } header: {
-          Text("提醒")
+          InfoHeader("提醒", info: "点一行编辑，右边的开关暂停或打开那一条。一次性的提醒点了「知道了」就从列表里拿掉。")
+            .settingsAnchor(.remindersList)
         } footer: {
-          SectionFootnote(
-            "点一行编辑，右边的开关暂停或打开那一条。一次性的提醒点了「知道了」就从列表里拿掉。"
-              + (isFull ? "最多 \(Reminder.maxCount) 条，已经满了，删掉一条才能再加。" : ""))
+          // 满了是状态，照旧写在页脚
+          if isFull { SectionFootnote("最多 \(Reminder.maxCount) 条，已经满了，删掉一条才能再加。") }
         }
         Section {
           EmojiPackToggle()
         } header: {
           Text("图标")
-        } footer: {
-          SectionFootnote(EmojiPackToggle.footnote)
         }
         Section {
           Picker(selection: $snooze) {
@@ -88,18 +88,22 @@ struct RemindersTab: View {
             Text("「稍后」推多久")
             Text("提醒到点后点「稍后」，过这么久再提醒一次")
           }
+          .settingsAnchor(.remindersSnooze)
         } header: {
-          Text("到点之后")
-        } footer: {
-          SectionFootnote(
-            "电脑睡着、锁着屏或者没打开 Kitty 时到点的提醒，晚 5 分钟以内的照常提醒，更晚的回来后合成一条告诉你。"
-              + "每隔一阵的提醒碰上锁屏、睡眠，或者 5 分钟没碰键盘鼠标，算休息过了，回来重新数。")
+          InfoHeader(
+            "到点之后",
+            info:
+              "电脑睡着、锁着屏或者没打开 Kitty 时到点的提醒，晚 5 分钟以内的照常提醒，更晚的回来后合成一条告诉你。每隔一阵的提醒碰上锁屏、睡眠，或者 5 分钟没碰键盘鼠标，算休息过了，回来重新数。"
+          )
         }
+        // 截图自检（fixed）不读这台 Mac 记着的专注模式，固定画「照常」、读得到日志
+        FocusSection(fixed: fixed != nil)
       }
       .gated(by: .reminders)
-      PluginRemoveSection(plugin: .reminders)
+      PluginAboutSection(plugin: .reminders)
     }
     .formStyle(.grouped)
+    .settingsScrollTarget()
   }
 
   /// 单击一行推进详情页，↑↓ 选中（给「−」和 ⌫ 用）、↩ 推进，拖动排序（同状态屏的状态列表）
@@ -109,7 +113,8 @@ struct RemindersTab: View {
         ReminderListRow(
           reminder: reminder,
           summary: reminder.summary(
-            now: now ?? .now, statusTitle: ReminderDetail.status(for: reminder, in: statuses)?.title
+            now: now ?? .now,
+            statusTitle: ReminderDetail.status(for: reminder, in: statuses)?.displayTitle
           ),
           isOn: Binding {
             reminder.isOn
@@ -209,7 +214,7 @@ private struct ReminderListRow: View {
     HStack(spacing: 10) {
       ReminderIcon(symbol: reminder.symbol)
       VStack(alignment: .leading, spacing: 1) {
-        Text(reminder.title).font(.system(size: 13))
+        Text(reminder.displayTitle).font(.system(size: 13))
         Text(summary)
           .font(.system(size: 11))
           .foregroundStyle(.secondary)
@@ -218,7 +223,7 @@ private struct ReminderListRow: View {
       .truncationMode(.tail)
       .accessibilityElement(children: .combine)
       Spacer(minLength: 8)
-      Toggle("打开「\(reminder.title)」", isOn: $isOn)
+      Toggle("打开「\(reminder.displayTitle)」", isOn: $isOn)
         .labelsHidden()
         .toggleStyle(.switch)
         .controlSize(.mini)
@@ -242,5 +247,62 @@ struct ReminderIcon: View {
     StatusPresetIcon(
       symbol: symbol, size: size, plainSymbol: SettingsPage.reminders.symbol,
       plainColor: Style.Family.reminders)
+  }
+}
+
+/// 专注模式那一节（2026-11-17 拍板 B8，晚上改成任何专注模式都认，B2）：开着专注模式时怎么出、现在生没生效（滤镜加在哪几个模式上
+/// 读不到）；按钮打开系统设置里专注模式那一页，按模式另选
+private struct FocusSection: View {
+  /// 截图自检：不读这台 Mac 现在的专注模式（画「照常」、读得到日志）
+  var fixed = false
+  @AppStorage(Prefs.remindersDuringFocus) private var during = ReminderFocusStyle.light.rawValue
+
+  var body: some View {
+    let style = fixed ? ReminderFocusStyle.normal : ReminderFocus.shared.style
+    let mode = fixed ? nil : ReminderFocus.shared.mode
+    Section {
+      Picker(selection: $during) {
+        Text("只在刘海上挂图标").tag(ReminderFocusStyle.light.rawValue)
+        Text("先不提醒，结束后再响").tag(ReminderFocusStyle.hold.rawValue)
+        Text("照常提醒").tag(ReminderFocusStyle.normal.rawValue)
+      } label: {
+        Text("专注模式开着时，到点的提醒")
+        Text(Self.status(style, mode: mode?.displayName))
+      }
+      .settingsAnchor(.remindersFocus)
+      // 读不到系统日志：只剩滤镜（不是管理员账户、系统改了日志的写法）
+      if !fixed, SystemFocus.shared.isRunning, !SystemFocus.shared.isReadable {
+        Text("读不到系统的专注模式：只认加了「提醒」滤镜的模式").foregroundStyle(.orange)
+      }
+      LabeledContent {
+        Button("打开专注模式设置…") {
+          if let url = URL(string: Self.settingsURL) { NSWorkspace.shared.open(url) }
+        }
+      } label: {
+        Text("按模式另选")
+        Text("在某个模式的「专注模式滤镜」里添加 Kitty Tools 的「提醒」")
+      }
+    } header: {
+      InfoHeader(
+        "专注模式",
+        info:
+          "开着任何专注模式（勿扰、睡眠、工作、自己建的）都算。滤镜里另选了的模式以滤镜为准：比如这里选「照常提醒」，只给「工作」加滤镜选「只在刘海上挂图标」。挂在刘海上的提醒，专注模式结束后一起弹一次。要紧的提醒在它的详情里打开「专注模式时也照常提醒」。"
+      )
+    }
+  }
+
+  /// 系统设置里专注模式那一页
+  static let settingsURL = "x-apple.systempreferences:com.apple.Focus-Settings.extension"
+
+  /// 「现在」那一行（纯函数）：认得出是哪个模式时带上名字
+  static func status(_ style: ReminderFocusStyle, mode: String?) -> LocalizedStringResource {
+    switch (style, mode) {
+    case (.light, let name?): "现在：「\(name)」开着，到点的提醒只挂在刘海上"
+    case (.hold, let name?): "现在：「\(name)」开着，到点的提醒等它结束再响"
+    case (.light, nil): "现在：专注模式开着，到点的提醒只挂在刘海上"
+    case (.hold, nil): "现在：专注模式开着，到点的提醒等它结束再响"
+    case (_, let name?): "现在：「\(name)」开着，照常提醒"
+    default: "现在照常提醒"
+    }
   }
 }

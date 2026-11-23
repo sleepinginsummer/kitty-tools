@@ -117,6 +117,26 @@ struct UpdaterTests {
     #expect(Updater.release(fromManifest: manifest(version: "")) == nil)
     #expect(Updater.release(fromManifest: Data(#"{"version":"0.8.1"}"#.utf8)) == nil)
     #expect(Updater.release(fromManifest: Data("<html>404</html>".utf8)) == nil)
+    // Intel 上自己编的（PR #21）：清单里只有 arm64 的包，不认（退回 API）
+    #expect(Updater.release(fromManifest: manifest(), suffix: "_x86_64.zip") == nil)
+  }
+
+  /// 更新包按这份 App 的架构挑（PR #21）：Intel 上只认 _x86_64.zip，release 里只有 _arm64.zip 时没有更新（换上去打不开）
+  @Test func picksArchiveForThisArchitecture() throws {
+    #expect(Updater.archiveSuffix == "_arm64.zip")
+    let both = Self.payload(
+      tag: "macos-v0.2.0",
+      assets: [
+        ("Kitty.Tools_0.2.0_arm64.zip", "https://github.com/x/y/a.zip"),
+        ("Kitty.Tools_0.2.0_x86_64.zip", "https://github.com/x/y/x.zip"),
+      ])
+    #expect(try Updater.release(from: both)?.archive.lastPathComponent == "a.zip")
+    #expect(
+      try Updater.release(from: both, suffix: "_x86_64.zip")?.archive.lastPathComponent == "x.zip")
+    let armOnly = Self.payload(
+      tag: "macos-v0.2.0", assets: [("Kitty.Tools_0.2.0_arm64.zip", "https://github.com/x/y/a.zip")]
+    )
+    #expect(try Updater.release(from: armOnly, suffix: "_x86_64.zip") == nil)
   }
 
   /// 先读清单、读到就不碰 API；清单 404（老 release 没有它）、连不上、解不出来时读 API 的列表；API 限流（403 / 429）时
@@ -171,7 +191,7 @@ struct UpdaterTests {
     let archive = try #require(URL(string: "https://github.com/x/y/K_arm64.zip"))
     let ok = try #require(
       HTTPURLResponse(url: archive, statusCode: 200, httpVersion: nil, headerFields: nil))
-    func attempt(sha256: String) async throws -> String? {
+    func attempt(sha256: String, response: URLResponse? = nil) async throws -> UpdateError? {
       let zip = work.appending(path: "\(UUID()).zip")
       try Data("not a zip".utf8).write(to: zip)
       do {
@@ -179,17 +199,29 @@ struct UpdaterTests {
           target,
           with: .init(
             version: "0.9.0", archive: archive, page: Updater.releasesPage, sha256: sha256),
-          zip: zip, response: ok)
+          zip: zip, response: response ?? ok)
       } catch let error as UpdateError {
         #expect(!FileManager.default.fileExists(atPath: zip.path), "下好的包用完就删")
-        return error.errorDescription
+        return error
       }
       return nil
     }
-    #expect(try await attempt(sha256: String(repeating: "0", count: 64))?.contains("校验值") == true)
+    // 校验值对不上：算网络问题（给「重试」，第五轮体检 E10）
+    let mismatch = try await attempt(sha256: String(repeating: "0", count: 64))
+    #expect(mismatch?.errorDescription?.contains("校验值") == true)
+    #expect(mismatch.map { Updater.failureKind($0, lowOnSpace: true) } == .network)
     // printf 'not a zip' | shasum -a 256
     let real = "a3989126344744ef800dbc88bf7e744853f3f2eac75c9ab3301f4e845ef22078"
-    #expect(try await attempt(sha256: real) == "更新包解不开")
+    let unpack = try await attempt(sha256: real)
+    #expect(unpack?.errorDescription == "更新包解不开")
+    // 解不开：空间够算别的（给发布页），磁盘快满了算磁盘满
+    #expect(unpack.map { Updater.failureKind($0, lowOnSpace: false) } == .other)
+    #expect(unpack.map { Updater.failureKind($0, lowOnSpace: true) } == .diskFull)
+    // 服务器不是 200：网络问题
+    let failed = try #require(
+      HTTPURLResponse(url: archive, statusCode: 503, httpVersion: nil, headerFields: nil))
+    let status = try await attempt(sha256: real, response: failed)
+    #expect(status.map { Updater.failureKind($0, lowOnSpace: false) } == .network)
   }
 
   /// build-dmg.sh 写的清单和 App 读的是同一个文件名、同几个键（发版后才会发现对不上，单测先比对）
@@ -201,6 +233,9 @@ struct UpdaterTests {
     #expect(script.contains("/\(Updater.manifestName)\""))
     #expect(
       script.contains("{version: $version, url: $url, sha256: $sha256, size: $size, page: $page}"))
+    // 更新包的名字跟着架构走，和 Updater.archiveSuffix 的两种对得上（PR #21）
+    #expect(script.contains("ARCH=\"${ARCH:-arm64}\""))
+    #expect(script.contains("ZIP=\"$OUT/${NAME}_${VERSION}_${ARCH}.zip\""))
   }
 
   @Test func comparesVersionsNumerically() {
@@ -332,7 +367,24 @@ struct UpdaterTests {
       #expect(mode & 0o022 == 0, "\(item) \(String(mode, radix: 8))")
     }
 
-    // 好包：换上，签名完好
+    // 包里的 App 是个符号链接（指向一份签名有效的同版本）：拒绝——验签验的是链接那头，换上去的却是链接本身（X11 评审）
+    try makeOldApp()
+    let linkDir = work.appending(path: "link")
+    try FileManager.default.createDirectory(at: linkDir, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: linkDir.appending(path: "Kitty Tools.app"),
+      withDestinationURL: loose.appending(path: "Kitty Tools.app"))
+    let linkZip = work.appending(path: "link.zip")
+    try await Self.shell(
+      "/usr/bin/zip",
+      ["-q", "-y", "-j", linkZip.path, linkDir.appending(path: "Kitty Tools.app").path])
+    await #expect(throws: UpdateError.self) {
+      try await Updater.replace(
+        target, with: .init(version: version, archive: linkZip, page: Updater.releasesPage))
+    }
+    #expect(FileManager.default.fileExists(atPath: target.appending(path: "Contents/marker").path))
+
+    // 好包：换上，签名完好；换之前的那份（.before-update）不留
     try makeOldApp()
     try await Updater.replace(
       target, with: .init(version: version, archive: zip, page: Updater.releasesPage))
@@ -340,6 +392,9 @@ struct UpdaterTests {
     let installed = try #require(
       NSDictionary(contentsOf: target.appending(path: "Contents/Info.plist")))
     #expect(installed["CFBundleShortVersionString"] as? String == version)
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: target.deletingLastPathComponent().path)
+        == ["Kitty Tools.app"])
     try await Self.shell(
       "/usr/bin/codesign",
       ["--verify", "--deep", "--strict", "-R", Updater.requirement, target.path])

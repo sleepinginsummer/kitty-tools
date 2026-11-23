@@ -1,7 +1,8 @@
 // 图片文字识别（Vision，设备端）：剪贴板图片（让截图里的文字能被搜索到）、截图翻译、识字、一键打码共用；识字还认二维码 / 条码。
 // 剪贴板图片的后台识字放在子进程里（第二轮体检 M2，文件末尾「子进程识字」）：识字模型一加载就常驻 45–52 MB，
 // 让它跟着子进程退掉；截图翻译、识字、钉图这些当场要结果的照旧在进程内识——连着识的时候模型留着（热的 0.2 s，
-// 重新加载 0.4–0.6 s），闲下来由空闲回收放掉（「放掉识字模型」一节，2026-10-07）。
+// 重新加载 0.4–0.6 s），闲下来由空闲回收放掉（「放掉识字模型」一节，2026-10-07）；设置里关掉「空闲时释放识字模型」的
+// 不放，开着截图或翻译时启动就在后台预热（「本次运行的前台识字模型」一节，PR #39）。
 // 分段（体检 A32）：先把 Vision 拆开的同一行接回去，再按行框的纵向间距、句末短行和列表记号切段，段内的行按中日文 / 其它文字的规则接起来；截图翻译总是按段送去翻，
 // 识字按设置 › 截图的开关；翻译的「把同一段里的换行接起来」调这里的 joiningLines（纯文本按空行分段），段内接行和识字同一个 joinLine。
 
@@ -10,7 +11,6 @@ import Foundation
 import ImageIO
 import OSLog
 import Synchronization
-import UniformTypeIdentifiers
 import Vision
 
 nonisolated enum OCR {
@@ -57,6 +57,7 @@ nonisolated enum OCR {
   /// 一键打码（2026-11-12 拍板 C5）：识字后每一行里要打码的那几段（Redaction.ranges）各自的框（归一化、原点左下，
   /// 同 Vision）；识别失败 nil、没找到 []。按候选文字里的字符范围取框，不按整行
   @concurrent static func redactionBoxes(in image: CGImage) async -> [CGRect]? {
+    await foreground.beginUse()?.value
     enter()
     defer { leave() }
     guard let observations = try? await request().perform(on: image) else { return nil }
@@ -160,13 +161,29 @@ nonisolated enum OCR {
     return request
   }
 
+  /// 读一个图片文件来识字（访达右键「拷贝图中文字」，2026-11-17）：按照片里记的方向转正（手机竖着拍的照片原始像素是横的，
+  /// 不转 Vision 认不出竖排的字），长边最多 maxSide（4096 认字够用；8192 一张就要解成约 268 MB，评审）；读不了是 nil。
+  /// 解码在主线程外（mac-native §3 第 1 类：缩略图）
+  @concurrent static func image(at url: URL, maxSide: Int = 4096) async -> CGImage? {
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    let options: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceThumbnailMaxPixelSize: maxSide,
+      kCGImageSourceShouldCacheImmediately: true,
+    ]
+    return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+  }
+
   /// 二维码 / 条码的内容（有几个返回几个，重复的去掉）。识字时有码优先用码
   @concurrent static func barcodes(in image: CGImage) async -> [String] {
+    (try? await barcodePayloads(in: image)) ?? []
+  }
+
+  private static func barcodePayloads(in image: CGImage) async throws -> [String] {
     enter()
     defer { leave() }
-    guard let observations = try? await DetectBarcodesRequest().perform(on: image) else {
-      return []
-    }
+    let observations = try await DetectBarcodesRequest().perform(on: image)
     var seen = Set<String>()
     return observations.compactMap(\.payloadString).filter {
       !$0.isEmpty && seen.insert($0).inserted
@@ -422,59 +439,138 @@ nonisolated enum OCR {
     .joined(separator: "\n")
   }
 
+  // MARK: 本次运行的前台识字模型（不同于按系统版本编译的磁盘缓存）
+
+  /// 关掉「空闲时释放识字模型」时的预热（PR #39，AppDelegate.warmRecognitionIfKept）：真实请求（AppDelegate.recognizing、
+  /// 一键打码）先 `beginUse()`，预热正在跑就等它、还没跑就以后也不跑
+  @MainActor static let foreground = ForegroundSession()
+
+  @MainActor final class ForegroundSession {
+    private var claimed = false
+    private var warming: Task<Void, Never>?
+
+    /// 预热和真实请求谁先到谁加载。空闲回收不重置：放掉后等真实请求，不因偏好通知而重新加载。
+    func warmIfUnused(_ work: @escaping @MainActor () async -> Void) {
+      guard !claimed else { return }
+      claimed = true
+      warming = Task(priority: .utility) {
+        await work()
+        warming = nil
+      }
+    }
+
+    /// 如果合成图正在识，让真实请求异步等它；反之不补跑合成图。
+    func beginUse() -> Task<Void, Never>? {
+      claimed = true
+      return warming
+    }
+  }
+
+  /// 和截图识字一样，先找码再识字；只用内存里的合成图，不碰屏幕和剪贴板。
+  @concurrent static func warmForegroundModels() async -> Bool {
+    guard let sample = sampleImage() else { return false }
+    enter()
+    defer { leave() }  // 两种请求之间也不能让空闲回收放掉模型
+    guard (try? await barcodePayloads(in: sample)) != nil else { return false }
+    return await recognizeLines(in: sample)?.isEmpty == false
+  }
+
   // MARK: 准备识字模型（第一次识字）
 
-  /// 系统第一次给本 App 识字时要先把识字模型现场编译一遍，存进 ~/Library/Caches/<bundle id>/com.apple.e5rt.e5bundlecache/
-  /// <系统版本号>：按 App、按系统版本各一份，新装和每次系统更新后的第一次识字都会撞上。2026-10-26 本机实测（27.0.1，机器忙）
-  /// 冷的 45–68 s；编好之后哪个进程第一次识都只要 0.2–0.3 s，中日韩英混排也是——一张只有一个英文词的小图就把要用的都编好了。
-  /// 所以启动时在子进程里拿这样一张小图先识一次（编好的留在缓存里，模型的内存跟着子进程退掉）；当场要识时还没好就等它
-  /// （AppDelegate.recognizing 让刘海岛说在等什么），好了记下系统版本，以后启动不再做。
-  /// ponytail: 只认系统版本，缓存被手动清掉时不知道——那一回照旧慢、只显示「识别中」；要准就改看缓存目录在不在（私有布局）
-  /// 偏好域可以传进来（单测用临时的，不碰宿主 = Dev 版的真实偏好）；只读持久域：临时的那个 suite 按键读会落到宿主 App 的域
-  static func isPrepared(
-    _ defaults: UserDefaults = .standard, domainName: String? = Bundle.main.bundleIdentifier
-  ) -> Bool {
-    domainName.flatMap(defaults.persistentDomain(forName:))?[Prefs.ocrPreparedSystem] as? String
-      == ProcessInfo.processInfo.operatingSystemVersionString
+  /// 磁盘准备只认自家缓存目录里的戳，不猜 Vision 的私有目录结构。整个缓存被清掉，戳跟着消失；
+  /// 系统升级后旧戳的内容也不再匹配。旧版记在偏好里的版本号不算数。
+  static let preparationMarker: URL? = {
+    guard stamp != nil, let id = Bundle.main.bundleIdentifier, !id.isEmpty,
+      let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+    else { return nil }
+    return caches.appending(component: id, directoryHint: .isDirectory).appending(
+      component: "ocr-ready", directoryHint: .notDirectory)
+  }()
+
+  /// 戳里记三段系统版本号和版号，不用跟着界面语言变的 operatingSystemVersionString。
+  static let systemVersion: String? = {
+    let version = ProcessInfo.processInfo.operatingSystemVersion
+    guard
+      let build = NSDictionary(contentsOfFile: "/System/Library/CoreServices/SystemVersion.plist")?[
+        "ProductBuildVersion"] as? String, !build.isEmpty
+    else { return nil }
+    return "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion) (\(build))"
+  }()
+
+  private static let stamp = systemVersion.map { Data($0.utf8) }
+
+  static func isPrepared(marker: URL? = preparationMarker) -> Bool {
+    guard let stamp, let marker, marker.isFileURL,
+      let attrs = try? FileManager.default.attributesOfItem(atPath: marker.path),
+      attrs[.type] as? FileAttributeType == .typeRegular, attrs[.size] as? Int == stamp.count
+    else { return false }
+    return (try? Data(contentsOf: marker)) == stamp
   }
 
   /// 编译最多等这么久，到点杀掉，下次启动再来（本机忙的时候冷的也就一分来钟）
   static let prepareTimeout = Duration.seconds(300)
 
-  @MainActor private static var preparing: Task<Void, Never>?
+  @MainActor private static var preparing: [URL: Task<Bool, Never>] = [:]
 
-  /// 没准备好就准备，同时来的等同一个（记进先来的那个偏好域；只有单测传别的）；好了直接返回。
-  /// 子进程起不来、失败、超时都不记，接下来那次识字自己编（照样慢一回）
-  @MainActor static func prepare(
-    _ defaults: UserDefaults = .standard, domainName: String? = Bundle.main.bundleIdentifier
-  ) async {
-    guard !isPrepared(defaults, domainName: domainName),
-      let executable = Bundle.main.executablePath
-    else { return }
-    let task =
-      preparing
-      ?? Task {
-        defer { preparing = nil }
-        guard let sample = writeSample() else { return }
-        defer { try? FileManager.default.removeItem(at: sample) }
-        let result = try? await Subprocess.run(
-          executable, [helperFlag, sample.path],
-          environment: helperEnvironment(ProcessInfo.processInfo.environment),
-          timeout: prepareTimeout, quality: .utility)
-        if result?.status == 0 {
-          defaults.set(
-            ProcessInfo.processInfo.operatingSystemVersionString, forKey: Prefs.ocrPreparedSystem)
-        } else {
-          Log.clipboard.error("准备识字模型没成（状态 \(result?.status ?? -1)）")
-        }
-      }
-    preparing = task
-    await task.value
+  /// 同一个戳同时只起一个子进程。默认不在单测宿主里写用户的缓存；传临时戳可以验整条路径。
+  @MainActor @discardableResult static func prepare(marker: URL? = preparationMarker) async -> Bool
+  {
+    await prepare(marker: marker, compile: compileInHelper)
   }
 
-  /// 白底黑字「Kitty」的小图，写进临时目录（子进程肯识的两处之一）。得真识得出字：空白图子进程照样成功退出，
-  /// 却只编了文字检测、没编识字的模型（ScreenshotTests.preparesModelOnce 锁住）
-  static func writeSample() -> URL? {
+  @MainActor @discardableResult static func prepare(
+    marker: URL?, compile: @escaping @MainActor () async -> Bool
+  ) async -> Bool {
+    guard let marker, marker.isFileURL else { return false }
+    if isPrepared(marker: marker) { return true }
+    if marker == preparationMarker,
+      ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    {
+      return false
+    }
+    if let task = preparing[marker] { return await task.value }
+    let task = Task {
+      defer { preparing[marker] = nil }
+      return await publishAfterCompilation(marker: marker, compile: compile)
+    }
+    preparing[marker] = task
+    return await task.value
+  }
+
+  @MainActor private static func publishAfterCompilation(
+    marker: URL, compile: @MainActor () async -> Bool
+  ) async -> Bool {
+    guard let stamp else { return false }
+    let directory = marker.deletingLastPathComponent()
+    let pending = directory.appending(component: "ocr-preparing-\(UUID().uuidString)")
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      try stamp.write(to: pending, options: .withoutOverwriting)
+    } catch { return false }
+    defer { try? FileManager.default.removeItem(at: pending) }
+
+    guard await compile() else { return false }
+    // 只把起子进程前留下的临时戳改名。即使原目录被清空、同路径重建，新目录也没有这次的戳。
+    // 两端都相对于同一个打开的目录：改名那一刻目录被换掉，也不会把旧戳移进新目录。
+    let fd = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    return renameat(fd, pending.lastPathComponent, fd, marker.lastPathComponent) == 0
+  }
+
+  @MainActor private static func compileInHelper() async -> Bool {
+    guard let executable = Bundle.main.executablePath else { return false }
+    let result = try? await Subprocess.run(
+      executable, [prepareFlag],
+      environment: helperEnvironment(ProcessInfo.processInfo.environment),
+      timeout: prepareTimeout, quality: .utility)
+    if result?.status == 0 { return true }
+    Log.clipboard.error("准备识字模型没成（状态 \(result?.status ?? -1)）")
+    return false
+  }
+
+  /// 两种准备共用白底黑字的小图。空白图只能加载文字检测，不能加载识字的模型。
+  private static func sampleImage() -> CGImage? {
     guard
       let context = CGContext(
         data: nil, width: 240, height: 80, bitsPerComponent: 8, bytesPerRow: 0,
@@ -493,32 +589,31 @@ nonisolated enum OCR {
         ]))
     context.textPosition = CGPoint(x: 20, y: 24)
     CTLineDraw(line, context)
-    let url = FileManager.default.temporaryDirectory.appending(
-      path: "kitty-ocr-sample-\(UUID().uuidString).png")
-    guard let image = context.makeImage(),
-      let destination = CGImageDestinationCreateWithURL(
-        url as CFURL, UTType.png.identifier as CFString, 1, nil)
-    else { return nil }
-    CGImageDestinationAddImage(destination, image, nil)
-    return CGImageDestinationFinalize(destination) ? url : nil
+    return context.makeImage()
   }
 
   // MARK: 子进程识字（剪贴板后台识字）
 
   /// 子进程就是本 App 的可执行文件带这个参数再起一次：`<可执行文件> --ocr <图片路径>`（入口在 KittyToolsApp.swift 的 Main）
   static let helperFlag = "--ocr"
+  /// 编译磁盘缓存：子进程在内存里生成样图，不接受路径。
+  static let prepareFlag = "--prepare-ocr"
   /// 子进程最多跑这么久，到点杀掉、退回进程内识（整屏截图实测一两秒；长截图慢一些）
   static let helperTimeout = Duration.seconds(60)
 
   /// 这次启动是不是子进程识字
   enum Launch: Equatable {
     case recognize(URL)
-    /// 带了 --ocr 但参数不对：报错退出，别当成正常启动
+    case prepare
+    /// 子进程参数不对：报错退出，别当成正常启动
     case usage
   }
 
-  /// 看命令行（纯函数）：第一个参数不是 --ocr = 正常启动（nil）
+  /// 看命令行（纯函数）：只在第一个参数是自家的子进程参数时分流。
   static func launch(_ arguments: [String]) -> Launch? {
+    if arguments.dropFirst().first == prepareFlag {
+      return arguments.count == 2 ? .prepare : .usage
+    }
     guard arguments.dropFirst().first == helperFlag else { return nil }
     guard arguments.count == 3, !arguments[2].isEmpty else { return .usage }
     return .recognize(URL(filePath: arguments[2]))

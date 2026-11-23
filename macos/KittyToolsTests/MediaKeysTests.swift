@@ -28,6 +28,49 @@ struct MediaKeysTests {
     #expect(MediaKeys.decode(data1: 0x0000_0000) == nil)
   }
 
+  /// 真正的拦截在后台线程：用 AppKit 在主线程造事件，序列化后在后台走生产的读取入口。不发系统事件，
+  /// 不建拦截、不切输入法、不动音量。非媒体子类型（包括输入法切换）必须在读 compound data 前放行
+  /// （6、9 读 data1 会让 SkyLight 断言退出：先读 data1 的写法这里直接崩）。
+  @Test func decodesSystemEventsOffMainThread() async throws {
+    // 开拦截前的现场核对在这台系统上要过（过不了，设置里开了也不接这几个键）
+    #expect(MediaKeys.fieldsReadable)
+    for subtype: Int16 in [0, 6, 7, 8, 9, 11, 12] {
+      for (code, key) in [
+        (0, MediaKeys.Key.volumeUp), (1, .volumeDown), (2, .brightnessUp),
+        (3, .brightnessDown), (7, .mute), (4, nil), (16, nil), (21, nil),
+      ] as [(Int, MediaKeys.Key?)] {
+        for state in [0xA00, 0xA01, 0xB00, 0] {
+          let system = try #require(
+            NSEvent.otherEvent(
+              with: .systemDefined, location: .zero, modifierFlags: [], timestamp: 0,
+              windowNumber: 0, context: nil, subtype: subtype, data1: (code << 16) | state,
+              data2: -1))
+          let data = try #require(system.cgEvent?.data) as Data
+          let press = try await Self.decodeOffMain(data)
+          if subtype == 8, let key, state != 0 {
+            #expect(press?.key == key)
+            #expect(press?.down == (state != 0xB00))
+            #expect(press?.isRepeat == (state == 0xA01))
+          } else {
+            #expect(press == nil)
+          }
+        }
+      }
+    }
+    // Caps Lock 的普通修饰键事件也不能当媒体键（只构造、不发送）。
+    let caps = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 57, keyDown: false))
+    caps.type = .flagsChanged
+    #expect(try await Self.decodeOffMain(#require(caps.data) as Data) == nil)
+  }
+
+  @concurrent nonisolated private static func decodeOffMain(_ data: Data) async throws
+    -> (key: MediaKeys.Key, down: Bool, isRepeat: Bool)?
+  {
+    #expect(pthread_main_np() == 0)
+    let event = try #require(CGEvent(withDataAllocator: nil, data: data as CFData))
+    return MediaKeys.decode(event: event)
+  }
+
   /// 哪些时候接这个键：平时接；按着 ⌥（打开设置）、⇧（反转提示音）、⌃（调外接屏）任一个、锁屏着（岛看不见）交回系统
   @Test func leavesModifiersAndLockScreenToSystem() {
     #expect(MediaKeys.takes(flags: [], locked: false))
@@ -66,6 +109,38 @@ struct MediaKeysTests {
     #expect(MediaKeys.moved(from: 0.25, to: 0.1875, up: false))
     #expect(!MediaKeys.moved(from: 0.25, to: 0.25, up: false))
     #expect(MediaKeys.moved(from: 0, to: 0, up: false))
+  }
+
+  /// 到头了再按（第五轮体检 U13）：100% 再按 +、0 再按 − 算到头；岛上每来一次「到头了」就多弹一下（levelBumps），平常的不算
+  @Test func bumpsAtTheEnds() {
+    #expect(MediaKeys.atEnd(1, up: true) && MediaKeys.atEnd(0.9995, up: true))
+    #expect(!MediaKeys.atEnd(0.9375, up: true) && !MediaKeys.atEnd(1, up: false))
+    #expect(MediaKeys.atEnd(0, up: false) && !MediaKeys.atEnd(0.0625, up: false))
+    let island = Island(showing: nil, geometry: .notch(width: 212, height: 37.5))
+    island.showLevel(Island.Level(kind: .volume, fraction: 0.9375))
+    #expect(island.levelBumps == 0)
+    island.showLevel(Island.Level(kind: .volume, fraction: 1, pushed: true))
+    island.showLevel(Island.Level(kind: .volume, fraction: 1, pushed: true))
+    #expect(island.levelBumps == 2 && island.level?.fraction == 1)
+    island.showLevel(Island.Level(kind: .brightness, fraction: 0, pushed: true))
+    #expect(island.levelBumps == 3)
+  }
+
+  /// 设置页说为什么接不住（第五轮体检 U6）：先看开没开，再看授权、字段核对、建没建起来过；只有核对没过、建不起来时有橙字
+  /// （没授权那一行另有按钮）
+  @Test func reportsWhyKeysAreNotTaken() {
+    #expect(MediaKeys.status(on: false, trusted: false, readable: false, gaveUp: true) == .off)
+    #expect(
+      MediaKeys.status(on: true, trusted: false, readable: false, gaveUp: false) == .needsPermission
+    )
+    #expect(MediaKeys.status(on: true, trusted: true, readable: false, gaveUp: true) == .unreadable)
+    #expect(MediaKeys.status(on: true, trusted: true, readable: true, gaveUp: true) == .failed)
+    #expect(MediaKeys.status(on: true, trusted: true, readable: true, gaveUp: false) == .running)
+    #expect(IslandTab.keyWarning(.unreadable) != nil && IslandTab.keyWarning(.failed) != nil)
+    for status in [MediaKeys.Status.off, .needsPermission, .running] {
+      #expect(IslandTab.keyWarning(status) == nil)
+    }
+    #expect(IslandTab.keyWarning(nil) == nil)
   }
 
   /// 一格是 1/16：先吸到最近的格上再走，到头不出界

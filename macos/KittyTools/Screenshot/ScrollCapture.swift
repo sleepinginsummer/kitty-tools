@@ -1,6 +1,6 @@
 // 长截图会话：截图框选后按 S（或工具栏按钮）进入。遮罩收起、露出实时画面，选区外画一圈边框，旁边一个面板
 // （拼接预览、状态、按钮）。用户在选区里滚动（滚轮、触控板都行），或按空格自动滚动；一直用 ScreenCaptureKit
-// 截选区（滤掉本 App 的所有窗口），交给 ScrollStitcher 拼。↩ 拷贝、⌘S 存储、⇧⌘S 另存为…，Esc 取消。
+// 截选区（滤掉本 App，设置窗这类普通窗口照拍：filter），交给 ScrollStitcher 拼。↩ 拷贝、⌘S 存储、⇧⌘S 另存为…，Esc 取消。
 // 边框和面板是不激活前台的 NSPanel（面板要当 key 收按键），会话结束立即释放；前台 App 一直不变。
 // 预览上滚轮 = 往回看长图前面的内容（右边一条细指示条说在哪一段，双击或滚回最新那头回到跟随；浏览时不滑纸带、不闪接缝）。
 // Whisker（mac-whisker §6 长截图）：面板是永远深色的 HUD（216 宽、圆角 16）；预览像纸带一样滚动、上下 18 pt 渐隐，
@@ -104,15 +104,7 @@ final class ScrollCapture {
     guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
       throw CaptureError.noDisplay
     }
-    // 滤掉本 App 的全部窗口（含之后才建的轻提示）；万一列表里还是没有本 App，退回按窗口排除此刻建好的边框和面板
-    // ponytail: 退回时之后才建的轻提示会进画面；真遇到了再连它们一起换过滤器
-    if let me = content.applications.first(where: { $0.processID == getpid() }) {
-      filter = SCContentFilter(display: display, excludingApplications: [me], exceptingWindows: [])
-    } else {
-      filter = SCContentFilter(
-        display: display,
-        excludingWindows: content.windows.filter { $0.owningApplication?.processID == getpid() })
-    }
+    filter = Self.filter(display: display, content: content)
     configuration = SCStreamConfiguration()
     configuration.sourceRect = source
     configuration.width = Int((source.width * scale).rounded())
@@ -129,13 +121,30 @@ final class ScrollCapture {
     gain = scale
   }
 
+  /// 滤掉本 App（含之后才建的轻提示），只把设置窗这类普通窗口列进例外（ScreenCapture.scrolledOwnWindows）；万一列表里
+  /// 还是没有本 App，退回按窗口排除此刻建好的边框、面板和别的不照拍的自家窗口
+  /// ponytail: 退回时之后才建的轻提示会进画面；真遇到了再连它们一起换过滤器
+  static func filter(display: SCDisplay, content: SCShareableContent) -> SCContentFilter {
+    let kept = ScreenCapture.scrolledOwnWindows(ScreenCapture.ownWindows())
+    guard let me = content.applications.first(where: { $0.processID == getpid() }) else {
+      return SCContentFilter(
+        display: display,
+        excludingWindows: content.windows.filter {
+          $0.owningApplication?.processID == getpid() && !kept.contains($0.windowID)
+        })
+    }
+    return SCContentFilter(
+      display: display, excludingApplications: [me],
+      exceptingWindows: content.windows.filter { kept.contains($0.windowID) })
+  }
+
   private enum CaptureError: LocalizedError {
     case noDisplay, tooSmall
 
     var errorDescription: String? {
       switch self {
-      case .noDisplay: "找不到选区所在的屏幕"
-      case .tooSmall: "选区太小"
+      case .noDisplay: String(localized: "找不到选区所在的屏幕")
+      case .tooSmall: String(localized: "选区太小")
       }
     }
   }
@@ -209,7 +218,8 @@ final class ScrollCapture {
         guard continuation != nil else { return }
         captureStopped = true
         stopAutoScroll()
-        notice = Status(text: "截屏失败，已停止：\(error.localizedDescription)", tone: .warning)
+        notice = Status(
+          text: String(localized: "截屏失败，已停止：\(error.localizedDescription)"), tone: .warning)
         updateStatus()
         return refreshPreview(force: true)
       }
@@ -313,14 +323,15 @@ final class ScrollCapture {
     isArmed: Bool = false
   ) -> Status {
     // Esc 上膛了（U3）：等着再按一次，盖过别的提示（危险色，同录制条放弃上膛）
-    if isArmed { return Status(text: "再按一次 Esc 放弃这张长图", tone: .danger) }
+    if isArmed { return Status(text: String(localized: "再按一次 Esc 放弃这张长图"), tone: .danger) }
     if let notice, !(isLost && !isFull && notice.tone == .normal) { return notice }
-    if isFull { return Status(text: "已经最长了，按 ↩ 拷贝") }
-    if isLost { return Status(text: "对不上了：往回滚一点，再慢慢滚", tone: .lost) }
+    if isFull { return Status(text: String(localized: "已经最长了，按 ↩ 拷贝")) }
+    if isLost { return Status(text: String(localized: "对不上了：往回滚一点，再慢慢滚"), tone: .lost) }
     // 滚轮往回看长图（哪一段看右边的指示条）：不播报，滚的时候别一直念
-    if isBrowsing { return Status(text: "双击预览回到最新", announces: false) }
+    if isBrowsing { return Status(text: String(localized: "双击预览回到最新"), announces: false) }
     return Status(
-      text: isAutoScrolling ? "自动滚动中，按空格或移出选区停止" : "在选区里滚动，或按空格自动滚动",
+      text: isAutoScrolling
+        ? String(localized: "自动滚动中，按空格或移出选区停止") : String(localized: "在选区里滚动，或按空格自动滚动"),
       announces: false)
   }
 
@@ -383,7 +394,8 @@ final class ScrollCapture {
     guard !captureStopped else { return NSSound.beep() }
     guard Permissions.isAccessibilityTrusted else {
       Permissions.requestAccessibility()
-      notice = Status(text: "自动滚动需要「辅助功能」授权，授权后点 ▶ 开始", tone: .warning)
+      notice = Status(
+        text: String(localized: "自动滚动需要「辅助功能」授权，授权后点 ▶ 开始"), tone: .warning)
       return updateStatus()
     }
     direction = stitcher.isGrowingUp ? -1 : 1
@@ -493,7 +505,7 @@ final class ScrollCapture {
     case .lost:
       lostStreak += 1
       if lostStreak >= 4 {
-        notice = Status(text: "对不上，已停止自动滚动", tone: .lost)
+        notice = Status(text: String(localized: "对不上，已停止自动滚动"), tone: .lost)
         return stopAutoScroll()
       }
       // 也许是滚轮根本没落在在动的那一块上（光标停在选区里的外层页面上）：先把它挪进去
@@ -511,7 +523,8 @@ final class ScrollCapture {
       guard sentThisFrame >= 1 || sent >= 1 else { return }
       stalls += 1
       if stalls >= 3 {
-        notice = Status(text: direction > 0 ? "已经滚到底了" : "已经滚到顶了")
+        notice = Status(
+          text: direction > 0 ? String(localized: "已经滚到底了") : String(localized: "已经滚到顶了"))
         stopAutoScroll()
       }
     }
@@ -897,7 +910,7 @@ final class ScrollCaptureHUD: NSView {
     status.setContentCompressionResistancePriority(.required, for: .vertical)
     // 状态区固定两行高（最长的提示——缺授权、截屏失败——要两行），一行的竖直居中：开关自动滚动、出提示时上面的高度读数
     // 和预览不跟着上下跳（原来「自动滚动中…」折成两行，一开自动滚动读数就跳 14 pt）
-    status.stringValue = "一\n二"
+    status.stringValue = "一\n二"  // 只拿来量两行高，不显示
     let content = Self.width - 20
     let twoLines =
       status.cell?.cellSize(forBounds: CGRect(x: 0, y: 0, width: content, height: 1000)).height
@@ -913,12 +926,12 @@ final class ScrollCaptureHUD: NSView {
     // 顺序同截图工具栏、录制条：▶ 标注 ｜ 存储 ▾ ｜ ✕ ✓（取消紧挨主圆钮）。
     // 2026-10-26 加「标注」时另存为收进存储右边的 ▾（同截图工具栏）：六颗 32 pt 的钮在 196 的内容宽里排不下
     let items: [(Item, String, String)] = [
-      (.toggleAuto, "play.fill", "自动滚动（空格）"),
-      (.output(.annotate), "pencil.tip.crop.circle", "标注（A）"),
-      (.output(.save), "square.and.arrow.down", ScreenshotOutput.saveTitle + "（⌘S）"),
-      (.saveMenu, "chevron.down", ScreenshotOutput.saveTitle + " / 另存为…"),
-      (.cancel, "xmark", "取消（Esc）"),
-      (.output(.copy), "checkmark", "拷贝（↩）"),
+      (.toggleAuto, "play.fill", String(localized: "自动滚动（空格）")),
+      (.output(.annotate), "pencil.tip.crop.circle", String(localized: "标注（A）")),
+      (.output(.save), "square.and.arrow.down", ShotKey.tip(ScreenshotOutput.saveTitle, key: "⌘S")),
+      (.saveMenu, "chevron.down", String(localized: "\(ScreenshotOutput.saveTitle) / 另存为…")),
+      (.cancel, "xmark", String(localized: "取消（Esc）")),
+      (.output(.copy), "checkmark", String(localized: "拷贝（↩）")),
     ]
     var row: [NSView] = []
     for (index, (item, symbol, tip)) in items.enumerated() {
@@ -964,8 +977,8 @@ final class ScrollCaptureHUD: NSView {
     speedControl.segmentDistribution = .fillEqually
     speedControl.refusesFirstResponder = true  // 同按钮：点了不抢第一响应者，Esc / ↩ / 空格照旧归 HUD
     speedControl.selectedSegment = 1
-    speedControl.toolTip = "自动滚动的速度"
-    speedControl.setAccessibilityLabel("自动滚动速度")
+    speedControl.toolTip = String(localized: "自动滚动的速度")
+    speedControl.setAccessibilityLabel(String(localized: "自动滚动速度"))
     speedControl.setContentHuggingPriority(.required, for: .vertical)
 
     let stack = NSStackView(views: [preview, readingView, statusBox, speedControl, bar])
@@ -1219,8 +1232,10 @@ final class ScrollCaptureHUD: NSView {
         .init(title: ScreenshotOutput.saveTitle, key: "⌘S") { [weak self] in
           self?.onAction(.output(.save))
         },
-        .init(title: "另存为…", key: "⇧⌘S") { [weak self] in self?.onAction(.output(.saveAs)) },
-      ], label: "存储选项")
+        .init(title: String(localized: "另存为…"), key: "⇧⌘S") { [weak self] in
+          self?.onAction(.output(.saveAs))
+        },
+      ], label: String(localized: "存储选项"))
     openMenu = next
     next.onDismiss = { [weak self, weak next] in
       if self?.openMenu === next { self?.openMenu = nil }
@@ -1243,7 +1258,8 @@ final class ScrollCaptureHUD: NSView {
   override func keyDown(with event: NSEvent) {
     openMenu?.dismiss()
     let flags = event.modifierFlags.intersection([.command, .control, .option])
-    switch Int(event.keyCode) {
+    // A 按打出来的字认（E2），别的是按键位的方向键 / 回车 / Esc / 空格
+    switch event.typedKeyCode {
     case kVK_Escape: onAction(.escape)
     case kVK_Return where flags.isEmpty, kVK_ANSI_KeypadEnter where flags.isEmpty:
       onAction(.output(.copy))
@@ -1257,7 +1273,7 @@ final class ScrollCaptureHUD: NSView {
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     guard window?.isKeyWindow == true else { return super.performKeyEquivalent(with: event) }
     let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-    switch (Int(event.keyCode), flags) {
+    switch (event.typedKeyCode, flags) {
     case (kVK_ANSI_C, .command): onAction(.output(.copy))
     case (kVK_ANSI_S, .command): onAction(.output(.save))
     case (kVK_ANSI_S, [.command, .shift]): onAction(.output(.saveAs))

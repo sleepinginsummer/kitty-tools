@@ -1,6 +1,7 @@
 // 设置 › 启动台（第八族，SPEC R10；2026-10-18）。五组：
 // 「启动台」——总开关（关掉后快捷键、菜单栏、触发角、捏合都不打开）、按键速查；
-// 「排列」——一页几列几行（变少时挤不下的顺到下一页开头、页边界不动，岛上能撤销；E12）；
+// 「排列」——一页几列几行（变少时挤不下的顺到下一页开头、页边界不动，岛上能撤销；E12）、顶上一排常用的 App（默认关）、
+//   推进去的「隐藏的 App」（LaunchpadHiddenPage，issue #44）；
 // 「触控板」——手势 关闭 / 四指捏合 / 五指捏合、灵敏度三档，页脚说清怎么认（系统的开着时让给系统、唤醒后自己接上）；
 //   系统的捏合手势还开着时给一行提示：macOS 26 给「复制命令」让用户自己在终端里关，其他版本给「打开触控板设置」（只读系统设置，不改）；
 //   私有框架加载不了时这一行灰掉写明；
@@ -45,6 +46,16 @@ struct LaunchpadTab: View {
   /// 闭包不可观察），能不能撤仍以 canUndo 为准
   @AppStorage(Prefs.launchpadUndoLayout) private var undoLayout: String?
   @State private var systemPinch = false
+  @AppStorage(Prefs.launchpadFrequentRow) private var frequentRow = false
+  @AppStorage(Prefs.launchpadHiddenApps) private var hiddenText = ""
+  /// 推进去的「隐藏的 App」在 navigation.path（主菜单「返回」也要读写它）
+  @Environment(SettingsNavigation.self) private var navigation
+
+  /// 「隐藏的 App」那一行的状态（先算好再传：可选参数里写三元式，抽字时第二个分支会漏掉）
+  private var hiddenValue: LocalizedStringResource {
+    let count = Launchpad.hiddenIDs(hiddenText).count
+    return count == 0 ? "没有" : "\(count) 个 App"
+  }
 
   /// 系统手势的开关读出来变了没有（变了才重起监听，G8；纯函数）
   nonisolated static func shouldReapply(old: Bool, new: Bool) -> Bool { old != new }
@@ -52,12 +63,15 @@ struct LaunchpadTab: View {
   @State private var confirmsImport = false
 
   var body: some View {
-    NavigationStack {
+    NavigationStack(path: Bindable(navigation).path) {
       VStack(spacing: 0) {
         PageHeader(page: .launchpad)
         form
       }
       .navigationTitle(SettingsPage.launchpad.title)
+      .navigationDestination(for: String.self) { id in
+        if id == LaunchpadHiddenPage.route { LaunchpadHiddenPage() }
+      }
     }
   }
 
@@ -71,10 +85,9 @@ struct LaunchpadTab: View {
           Text("启动台的按键")
           Text("打开 / 收起、翻页、搜索、文件夹里按什么键")
         }
+        .settingsAnchor(.launchpadKeys)
       } header: {
-        Text("启动台")
-      } footer: {
-        SectionFootnote("现有的「启动器」是搜索框，和启动台是两个东西：名字、设置、快捷键都分开。")
+        InfoHeader("启动台", info: "现有的「启动器」是搜索框，和启动台是两个东西：名字、设置、快捷键都分开。")
       }
       Group {
         Section {
@@ -90,6 +103,7 @@ struct LaunchpadTab: View {
             Text("一页几列")
             Text("改少了，每页挤不下的顺到下一页开头")
           }
+          .settingsAnchor(.launchpadColumns)
           LabeledContent {
             HStack(spacing: 8) {
               Text("\(rows) 行")
@@ -102,10 +116,18 @@ struct LaunchpadTab: View {
             Text("一页几行")
             Text("大屏可以多放几行")
           }
+          .settingsAnchor(.launchpadRows)
+          Toggle(isOn: $frequentRow) {
+            Text("顶上一排常用的 App")
+            Text("按这段时间用得多的排，网格往下让一排")
+          }
+          .settingsAnchor(.launchpadFrequent)
+          SettingsPushRow(title: "隐藏的 App", value: hiddenValue) {
+            navigation.path = [LaunchpadHiddenPage.route]
+          }
+          .settingsAnchor(.launchpadHidden)
         } header: {
-          Text("排列")
-        } footer: {
-          SectionFootnote("新装的 App 自动追加到最后一页末尾；卸掉的从布局里拿掉。拖动排序、建文件夹、删 App 都在启动台里做。")
+          InfoHeader("排列", info: "新装的 App 自动追加到最后一页末尾；卸掉的从布局里拿掉。拖动排序、建文件夹、删 App 都在启动台里做。")
         }
         pinchSection
         Section {
@@ -115,6 +137,7 @@ struct LaunchpadTab: View {
             Text("屏幕角")
             Text("鼠标推到角上停一下打开")
           }
+          .settingsAnchor(.launchpadCorner)
           if let option = LaunchpadCornerOption(rawValue: corner),
             option != .off, LaunchpadCorner.systemCornerIsOn(option)
           {
@@ -132,20 +155,34 @@ struct LaunchpadTab: View {
       .gated(by: .launchpad)
       Section {
         LabeledContent {
-          Button("从系统启动台重新导入…") { confirmsImport = true }
+          Button {
+            confirmsImport = true
+          } label: {
+            Text(
+              LocalizedStringResource(
+                "launchpad.reimport", defaultValue: "从系统启动台重新导入…",
+                comment: "短说法：设置 › 启动台「从系统启动台导入」那一行右边的按钮（行名里已经说了从哪导）"))
+          }
         } label: {
           Text("从系统启动台导入")
           Text("页、文件夹、顺序照旧；卸掉的跳过")
         }
+        .settingsAnchor(.launchpadImport)
         LabeledContent {
           Button("恢复默认排列…") { confirmsReset = true }
         } label: {
           Text("恢复默认排列")
           Text("系统 App 在前、其余按名字排")
         }
+        .settingsAnchor(.launchpadReset)
         LabeledContent {
-          Button("撤销上一次导入或恢复默认", action: undo)
-            .disabled(undoLayout == nil || !canUndo())
+          Button(action: undo) {
+            Text(
+              LocalizedStringResource(
+                "launchpad.undoButton", defaultValue: "撤销上一次导入或恢复默认",
+                comment: "短说法：设置 › 启动台「撤销上一次导入或恢复默认」那一行右边的按钮（行名已经说了撤销什么）"))
+          }
+          .disabled(undoLayout == nil || !canUndo())
         } label: {
           Text("撤销上一次导入或恢复默认")
           Text("换回导入、恢复默认或改行列数之前的样子，只能用一次")
@@ -153,7 +190,7 @@ struct LaunchpadTab: View {
       } header: {
         Text("排列数据")
       }
-      PluginRemoveSection(plugin: .launchpad)
+      PluginAboutSection(plugin: .launchpad)
     }
     .onAppear {
       systemPinch = systemPinchOn()
@@ -186,6 +223,7 @@ struct LaunchpadTab: View {
     // macOS 上 Form 在有的容器里会取 columns 样式（标签右对齐一列、说明和标题挤成一行），
     // 和别的设置页（grouped：标题 + 说明堆叠、控件靠右）不一致——显式定成 grouped
     .formStyle(.grouped)
+    .settingsScrollTarget()
   }
 
   @ViewBuilder
@@ -203,6 +241,7 @@ struct LaunchpadTab: View {
         }
         .pickerStyle(.segmented)
         .disabled(!enabled)
+        .settingsAnchor(.launchpadPinch)
         Picker(selection: $pinchSense) {
           ForEach(PinchRecognizer.Sensitivity.allCases, id: \.rawValue) { level in
             Text(level.title).tag(level.rawValue)
@@ -247,18 +286,27 @@ struct LaunchpadTab: View {
         }
       }
     } header: {
-      Text("触控板")
-    } footer: {
       if pinchAvailable() {
-        let systemHelp =
-          TrackpadSystemGesture.usesDockPinchSetting
-          ? "系统的应用程序捏合开着时（macOS 26 默认开着、系统设置里没有开关），捏合交给系统，启动台不响应；关掉之后马上由 Kitty 自己读触控板来认。"
-          : "系统设置 › 触控板 › 更多手势 里的「应用程序」开着时，捏合交给系统，启动台不响应；关掉之后马上由 Kitty 自己读触控板来认。"
-        SectionFootnote(
-          systemHelp
-            + "四指捏合四根、五根手指都认（同系统），捏的时候多碰到一根也接着认；五指只认五根，和四指的横扫（切换桌面、调度中心）完全错开，不容易误开。Mac 从睡眠中唤醒后会自动重新接上触控板，不用重启。"
-        )
+        InfoHeader("触控板", info: pinchInfo)
+      } else {
+        Text("触控板")
       }
     }
+  }
+
+  /// 「触控板」组标题的 ⓘ：系统的捏合开着时怎么回事 + 四指 / 五指怎么认（原来的页脚）
+  private var pinchInfo: LocalizedStringResource {
+    let systemHelp =
+      TrackpadSystemGesture.usesDockPinchSetting
+      ? String(
+        localized:
+          "系统的应用程序捏合开着时（macOS 26 默认开着、系统设置里没有开关），捏合交给系统，启动台不响应；关掉之后马上由 Kitty 自己读触控板来认。"
+      )
+      : String(
+        localized:
+          "系统设置 › 触控板 › 更多手势 里的「应用程序」开着时，捏合交给系统，启动台不响应；关掉之后马上由 Kitty 自己读触控板来认。"
+      )
+    return
+      "\(systemHelp)四指捏合四根、五根手指都认（同系统），捏的时候多碰到一根也接着认；五指只认五根，和四指的横扫（切换桌面、调度中心）完全错开，不容易误开。Mac 从睡眠中唤醒后会自动重新接上触控板，不用重启。"
   }
 }

@@ -11,7 +11,7 @@
 
 ## 0. 需要你拍板的决策点
 
-已归档到 `docs/archive/PLAN-migration.md` §0（D1–D15 全表：推荐、理由、备选）。仍有效的结论：D5 Bundle ID 以后不再改；D7 长期不公证，只走路径 B（§8.3）；D8 应用内更新（`App/Updater.swift`，读本仓库的 latest release）；D10 只支持 Apple 芯片；D15 不设「默认服务」，翻译历史和自动复制取列表里第一个启用的服务。
+已归档到 `docs/archive/PLAN-migration.md` §0（D1–D15 全表：推荐、理由、备选）。仍有效的结论：D5 Bundle ID 以后不再改；D7 长期不公证，只走路径 B（§8.3）；D8 应用内更新（`App/Updater.swift`，读本仓库的 latest release）；D10 只支持 Apple 芯片（2026-11-16 放宽：Intel 能编、能出包，见 §10「Intel 编译」）；D15 不设「默认服务」，翻译历史和自动复制取列表里第一个启用的服务。
 
 ---
 
@@ -39,7 +39,8 @@
 | ImageIO + UniformTypeIdentifiers | 10.x / 11 | PNG 编码、读取尺寸、按需生成缩略图；录屏转 GIF（`CGImageDestination` 逐帧写 GIF，录屏录音第 7 批 `Screenshot/VideoExport.swift`）；状态屏的动画表情：读 HEICS（HEVC 图像序列，带透明通道）的每一帧和时长，转换脚本用它把动画 PNG 写成 HEICS（2026-10-10） |
 | QuickLookThumbnailing `QLThumbnailGenerator` | 10.15 | 剪贴板检查器里文件的真实缩略图（PDF 首页、图片、视频帧） |
 | QuickLookUI `QLPreviewView` | 10.6 | 剪贴板 ⌘Y 放大预览里的文件（嵌在自己的浮层里；不用 `QLPreviewPanel`，见 D3） |
-| Vision `RecognizeTextRequest` | 15.0 | 剪贴板图片 OCR、截图翻译识字；空闲时放掉识字模型用它的私有 `VNSession.globalSession.releaseCachedResources`（2026-10-07 用户同意，接口不在就不放，mac-clipboard §1） |
+| VisionKit `ImageAnalyzer`、`ImageAnalysisOverlayView`（系统的实况文本） | 13 / 14（`selectedRanges`、`text`） | 钉图上直接选字（2026-11-17，§10「截图提示、放大镜开关和钉图选字」）：识别在系统服务 `mediaanalysisd` 里跑（本进程只多十来 MB），选区、跨行、双击选词用系统那一套；只在 `Screenshot/PinPanel.swift` |
+| Vision `RecognizeTextRequest` | 15.0 | 剪贴板图片 OCR、截图翻译识字；空闲时放掉识字模型（设置里能关，PR #39）用它的私有 `VNSession.globalSession.releaseCachedResources`（2026-10-07 用户同意，接口不在就不放，mac-clipboard §1） |
 | ScreenCaptureKit `SCShareableContent` + `SCScreenshotManager` | 14.0 | 截图翻译的冻结帧（逐屏截图）；长截图用 `SCStreamConfiguration.sourceRect`（12.3+）反复截选区 |
 | NaturalLanguage `NLLanguageRecognizer` | 10.14 | 语种检测（替代 Lingua，能识别繁体） |
 | ScreenCaptureKit `SCStream` + `SCRecordingOutput`；AVFoundation `AVAudioRecorder`、`AVCaptureDevice`（麦克风授权与设备）、`AVURLAsset` / `AVAssetImageGenerator` / `AVAssetExportSession` / `AVMutableComposition`；Synchronization `Mutex` | 15.0 | 录屏与录音（2026-09-30 立项，PLAN §10「录屏与录音」）：系统录制管线直接写文件、录音、闪退恢复读文件、最后一帧、音轨导出；录制委托的可变状态（`Mutex` 翻译服务已在用）。第 1 批起在用：`SCStream` + `SCRecordingOutput`（`Screenshot/ScreenRecorder.swift` 录屏）、`AVURLAsset`（启动时读上次闪退留下的文件 `isPlayable`）；第 3 批起 `AVAssetImageGenerator`（停止后取最后一帧，飞入和视频卡用）；第 4 批起 `AVCaptureDevice`（麦克风授权、默认输入的设备名 / 蓝牙、断开通知）；第 5 批起 `AVAudioRecorder`（`Screenshot/AudioRecorder.swift` 录音：m4a、暂停续写、`updateMeters` / `averagePower` 电平，主线程直接用、不挂委托）；第 6 批起 `AVMutableComposition` + `AVAssetExportSession`（录系统声音：录屏管线的 mp4 只取音轨无损导出成 m4a，`ScreenRecorder.extractAudio`）和 `CMSampleBuffer` 的格式描述 / 数据块（样本回调里读 Float32 声音样本算电平）；第 7 批 `AVAssetImageGenerator` 还用来逐帧取 GIF 的帧（`VideoExport`） |
@@ -53,6 +54,7 @@
 | Foundation `URLSession.download`、`Process`（调系统的 `/usr/bin/ditto`、`/usr/bin/codesign`、`/bin/chmod`；启动器 kill / port 列进程的 `/bin/ps`、`/usr/sbin/lsof`；浏览历史 / Firefox 书签的 `/usr/bin/sqlite3 -readonly -json -init /dev/null`；共用 `Shell/Subprocess.swift`，要的输出写临时文件） | — | 应用内更新：下载更新包、解包、验签（D8）；kill 列后台进程和监听端口（体检 D12）、port 列在监听的端口和进程的工作目录（2026-10-08）；导出各家浏览器的浏览历史和 Firefox 书签（体检 D8、第 12 批） |
 | 启动台触控板捏合（第八族，2026-10-18）：运行时 `dlopen` / `dlsym` 系统私有 `MultitouchSupport.framework`（不链接、不写进工程设置；找不到符号 / 设备就退回，别的入口照常），只用 `MTDeviceCreateList` / `MTRegisterContactFrameCallback` / `MTDeviceStart` / `MTDeviceStop`；**不是依赖**，跑起来才加载 | 10.x | 触控板捏合打开 / 收起启动台 |
 | 程序坞预览（第九族，2026-10-22，§10「程序坞预览」）：运行时 `dlopen` / `dlsym` 系统私有 `SkyLight.framework` 的 `_SLPSSetFrontProcessWithOptions` / `SLPSPostEventRecordTo`、CoreGraphics 没公开的 `CGSMainConnectionID` / `CGSHWCaptureWindowList` / `CGSCopySpacesForWindows`、ApplicationServices 的 `_AXUIElementGetWindow` 和已废弃的 `GetProcessForPID`（不链接、不写进工程设置；取不到就退回公开做法，全在 `DockPreview/WindowServer.swift`）；**不是依赖**，跑起来才加载 | 10.x | 窗口编号、截别的桌面上的窗口、查窗口在哪个桌面、按编号切窗口并当 key |
+| 睡眠关蓝牙（插件，2026-11-17，§10「睡眠关蓝牙」，只在 `BluetoothSnooze/BluetoothSnooze.swift`）：运行时 `dlopen` / `dlsym` 系统私有 `IOBluetooth.framework` 的 `IOBluetoothPreferenceGetControllerPowerState` / `IOBluetoothPreferenceSetControllerPowerState`（Bluesnooze、blueutil 用的同一对；不链接，取不到就没有这个插件）；CoreBluetooth `CBManager.authorization`、`CBCentralManager`（只为看 / 弹蓝牙授权，不扫设备）；IOKit `IORegistryEntryCreateCFProperty`（IOPMrootDomain 的 `AppleClamshellState`）；CoreGraphics `CGGetOnlineDisplayList` / `CGDisplayIsBuiltin` | 10.x / 10.15 / 10.x / 10.x | 睡眠时关蓝牙、醒来打开；有没有盖子、合没合、接没接外接显示器 |
 | FinderSync：`FIFinderSync`、`FIFinderSyncController`（访达扩展 target `KittyToolsFinder`；App 里只用 `isExtensionEnabled` / `showExtensionManagementInterface()`） | 10.10 / 10.14 | 访达右键（第十一族，2026-11-08，§10「访达右键」）：访达右键菜单第一层的「新建文件」「拷贝路径」「在“X”中打开」 |
 | 启动器「ip」（2026-10-28）：Darwin `getifaddrs`；SystemConfiguration `SCDynamicStoreCopyValue`（`State:/Network/Global/IPv4` 的 PrimaryInterface）、`SCNetworkInterfaceCopyAll` / `SCNetworkInterfaceGetLocalizedDisplayName`；`URLSession` 问两家外网地址查询服务（`myip.ipip.net/s`、`api.ipify.org`，只在输了 ip 停 0.3 s 后问） | 10.x | 本机的局域网 / 内网地址和网卡名，外网地址（开着代理时国内、国外看到的常不一样，两家都问） |
 | 启动器系统命令（D2，2026-09-27）：`Process` 调 `/usr/bin/pmset`（睡眠、关闭显示器）和 `/usr/bin/osascript`（访达清倒废纸篓、loginwindow 的退出登录 / 重新启动 / 关机 Apple Event、`set volume`）；`NSRunningApplication` 的 `terminate` / `forceTerminate` / `hide`；`FileManager.unmountVolume`；`dlopen` / `dlsym` 系统私有 `login.framework` 的 `SACLockScreenImmediate`（锁屏，用户拍板的私有 API，找不到退回 `CGEvent` 模拟 ⌃⌘Q）；entitlement `com.apple.security.automation.apple-events` + `NSAppleEventsUsageDescription`；`kill(2)` 给 kill 列的进程发 SIGTERM / SIGKILL（体检 D12） | 10.x | 锁屏、睡眠、屏保、废纸篓、退出登录 / 重启 / 关机、退出 / 隐藏 / 强制退出 App、推出磁盘、音量、结束进程 |
@@ -62,6 +64,10 @@
 | 刘海岛的音量 / 亮度提示（2026-11-14，§10「刘海岛完善」D2）：CoreGraphics `CGEvent.tapCreate`（只在 `Shell/MediaKeys.swift`，第二处事件拦截）；**私有框架** DisplayServices `DisplayServicesGetBrightness` / `SetBrightness` / `CanChangeBrightness`（`dlopen` / `dlsym`，只在 `Shell/DisplayBrightness.swift`）；CoreAudio `kAudioDevicePropertyMute`（`Shell/OutputVolume.swift`） | 10.4 / 私有 / 10.x | 吞掉音量 ±、静音、亮度 ± 五个键自己调、在岛上画一行；要「辅助功能」授权，开关开着才建拦截 |
 | 刘海岛的下一个日程（2026-11-14，§10「刘海岛完善」D3，只在 `Shell/NextEvent.swift`）：EventKit `EKEventStore`（`requestFullAccessToEvents`、`predicateForEvents`、`events(matching:)`、`EKEventStoreChanged`） | 14 | 读之后 24 小时的日程；要「日历」完整访问授权（只在设置里打开开关时问），开关开着才读 |
 | 刘海岛的系统一瞬提示（2026-11-13，§10「刘海岛扩展」D1，只在 `Shell/SystemNotices.swift`）：IOKit `IOPSNotificationCreateRunLoopSource` / `IOPSCopyPowerSourcesInfo` / `IOPSCopyPowerSourcesList` / `IOPSGetPowerSourceDescription`；CoreAudio `AudioObjectAddPropertyListenerBlock`（默认输出设备）/ `AudioObjectGetPropertyData`（设备名、传输类型）；Network `NWPathMonitor` | 10.x / 10.x / 10.14 | 接上 / 拔掉电源和电量、耳机连上、断网 / 恢复；都是有变化才通知，开关开着才监听、不要授权 |
+| 平滑滚动插件（2026-11-17，§10「平滑滚动」）：CoreGraphics `CGEvent.tapCreate`（只在 `SmoothScroll/ScrollTap.swift`，第三处事件拦截）、`CGEvent(scrollWheelEvent2Source:)` + `post`（合成的像素滚动）；Synchronization `Mutex` / `Atomic`（主线程和滚动线程之间） | 10.4 / 10.5 / 15 | 接住鼠标滚轮、在单独的线程上滑出去；要「辅助功能」授权，插件添加着才建拦截 |
+| 片段展开插件（2026-11-22，§10「片段展开」）：CoreGraphics `CGEvent.tapCreate`（只在 `SnippetExpand/KeywordTap.swift`，第五处事件拦截，先只听）、Carbon TIS（当前输入源是不是输入法，只在主线程）、辅助功能 `AXTextInputMarkedRange`（正在组字的范围）、`CGWindowListCopyWindowInfo`（输入法候选窗，只读属主和层级）；Synchronization `Mutex` / `Atomic` | 10.4 / 10.5 / 15 | 认出打的关键词、换成片段；要「辅助功能」授权，插件添加着、有片段设了关键词才建拦截 |
+| 提醒的专注模式滤镜（2026-11-17，§10「提醒」B1，只在 `Reminders/ReminderFocus.swift`）：AppIntents `SetFocusFilterIntent`、`AppEnum`（`current`、`suggestedFocusFilters`） | 13 | 用户在 系统设置 › 专注模式 里给某个模式加「提醒」滤镜，那个模式开着时到点的提醒先压着；不要授权，构建时 Xcode 自动抽 `Metadata.appintents`（没做 App Intents 扩展） |
+| 系统专注模式（2026-11-17，§10「专注模式」，只在 `Shell/SystemFocus.swift`）：系统自带的 `/usr/bin/log`（`stream` 常驻、`show --last 7d` 起来时查一次，都只放 donotdisturbd 的「Did receive state update」那一行进来；`Subprocess.lines` / `run`） | — | 认出现在开着哪个专注模式（编号、名字、SF 符号名、颜色名，自定义的也有）：刘海上提示、提醒按它压着；不要授权、不用私有接口。日志的写法不是接口，读不到退回滤镜 |
 | `os.Logger`、Swift Testing | 11 / Xcode 16 | 日志、单元测试 |
 | 本地化：不建 String Catalog；开发语言设为 zh-Hans，Info.plist 声明 `CFBundleLocalizations = [zh-Hans]`，SwiftUI 里直接写中文字面量 | — | 让系统自带的菜单、弹窗、关于面板显示中文 |
 | `xcodebuild`、`hdiutil`、`codesign`、`spctl`、`swift-format`、`jq`（macOS 15 自带）；拿到证书后加 `notarytool`、`stapler` | — | 构建、打包、签名、格式化、changelog 校验 |
@@ -96,29 +102,36 @@
 - 加 1 个 XPC 服务 target `KittyToolsNowPlaying`（2026-11-13，§10「刘海岛扩展」第 2 期）：嵌在 App 的 `Contents/XPCServices/`，
   bundle id `com.apple.kittytools.nowplaying`（读系统的正在播放要这个前缀），只读 MediaRemote、替 App 发播放命令；App 打开
   「正在播放」时 launchd 按需拉起，App 退出就收掉。
-- 不建 SPM 包、framework，没有别的扩展；辅助进程只有上面这个 XPC 服务（和剪贴板识字时本 App 自己当的 `--ocr` 子进程）。
+- 不建 SPM 包、framework，没有别的扩展；辅助进程只有上面这个 XPC 服务和本 App 自己的识字子进程。
 
 **文件结构**（一个概念一个文件，不预先建空目录）
 
 | 目录 | 文件 |
 |---|---|
-| `App/` | `KittyToolsApp.swift`（入口 `@main enum Main`：带 `--ocr` 起的是剪贴板后台识字的子进程，只识字不启动 App；否则启动 `KittyToolsApp`，唯一的 scene 是不插入菜单栏的 MenuBarExtra，菜单栏图标在 `Shell/StatusItem.swift`）、`AppDelegate.swift`（单实例检查、组装对象、生命周期、退出和锁屏清理）、`Updater.swift`（应用内更新，D8）、`Log.swift`（统一日志 os.Logger，不记密钥、URL、剪贴板正文） |
-| `Shell/` | `OverlayPanel.swift`、`HomePanel.swift`（主界面：左键点菜单栏图标打开的那块面板，全部功能一格一格排，分节和菜单同一份；纯函数 `enum Home` + 模型 + 视图，2026-10-29，§10「主界面」）、`WhatsNew.swift`（新功能标记：这一版新加的功能在菜单、主界面、设置侧栏和设置页里那一节挂「新」，清单 + 本机记账 + 规则的纯函数，`NewDot` / `NewTag` 两个小视图；2026-11-05，§10「新功能标记」）、`Feature.swift`（功能开关：十个功能各自能整个关掉（2026-11-04 加了提醒），和设置侧栏的页同名；程序坞预览默认关，`defaultOn`；新装第一次启动只开四个，`seedNewInstall`；2026-10-21，§10「功能开关」「功能管理」）、`FilePanel.swift`（从不激活本 App 的地方开系统的存储 / 打开面板：请求激活 + 面板提到 `.modalPanel` 拿到最前，关掉后还前台；2026-10-18 macOS 27 上激活被驳回、面板开在后面「点了没反应」后加）、`TransientPanel.swift`（用时再建、收起后放掉的浮层：两张 ⌘Y 大卡由它拿着，第二轮体检 M3）、`Memory.swift`（让分配器把空页还给系统，M4；空闲回收的计时 `Memory.IdleTimer`，2026-10-07）、`HotKeyCenter.swift`、`HotKeyRecorder.swift`、`ModifierTaps.swift`（连按两下修饰键的状态机，2026-11-06）、`HotKeyBlock.swift`（在哪些 App 里停用快捷键：名单的存法和「此刻停哪些」的纯函数，2026-11-10，§10「按 App 停用快捷键」）、`Permissions.swift`（辅助功能、屏幕录制、文件和文件夹授权、麦克风（录屏第 4 批）；自动化被拒时打开系统设置）、`Paster.swift`（自家写剪贴板的唯一出口；`write(string:record:)` 把本 App 生成的新文字同时记进剪贴板历史）、`Subprocess.swift`（进程外跑系统命令行工具：更新的 ditto / codesign、系统命令的 pmset / osascript、kill 的 ps / lsof、浏览历史的 sqlite3，还有剪贴板后台识字的子进程（本 App 带 `--ocr`）；要的输出写临时文件，不受 64 KB 管道缓冲限制；可给环境变量、超时、优先级）、`Style.swift`（Whisker 刻度：圆角、七条弹簧曲线、中性色 / 家族色、输入框 `InputBox`、复制对勾停留、卡片表面 `CardSurface`、增强对比度的选中描边 `contrastSelectionBorder`、发丝线 `Hairline` / `hairlineBorder`、主按钮 `BrandButtonStyle`、种类色块、键帽、面板描边、面板内浮层的阴影 `floatingShadow`、空状态 `EmptyState`（剪贴板、翻译浮窗、翻译历史共用，2026-10-12 视觉对齐））、`HoverTracker.swift`（列表行悬停：`.activeAlways` 追踪区，非激活浮层里代替 `onHover`；剪贴板、翻译历史、启动器行共用）、`ListReveal.swift`（列表选中跟随滚动：`ListReveal.target` 纯函数按前缀和给目标 y，`RevealsSelection` 接管 `.scrollPosition`、按上次滚动的终点判断、停下没到补滚一次；剪贴板、启动器、翻译历史共用，第 10 批）、`CommandTextField.swift`（单行输入框：方向键 / 回车 / Tab / Esc 走 doCommandBy，对话框输入框、`maxLength`）、`BarNotice.swift`（剪贴板面板、启动器底栏左边的就地提示）、`SearchLine.swift`（剪贴板面板、启动器顶上的搜索线：线头符号定宽、左右内边距，两块面板同一个，2026-10-12 视觉对齐）、`Accent.swift`（强调色：跟随系统 + 8 色、配色计算、根视图的 `.appAccent()`）、`Island.swift`（刘海岛：全局轻提示，替换原来的 Toast；2026-10-26 起能悬停展开、带按钮，点刘海 / 快捷键能叫出来，§10「刘海岛交互」；`Island.announce` 是 VoiceOver 主动播报的唯一入口）、`IslandBoard.swift`（刘海岛的「那一张」：一排快捷动作 + 最近 10 条提示，2026-10-26；2026-11-13 起最上面列着正在进行的活动、2026-11-14 第 7 批起又不列了）、`IslandActivity.swift`（刘海岛的活动：一直挂着的状态，刘海屏上收起时挂在两侧耳朵上；模型、先后和读数的纯函数、耳朵的画法，2026-11-13，§10「刘海岛扩展」）、`IslandMenuItem.swift`（没有刘海屏时活动挂在菜单栏右边的那一项，2026-11-13）、`SystemNotices.swift`（刘海岛上的系统一瞬提示：电源、电量、耳机、网络，开着才监听，2026-11-13）、`NowPlaying.swift`（刘海岛的正在播放：连包里的 XPC 服务 `KittyToolsNowPlaying`、把它推来的快照变成岛上的活动、替按钮发命令；进度、上不上耳朵、收拾快照的纯函数，2026-11-13，§10「刘海岛扩展」第 2 期）、`MediaKeys.swift`（音量 / 亮度键换成刘海岛上的提示：第二处事件拦截，单独的线程）、`DisplayBrightness.swift`（内建屏亮度的读写，私有 DisplayServices）、`NextEvent.swift`（刘海岛上的下一个日程：EventKit 读日历、开始前 10 分钟挂成活动、会议链接）、`OutputVolume.swift`（系统输出音量的读写和输出设备的图标：公开的 CoreAudio，播放卡片的音量滑杆用）、`NowPlayingWire.swift`（App 和服务之间的约定：协议、命令号、快照，和服务那份逐字一样）、`StatusItem.swift`（菜单栏图标与菜单，NSStatusItem，Whisker D 的呼吸 / 弹一下；`MenuExtra`：菜单栏和启动器内置动作共用的非热键项）、`ActionMenu.swift`（剪贴板 ⌘K、剪贴板筛选面板、剪贴板多选的收藏夹列表、启动器 ⌘K、翻译历史 ⌘K 共用的动作菜单：分节、一级子列表、共用过滤 `filter`（子串 + 拼音前缀），体检 C3 C4）、`SymbolImage.swift`（符号名 → 图：`kitty.` 开头的取资源目录 `FeatureIcons/` 里自画的功能图标，其余 SF Symbols；SwiftUI `Image(symbol:)`、AppKit `NSImage.symbol(_:)`，2026-10-30，§10「功能图标」）、`FirstNonNil.swift`（`Sequence.firstNonNil`：代替会转两次的 `lazy.compactMap(…).first`，2026-11-06 闪退）、`Ticker.swift`（每秒在变的一行读数的图层画法，代替 numericText：整行排一次、按字切成一块块图层，每秒只滚变了的数字；状态屏告示上的小字和录制 HUD 的计时共用，2026-10-11 从 `StatusScreen/StatusTicker.swift` 挪过来） |
+| `App/` | `KittyToolsApp.swift`（入口 `@main enum Main`：带 `--ocr <图片路径>` 起的是剪贴板后台识字的子进程，`--prepare-ocr` 在子进程用合成图准备模型；两者都不启动 App。否则启动 `KittyToolsApp`，唯一的 scene 是不插入菜单栏的 MenuBarExtra，菜单栏图标在 `Shell/StatusItem.swift`）、`AppDelegate.swift`（单实例检查、组装对象、生命周期、退出和锁屏清理；第五轮体检 H1 起主文件只留存储属性和建它们的那几段，方法按概念拆在同目录的 `AppDelegate+Lifecycle.swift`（启动接线、按功能开关起停、退出收尾）、`+Entry.swift`（各面板的开关、全局动作 / 菜单栏 / 启动器内置动作的分发、打开设置）、`+Notes.swift`（便签的入口）、`+Translate.swift`（输入 / 划词 / 替换 / 复制即译）、`+Screenshot.swift`（截图框选、长截图、出图、截图历史和标注遮罩、截图类共用的冻结与框选）、`+ShotText.swift`（截图翻译、识字）、`+Recording.swift`（录屏、录音）、`+StatusMenu.swift`（菜单栏菜单）、`+Startup.swift`（欢迎引导、单实例让位、备份时机、开库））、`Updater.swift`（应用内更新，D8）、`Log.swift`（统一日志 os.Logger，不记密钥、URL、剪贴板正文） |
+| `Shell/` | `OverlayPanel.swift`、`Plugin.swift`（插件的声明：分组、要的授权和现查、添加状态跟不跟同步、介绍页的几行，2026-11-17 §10「插件页改版」）、`HomePanel.swift`（主界面：左键点菜单栏图标打开的那块面板，全部功能一格一格排，分节和菜单同一份；纯函数 `enum Home` + 模型 + 视图，2026-10-29，§10「主界面」）、`WhatsNew.swift`（新功能标记：这一版新加的功能在菜单、主界面、设置侧栏和设置页里那一节挂「新」，清单 + 本机记账 + 规则的纯函数，`NewDot` / `NewTag` 两个小视图；2026-11-05，§10「新功能标记」）、`Feature.swift`（功能开关：十个功能各自能整个关掉（2026-11-04 加了提醒），和设置侧栏的页同名；程序坞预览默认关，`defaultOn`；新装第一次启动只开四个，`seedNewInstall`；2026-10-21，§10「功能开关」「功能管理」）、`FilePanel.swift`（从不激活本 App 的地方开系统的存储 / 打开面板：请求激活 + 面板提到 `.modalPanel` 拿到最前，关掉后还前台；2026-10-18 macOS 27 上激活被驳回、面板开在后面「点了没反应」后加）、`TransientPanel.swift`（用时再建、收起后放掉的浮层：两张 ⌘Y 大卡由它拿着，第二轮体检 M3）、`Memory.swift`（让分配器把空页还给系统，M4；空闲回收的计时 `Memory.IdleTimer`，2026-10-07）、`HotKeyCenter.swift`、`HotKeyRecorder.swift`、`ModifierTaps.swift`（连按两下修饰键的状态机，2026-11-06）、`HotKeyBlock.swift`（在哪些 App 里停用快捷键：名单的存法和「此刻停哪些」的纯函数，2026-11-10，§10「按 App 停用快捷键」）、`Permissions.swift`（辅助功能、屏幕录制、文件和文件夹授权、麦克风（录屏第 4 批）；自动化被拒时打开系统设置）、`Paster.swift`（自家写剪贴板的唯一出口；`write(string:record:)` 把本 App 生成的新文字同时记进剪贴板历史）、`Subprocess.swift`（进程外跑系统命令行工具：更新的 ditto / codesign、系统命令的 pmset / osascript、kill 的 ps / lsof、浏览历史的 sqlite3，还有剪贴板后台识字的子进程（本 App 带 `--ocr`）；要的输出写临时文件，不受 64 KB 管道缓冲限制；可给环境变量、超时、优先级；一直跑着的按行交输出 `lines`，2026-11-17 专注模式的 log stream）、`Style.swift`（Whisker 刻度：圆角、七条弹簧曲线、中性色 / 家族色、输入框 `InputBox`、复制对勾停留、卡片表面 `CardSurface`、增强对比度的选中描边 `contrastSelectionBorder`、发丝线 `Hairline` / `hairlineBorder`、主按钮 `BrandButtonStyle`、种类色块、键帽、面板描边、面板内浮层的阴影 `floatingShadow`、空状态 `EmptyState`（剪贴板、翻译浮窗、翻译历史共用，2026-10-12 视觉对齐））、`HoverTracker.swift`（列表行悬停：`.activeAlways` 追踪区，非激活浮层里代替 `onHover`；剪贴板、翻译历史、启动器行共用）、`ListReveal.swift`（列表选中跟随滚动：`ListReveal.target` 纯函数按前缀和给目标 y，`RevealsSelection` 接管 `.scrollPosition`、按上次滚动的终点判断、停下没到补滚一次；剪贴板、启动器、翻译历史共用，第 10 批）、`CommandTextField.swift`（单行输入框：方向键 / 回车 / Tab / Esc 走 doCommandBy，对话框输入框、`maxLength`）、`BarNotice.swift`（剪贴板面板、启动器底栏左边的就地提示）、`SearchLine.swift`（剪贴板面板、启动器顶上的搜索线：线头符号定宽、左右内边距，两块面板同一个，2026-10-12 视觉对齐）、`Accent.swift`（强调色：跟随系统 + 8 色、配色计算、根视图的 `.appAccent()`）、`InterfaceLanguage.swift`（界面语言：跟随系统 / 简体中文 / English 的存法、升级上来的保持中文，2026-11-15，§10「多语言」）、`Island.swift`（刘海岛：全局轻提示，替换原来的 Toast；2026-10-26 起能悬停展开、带按钮，点刘海 / 快捷键能叫出来，§10「刘海岛交互」；`Island.announce` 是 VoiceOver 主动播报的唯一入口；第五轮体检 H1 拆出 `Island+Activity.swift`（活动、慢的进行中缩进耳朵）、`Island+Board.swift`（那一张和键盘）、`Island+Notch.swift`（听刘海和鼠标）、`IslandView.swift`（岛的画面和它用的几件））、`IslandBoard.swift`（刘海岛的「那一张」：一排快捷动作 + 最近 10 条提示，2026-10-26；2026-11-13 起最上面列着正在进行的活动、2026-11-14 第 7 批起又不列了）、`IslandActivity.swift`（刘海岛的活动：一直挂着的状态，刘海屏上收起时挂在两侧耳朵上；模型、先后和读数的纯函数、耳朵的画法，2026-11-13，§10「刘海岛扩展」）、`IslandMenuItem.swift`（没有刘海屏时活动挂在菜单栏右边的那一项，2026-11-13）、`SystemNotices.swift`（刘海岛上的系统一瞬提示：电源、电量、耳机、网络，开着才监听，2026-11-13）、`Chime.swift`（刘海岛的几声提示音：整点报时、日程开始、睡眠模式打开；录着时不响、专注模式时只有睡眠那一声响，2026-11-17，§10「专注模式」第 3 批）、`SystemFocus.swift`（系统现在开着哪个专注模式：常驻 `log stream` 读系统日志、起来时往回查一次；刘海两边的开 / 关提示，告诉提醒；读日志的几个纯函数，2026-11-17，§10「专注模式」）、`NowPlaying.swift`（刘海岛的正在播放：连包里的 XPC 服务 `KittyToolsNowPlaying`、把它推来的快照变成岛上的活动、替按钮发命令；进度、上不上耳朵、收拾快照的纯函数，2026-11-13，§10「刘海岛扩展」第 2 期）、`MediaKeys.swift`（音量 / 亮度键换成刘海岛上的提示：第二处事件拦截，单独的线程）、`DisplayBrightness.swift`（内建屏亮度的读写，私有 DisplayServices）、`NextEvent.swift`（刘海岛上的下一个日程：EventKit 读日历、开始前 10 分钟挂成活动、会议链接）、`OutputVolume.swift`（系统输出音量的读写和输出设备的图标：公开的 CoreAudio，播放卡片的音量滑杆用）、`NowPlayingWire.swift`（App 和服务之间的约定：协议、命令号、快照，和服务那份逐字一样）、`StatusItem.swift`（菜单栏图标与菜单，NSStatusItem，Whisker D 的呼吸 / 弹一下；`MenuExtra`：菜单栏和启动器内置动作共用的非热键项）、`ActionMenu.swift`（剪贴板 ⌘K、剪贴板筛选面板、剪贴板多选的收藏夹列表、启动器 ⌘K、翻译历史 ⌘K 共用的动作菜单：分节、一级子列表、共用过滤 `filter`（子串 + 拼音前缀），体检 C3 C4）、`SymbolImage.swift`（符号名 → 图：`kitty.` 开头的取资源目录 `FeatureIcons/` 里自画的功能图标，其余 SF Symbols；SwiftUI `Image(symbol:)`、AppKit `NSImage.symbol(_:)`，2026-10-30，§10「功能图标」）、`FirstNonNil.swift`（`Sequence.firstNonNil`：代替会转两次的 `lazy.compactMap(…).first`，2026-11-06 闪退）、`Ticker.swift`（每秒在变的一行读数的图层画法，代替 numericText：整行排一次、按字切成一块块图层，每秒只滚变了的数字；状态屏告示上的小字和录制 HUD 的计时共用，2026-10-11 从 `StatusScreen/StatusTicker.swift` 挪过来） |
 | `Storage/` | `Database.swift`、`Backup.swift`（数据库的每日备份 `Backup` + 打不开时的恢复 `Recovery`，第二轮体检 S2）、`Keychain.swift`、`Prefs.swift`、`SettingsArchive.swift`（设置与数据的导出与导入：文件格式、读文件时的校验、整类替换 / 按 id 合并、密钥的加解密，片段 / 文字收藏 / 生词本的导出，2026-10-07；2026-10-12 加第七类「便签」`NoteEntry`、格式 2：逐条宽松解码、按编号并进便签库）、`SettingsBackup.swift`（设置与数据的每日自动备份：导出文件每天存一份、导入前存一份，起名、列出、写、轮换，2026-10-08）、`SyncRecords.swift`（全局同步里一条一条的数据的合并规则和文件写法：账本比出本机改动、版本钟、墓碑、后改的赢，纯函数；2026-10-23）、`SyncLedger.swift`（`SyncSource` 协议：仓库交出该同步的那份、落合并结果；账本存法，2026-10-24）、`SettingsSync.swift`（设置、全局快捷键、功能开关接进全局同步：一项一条、留在本机的键、透传，2026-10-24）、`WebDAV.swift`（WebDAV 客户端：PROPFIND / GET / PUT / DELETE / MKCOL / MOVE、multistatus 解析、出错分类，issue #18，2026-11-13）（~~`LegacyImport.swift`~~ 2026-09-26 随旧版导入删掉） |
-| `Clipboard/` | `ClipboardWatcher.swift`、`ClipboardStore.swift`、`ClipItem.swift`、`ClipboardFilter.swift`、`ContentForm.swift`、`Search.swift`、`ImageStore.swift`、`OCR.swift`、`ClipboardPanelModel.swift`（面板状态与操作：筛选标签、选中 / 多选、键盘命令、粘贴 / 复制 / 删除撤销栈、⌘K）、`ClipboardPanelView.swift`、`ClipRowView.swift`、`LensView.swift`（透镜：选中行原地展开的预览）、`PreviewView.swift`、`Dialogs.swift`、`Snippet.swift`（片段占位符展开）、`LinkPreview.swift`（链接富预览：按块读网页 og 标签、isFetchable、内存缓存；头图的缩略图空闲时丢掉、照留着的字节重解）、`QuickLookView.swift`（⌘Y 放大预览）、`ClipDrag.swift`（行拖到别的 App：AppKit 拖放会话 + 行首图标块和标题的预览，体检 D3） |
-| `Translate/` | `TranslateCoordinator.swift`、`TranslateService.swift`（服务列表与配置：内置 11 家可删可加回、自建 AI 实例、厂商预设）、`Language.swift`（应用内语言、语种检测、源 / 目标解析）、`SelectionReader.swift`、`SourceTextView.swift`（多行输入框：翻译原文、剪贴板编辑正文 / 新建片段、便签的快速记一条；便签的正文不用它，用 `Notes/NoteTextView.swift`）、`HTTP.swift`（JSON POST、SSE 读取、中文错误信息）、`SSE.swift`、`Providers/`（`FreeProviders.swift`（不用 key 的系统翻译、有道词典，2026-11-05）、`Zhipu.swift`、`AIService.swift`（OpenAI 兼容 / Azure / Anthropic，也给智谱复用流式请求；按地址认厂商的表 `AIVendor`，第 13 批）、`RESTProviders.swift`（百度、有道、有道网页版、Google、DeepL / DeepLX、微软）、`CloudProviders.swift`（火山、腾讯，请求签名）、`Signing.swift`（摘要工具、非流式请求包装））、`TranslatePanelView.swift`、`ProviderCardView.swift`（含服务身份 `ServiceTile`：官方 logo、官网图标或品牌色块，彗星边框、骨架扫光）、`ServiceIcons.swift`（自建 AI 服务的官网图标：推官网、经 `LinkPreview.siteIcon` 取、磁盘缓存，第 13 批）、`ResultText.swift`（结果卡片的正文：普通 Text + 生成中的光标；原 RevealText 的显影第二轮体检第 1c 批拿掉）、`HistoryStore.swift`、`HistoryView.swift`（含历史 ⌘K 的动作和 `HistoryMenu`：导出、清空，浮窗「⋯」菜单 / 历史 ⌘K / 设置 › 翻译共用）、`Speaker.swift`（朗读：收起即停、挑高音质声线；英文单词放有道真人发音、卡片读哪段字、单词卡的读音行，2026-11-05）、`WordLookup.swift`（查词：是不是一个词、系统词典查询与解析（英英、汉语、牛津英汉汉英三种格式）、单词模式示例，D4）、`DictionaryCardView.swift`（系统词典卡）、`TranslateServiceSync.swift`（翻译服务列表接进全局同步，密钥不同步；2026-10-24）、`ScreenshotRegions.swift`（闭合气泡、按钮、标签的范围探测）、`ScreenshotOverlay.swift`（截图翻译「把译文直接盖回截图上」：按段抹底色、排译文、贴回冻结帧，2026-11-05 PR #5） |
-| `Settings/` | `HotKeyBlockSection.swift`（设置 › 快捷键 最下面「在这些 App 里停用」，2026-11-10）、`IslandTab.swift`（设置 › 刘海岛：那一张上快捷动作的开关和先后、列不列最近的提示，2026-11-12 PR #17）、`FinderMenuTab.swift`（设置 › 访达右键：开关、系统里扩展开没开、「用 App 打开」的列表，2026-11-08）、`RemindersTab.swift`、`ReminderDetail.swift`（设置 › 提醒的列表和详情，2026-11-04）、`GeneralTab.swift`、`FeaturesPage.swift`（通用 › 功能推进去的那一页，2026-11-07）、`WebSearchPage.swift`（启动器 › 网页搜索与快捷链接推进去的那张列表，2026-11-07）、`HotkeysTab.swift`、`ClipboardTab.swift`、`TranslateTab.swift`、`AboutTab.swift`（关于页：更新日志读 `Resources/changelog.json`——随包的 JSON、一条一行，`ChangelogTests` 锁格式；2026-10-18 加的「未来计划」一节 2026-11-13 按用户要求删了）、`LauncherTab.swift`、`AppAliasesPage.swift`（启动器 › 应用别名：按应用名 / 别名筛选、编辑多个别名，2026-11-09）、`ScreenshotTab.swift`（另有截图页、录制页共用的快速保存一行 `SaveDirectoryRow`）、`RecordTab.swift`（录制页：录屏、录音，2026-10-03 从截图页拆出来）、`SettingsTransfer.swift`（通用页最后一组「导出与导入」和两张表单，2026-10-07）、`SyncSection.swift`（通用页「同步」一节：选文件夹 / 连服务器、状态、停止 / 立即同步、其他电脑；2026-10-23 从便签页挪来）、`SyncServerForm.swift`（「连接服务器…」的表单：地址、文件夹、用户名、密码、测试连接，issue #18，2026-11-13）、`SettingsWindow.swift`（D 阶段从 Shell 搬来：NavigationSplitView 侧栏 + 搜索 + 页头）、`OnboardingView.swift`（首次安装的欢迎引导：欢迎 + 按一下试试）、`ShortcutsSheet.swift`（快捷键速查表 + `ShortcutsButton`）、`OrderedList.swift`（可拖动排序列表共用的「+ −」按钮条、行高、详情页页头）、`TranslateServiceDetail.swift`（翻译服务详情页）、`SearchEngineDetail.swift`（网页搜索 / 快捷链接详情页）；`StatusScreenTab.swift`（设置 › 状态屏：状态列表的加、删、排序、恢复自带的，退出提示的开关）、`StatusPresetDetail.swift`（改一个状态的详情页：六项 + 图标格子 + 缩小的预览）；`LaunchpadTab.swift`（设置 › 启动台，2026-10-18：总开关、触控板捏合（开关 / 灵敏度 / 系统手势提示）、触发角（带系统冲突提示）、行列数（显示当前值）、从系统启动台导入 / 恢复默认排列 / 撤销、排列数据说明）、`NotesTab.swift`（设置 › 便签，2026-10-12 第 2 批的骨架：正文字号、打开全部便签、数据怎么存的说明）、`ScriptsSection.swift`（设置 › 启动器「脚本命令」「命令」两节：开关、怎么写脚本、文件夹、新建、拖进来导入先看全文、读不成的原因、「命令和别名」那一行，2026-11-07）、`LauncherCommandsSection.swift`（推进去的「命令和别名」页 `LauncherCommandsPage`：名称 / 别名 / 启用的表）、`ScriptGuide.swift`（推进去的「怎么写脚本」说明页 `ScriptGuidePage`，含命令的查找路径）、`NewScriptSheet.swift`（「新建脚本」的小表单：名字、关键词、结果给谁、用什么写，2026-11-08 第三轮 D2）。`SettingsWindow.swift` 里另有两个普通窗口共用的 `NSApplication.leaveDockIfNoWindows`（关掉一个时别的普通窗口都不开着了才切回 accessory）、`DockPreviewTab.swift`（程序坞预览：启用、两项授权，私有接口缺了时橙字说后果；2026-10-22） |
-| `Launcher/` | `LauncherItem.swift`（结果项与内置动作）、`AppCatalog.swift`（App 目录 + 中文名 + 拼音 + bundle id）、`AppAliases.swift`（应用别名：稳定身份、存储、搜索词扩充，2026-11-09）、`LauncherMatch.swift`（匹配与排序纯函数）、`LauncherUsage.swift`（使用记录表 + 收藏表 launcher_favorites，体检 D13）、`LauncherModel.swift`、`LauncherPanelView.swift`、`FileSearch.swift`（文件搜索：open / find / 空格开头，NSMetadataQuery 查询、排除、排序、最近的文件、授权提示，M13）、`SystemCommands.swift`（系统命令目录、quit / hide / forcequit / eject / kill / port 解析与只读列举，D2）、`SystemControl.swift`（系统命令的执行：锁屏、pmset、osascript、退出 App、推出、给进程发信号）、`Processes.swift`（kill 列的后台进程：ps / lsof 输出解析与排序，体检 D12；port 的端口行也在这里，2026-10-08）、`IPAddresses.swift`（「ip」：本机网卡地址、两家外网地址查询、拼行，2026-10-28）、`ExchangeRates.swift`（计算器的汇率换算：「100 usd」解析、按表换算、取汇率表和存进偏好，2026-11-04）、`SiteIcons.swift`（网址行的网站图标：读本机 Chromium 系浏览器的 Favicons 库 + 链接预览，按主机缓存，体检 D6）、`BrowserHistory.swift`（各家浏览历史 + Firefox 书签：克隆后 sqlite3 导出、解析、行，体检 D8、第 12 批）、`Bookmarks.swift`（浏览器书签：Chromium 系 JSON、Safari plist，Firefox 取 BrowserHistory 读好的）、`Browsers.swift`（第 12 批：浏览器表、装没装、数据目录与多配置、偏好里开着的、克隆别人的库、读失败分「没授权 / 没有文件」）、`DirectItems.swift`（网址 / 路径直达，纯函数）、`WebSearch.swift`（网页搜索与快捷链接列表）；`AppCatalog.swift` 顺带扫系统设置面板（体检 D9），`Calculator.swift` 含单位换算表和进制（体检 D11）、`WebSearchSync.swift`（网页搜索与快捷链接接进全局同步；2026-10-24）；脚本命令（2026-11-07，§10「脚本命令」）：`ScriptCommand.swift`（一个脚本 = 一条命令：开头注释的两种写法、参数切分、列表输出解析、输出收拾、给脚本的环境，纯函数）、`ScriptLibrary.swift`（从哪读：默认文件夹 / 另加的 / 包里的自带脚本，主线程外读、看下载标记；设置页用的新建 / 导入 / 复制自带的）、`ScriptIcons.swift`（图片 / https 网址图标：主线程外读、下载一次存进缓存，出错原因；启动器和设置的表共用的 `ScriptIconView`，2026-11-07 第二轮 B1 B2）、`ScriptAIGuide.swift`（给 AI 的脚本写法说明，第二轮 A1）、`ScriptRunner.swift`（怎么跑：按 #! 调解释器、登录 shell 的 PATH、超时和停止、去下载标记）、`ScriptTerminal.swift`（全文输出那一页认终端颜色：SGR → AttributedString，纯函数；2026-11-08 第三轮 A2）、`LauncherCommands.swift`（「命令」表：内置关键词命令 / 系统命令 / 脚本的别名和开关、别名换回原关键词） |
+| `Clipboard/` | `ClipboardWatcher.swift`、`ClipboardStore.swift`、`ClipItem.swift`、`ClipboardFilter.swift`、`ContentForm.swift`、`Search.swift`、`ImageStore.swift`、`OCR.swift`、`OCRPreparationMarkerWatcher.swift`（识字标记和缓存目录被清掉时在后台重新准备，PR #42）、`ClipboardPanelModel.swift`（面板状态与操作：筛选标签、选中 / 多选、键盘命令、粘贴 / 复制 / 删除撤销栈、⌘K）、`ClipboardPanelView.swift`、`ClipRowView.swift`、`LensView.swift`（透镜：选中行原地展开的预览）、`PreviewView.swift`、`Dialogs.swift`、`Snippet.swift`（片段占位符展开）、`LinkPreview.swift`（链接富预览：按块读网页 og 标签、isFetchable、内存缓存；头图的缩略图空闲时丢掉、照留着的字节重解）、`QuickLookView.swift`（⌘Y 放大预览）、`ClipDrag.swift`（行拖到别的 App：AppKit 拖放会话 + 行首图标块和标题的预览，体检 D3） |
+| `Translate/` | `TranslateCoordinator.swift`、`TranslateService.swift`（服务列表与配置：内置 11 家可删可加回、自建 AI 实例、厂商预设）、`Language.swift`（应用内语言（30 种，第四轮体检 X1）、语种检测、源 / 目标解析）、`LongText.swift`（长文分段翻译：大模型原文太长时按段切开、依次翻，X2）、`SelectionReader.swift`、`SourceTextView.swift`（多行输入框：翻译原文、剪贴板编辑正文 / 新建片段、便签的快速记一条；便签的正文不用它，用 `Notes/NoteTextView.swift`）、`HTTP.swift`（JSON POST、SSE 读取、中文错误信息）、`SSE.swift`、`Providers/`（`FreeProviders.swift`（不用 key 的系统翻译、有道词典，2026-11-05）、`Zhipu.swift`、`AIService.swift`（OpenAI 兼容 / Azure / Anthropic，也给智谱复用流式请求；按地址认厂商的表 `AIVendor`，第 13 批）、`RESTProviders.swift`（百度、有道、有道网页版、Google、DeepL / DeepLX、微软）、`CloudProviders.swift`（火山、腾讯，请求签名）、`Signing.swift`（摘要工具、非流式请求包装））、`TranslatePanelView.swift`、`ProviderCardView.swift`（含服务身份 `ServiceTile`：官方 logo、官网图标或品牌色块，彗星边框、骨架扫光）、`ServiceIcons.swift`（自建 AI 服务的官网图标：推官网、经 `LinkPreview.siteIcon` 取、磁盘缓存，第 13 批）、`ResultText.swift`（结果卡片的正文：普通 Text + 生成中的光标；原 RevealText 的显影第二轮体检第 1c 批拿掉）、`HistoryStore.swift`、`HistoryView.swift`（含历史 ⌘K 的动作和 `HistoryMenu`：导出、清空，浮窗「⋯」菜单 / 历史 ⌘K / 设置 › 翻译共用）、`Speaker.swift`（朗读：收起即停、挑高音质声线；英文单词放有道真人发音、卡片读哪段字、单词卡的读音行，2026-11-05）、`WordLookup.swift`（查词：是不是一个词、系统词典查询与解析（英英、汉语、牛津英汉汉英三种格式）、单词模式示例，D4）、`SentenceExplain.swift`（句子讲解：这句讲不讲、给模型照着写的示例，issue #35）、`DictionaryCardView.swift`（系统词典卡）、`TranslateServiceSync.swift`（翻译服务列表接进全局同步，密钥不同步；2026-10-24）、`ScreenshotRegions.swift`（闭合气泡、按钮、标签的范围探测）、`ScreenshotOverlay.swift`（截图翻译「把译文直接盖回截图上」：按段抹底色、排译文、贴回冻结帧，2026-11-05 PR #5） |
+| `Settings/` | `AppShortcutsTab.swift`（设置 › App 快捷键：按住 ⌘、按多久、授权，2026-11-17）、`SmoothScrollTab.swift`（设置 › 平滑滚动：两条滑块、鼠标单独反向、停用的 App、辅助功能，2026-11-17）、`PluginSections.swift`（插件页统一的「权限」组和页底「关于这个插件」，2026-11-17）、`PluginsPage.swift`（设置 › 全部插件：侧栏插件组第一行，按用途分组、一行一个，2026-11-17 §10「插件页改版」）、`PluginIntroPage.swift`（没添加的插件的介绍页）、`PluginPermissionRow.swift`（插件要的一项授权一行，每种授权的名字和色块）、`KeepAwakeTab.swift`（设置 › 保持唤醒：现在、屏幕、定时、移除插件，2026-11-12）、`BluetoothSnoozeTab.swift`（设置 › 睡眠关蓝牙：什么时候关、上次关 / 开的时刻、蓝牙授权，2026-11-17）、`HotKeyBlockSection.swift`（设置 › 快捷键 最下面「在这些 App 里停用」，2026-11-10）、`IslandTab.swift`（设置 › 刘海岛外面：点刘海一组、活动五个推进行、「高级…」，2026-11-12 PR #17；2026-11-18 设置改版拆出子页）、`IslandPages.swift`（刘海岛的六个子页：快捷动作、正在播放、日程与月历、音量与亮度、专注模式、系统提示，2026-11-18）、`FinderMenuTab.swift`（设置 › 访达右键：开关、系统里扩展开没开、「用 App 打开」的列表，2026-11-08）、`CompressSkipPage.swift`（访达右键 › 压缩时跳过推进去的那一页：常见的开关、另外跳过的列表和添加的小框，2026-11-15）、`RemindersTab.swift`、`ReminderDetail.swift`（设置 › 提醒的列表和详情，2026-11-04）、`GeneralTab.swift`、`FeaturesPage.swift`（通用 › 功能推进去的那一页，2026-11-07）、`WebSearchPage.swift`（启动器 › 网页搜索与快捷链接推进去的那张列表，2026-11-07）、`HotkeysTab.swift`、`ClipboardTab.swift`、`TranslateTab.swift`、`AboutTab.swift`（关于页：更新日志读 `Resources/changelog.json`——随包的 JSON、一条一行，`ChangelogTests` 锁格式；2026-10-18 加的「未来计划」一节 2026-11-13 按用户要求删了）、`LauncherTab.swift`、`AppAliasesPage.swift`（启动器 › 应用别名：按应用名 / 别名筛选、编辑多个别名，2026-11-09）、`ScreenshotTab.swift`（另有截图页、录制页共用的快速保存一行 `SaveDirectoryRow`）、`RecordTab.swift`（录制页：录屏、录音，2026-10-03 从截图页拆出来）、`SettingsTransfer.swift`（通用页最后一组「导出与导入」和两张表单，2026-10-07）、`SyncSection.swift`（通用页「同步」一节：选文件夹 / 连服务器、状态、停止 / 立即同步、其他电脑；2026-10-23 从便签页挪来）、`SyncServerForm.swift`（「连接服务器…」的表单：地址、文件夹、用户名、密码、测试连接，issue #18，2026-11-13；服务器不认密码时「更新密码…」的小表单 `SyncPasswordForm` 也在这里，第五轮体检 E1）、`SettingsWindow.swift`（D 阶段从 Shell 搬来：NavigationSplitView 侧栏 + 搜索 + 页头）、`OnboardingView.swift`（首次安装的欢迎引导：欢迎 + 按一下试试）、`ShortcutsSheet.swift`（快捷键速查表 + `ShortcutsButton`）、`OrderedList.swift`（可拖动排序列表共用的「+ −」按钮条、行高、详情页页头）、`TranslateServiceDetail.swift`（翻译服务详情页）、`SearchEngineDetail.swift`（网页搜索 / 快捷链接详情页）；`StatusScreenTab.swift`（设置 › 状态屏：状态列表的加、删、排序、恢复自带的，退出提示的开关）、`StatusPresetDetail.swift`（改一个状态的详情页：六项 + 图标格子 + 缩小的预览）；`LaunchpadHiddenPage.swift`（设置 › 启动台 › 隐藏的 App，issue #44）、`LaunchpadTab.swift`（设置 › 启动台，2026-10-18：总开关、触控板捏合（开关 / 灵敏度 / 系统手势提示）、触发角（带系统冲突提示）、行列数（显示当前值）、从系统启动台导入 / 恢复默认排列 / 撤销、排列数据说明）、`NotesTab.swift`（设置 › 便签，2026-10-12 第 2 批的骨架：正文字号、打开全部便签、数据怎么存的说明）、`ScriptsSection.swift`（设置 › 启动器「脚本命令」「命令」两节：开关、怎么写脚本、文件夹、新建、拖进来导入先看全文、读不成的原因、「命令和别名」那一行，2026-11-07）、`LauncherCommandsSection.swift`（推进去的「命令和别名」页 `LauncherCommandsPage`：名称 / 别名 / 启用的表）、`ScriptGuide.swift`（推进去的「怎么写脚本」说明页 `ScriptGuidePage`，含命令的查找路径）、`NewScriptSheet.swift`（「新建脚本」的小表单：名字、关键词、结果给谁、用什么写，2026-11-08 第三轮 D2）。`SettingsWindow.swift` 里另有两个普通窗口共用的 `NSApplication.leaveDockIfNoWindows`（关掉一个时别的普通窗口都不开着了才切回 accessory）、`DockPreviewTab.swift`（程序坞预览：启用、两项授权，私有接口缺了时橙字说后果；2026-10-22）。设置改版（2026-11-18，§10「设置改版」）加的：`SettingsIndex.swift`（设置项登记表：每一行的页、标题、中英搜索词、读写的偏好键、放在外面 / 哪个子页 / 高级；侧栏「设置项」那一组的搜索和排序；`.settingsAnchor` 滚到那一行、描边）、`SettingsSubpage.swift`（推进去的子页：路由 `sub:<页>.<名>`、`SubpageForm` 骨架）、`AdvancedSheet.swift`（页底「高级…」按钮和表单）、`SettingsReset.swift`（「恢复默认」：只删改过的、登记的键，岛上给撤销）、`SettingsPreview.swift`（悬停预览：舞台、`.previews(场景)`、三个场景） |
+| `Launcher/` | `LauncherItem.swift`（结果项与内置动作）、`AppCatalog.swift`（App 目录 + 中文名 + 拼音 + bundle id）、`PathBrowser.swift`（路径模式：以 / 或 ~/ 开头时列文件夹里的东西，纯函数 + 主线程外读目录，2026-11-18 §10「启动器浏览文件夹」）、`AppAliases.swift`（应用别名：稳定身份、存储、搜索词扩充，2026-11-09）、`LauncherMatch.swift`（匹配与排序纯函数）、`LauncherUsage.swift`（使用记录表 + 收藏表 launcher_favorites，体检 D13）、`LauncherModel.swift`（状态和存储属性；第五轮体检 H1 拆出同目录的 `LauncherModel+CommandHotKeys.swift`、`+Search.swift`、`+Execute.swift`、`+Scripts.swift`、`+Favorites.swift`、`+QuickLook.swift`、`+Keyboard.swift`、`+ActionMenu.swift`，按原来的 MARK 分）、`LauncherPanelView.swift`、`FileSearch.swift`（文件搜索：open / find / 空格开头，NSMetadataQuery 查询、排除、排序、最近的文件、授权提示，M13）、`SystemCommands.swift`（系统命令目录、quit / hide / forcequit / eject / kill / port 解析与只读列举，D2）、`SystemControl.swift`（系统命令的执行：锁屏、pmset、osascript、退出 App、推出、给进程发信号）、`Processes.swift`（kill 列的后台进程：ps / lsof 输出解析与排序，体检 D12；port 的端口行也在这里，2026-10-08）、`IPAddresses.swift`（「ip」：本机网卡地址、两家外网地址查询、拼行，2026-10-28）、`ExchangeRates.swift`（计算器的汇率换算：「100 usd」解析、按表换算、取汇率表和存进偏好，2026-11-04）、`SiteIcons.swift`（网址行的网站图标：读本机 Chromium 系浏览器的 Favicons 库 + 链接预览，按主机缓存，体检 D6）、`BrowserHistory.swift`（各家浏览历史 + Firefox 书签：克隆后 sqlite3 导出、解析、行，体检 D8、第 12 批）、`Bookmarks.swift`（浏览器书签：Chromium 系 JSON、Safari plist，Firefox 取 BrowserHistory 读好的）、`Browsers.swift`（第 12 批：浏览器表、装没装、数据目录与多配置、偏好里开着的、克隆别人的库、读失败分「没授权 / 没有文件」）、`DirectItems.swift`（网址 / 路径直达，纯函数）、`WebSearch.swift`（网页搜索与快捷链接列表）；`AppCatalog.swift` 顺带扫系统设置面板（体检 D9），`Calculator.swift` 含单位换算表和进制（体检 D11）、`WebSearchSync.swift`（网页搜索与快捷链接接进全局同步；2026-10-24）；脚本命令（2026-11-07，§10「脚本命令」）：`ScriptCommand.swift`（一个脚本 = 一条命令：开头注释的两种写法、参数切分、列表输出解析、输出收拾、给脚本的环境，纯函数）、`ScriptLibrary.swift`（从哪读：默认文件夹 / 另加的 / 包里的自带脚本，主线程外读、看下载标记；设置页用的新建 / 导入 / 复制自带的）、`ScriptIcons.swift`（图片 / https 网址图标：主线程外读、下载一次存进缓存，出错原因；启动器和设置的表共用的 `ScriptIconView`，2026-11-07 第二轮 B1 B2）、`ScriptAIGuide.swift`（给 AI 的脚本写法说明，第二轮 A1）、`ScriptRunner.swift`（怎么跑：按 #! 调解释器、登录 shell 的 PATH、超时和停止、去下载标记）、`ScriptTerminal.swift`（全文输出那一页认终端颜色：SGR → AttributedString，纯函数；2026-11-08 第三轮 A2）、`LauncherCommands.swift`（「命令」表：内置关键词命令 / 系统命令 / 脚本的别名和开关、别名换回原关键词）、`SystemShortcuts.swift`（「快捷指令」：系统的 shortcuts 命令在进程外列出、运行，缓存 60 秒，第四轮体检 X10）、`MenuSearch.swift`（搜前台 App 的菜单项：读到的菜单变成行、按标题和路径配，归 App 快捷键插件；第五轮体检 N3，2026-11-19） |
 | `Launchpad/` | （启动台，第八族，0.6.0，2026-10-18 第 1 批起；拍板和做法在 §10「启动台」，规矩在 `mac-launchpad`）`LaunchpadLayout.swift`（模型和全部纯函数：页 / 格子 / 文件夹、合并本机 App、默认排法、挪格子、建 / 加 / 拖出 / 解散文件夹、按行列数重新分页、存偏好；不变式由 `LaunchpadFuzzTests` 锁住）、`LaunchpadCatalog.swift`（App 目录：复用 `AppCatalog.scan()`，只留 .app、不要访达和系统设置面板；bundle id、分类、App Store 收据；`LaunchpadIcons` 后台画、常驻的图标位图）、`LaunchpadWallpaper.swift`（背景：那块屏的壁纸在后台裁好、模糊，缓存一张）、`LaunchpadModel.swift`（一块屏的状态：当前页、搜索、选中、拖动 / 落点 / 停留合成 / 跨页让位、文件夹页、Esc 取消、抖动、滚轮）、`LaunchpadMetrics.swift`（按屏幕大小和行列数算的网格尺寸，界面和拖动判定共用）、`LaunchpadPager.swift`（翻页的纯状态机）、`LaunchpadDrag.swift`（拖动的时长、正在拖的那一格、滑进落点的那一份，落点 / 第几格的纯函数）、`LaunchpadPanel.swift`（全屏面板 `LaunchpadPanel`，第七个自建窗口例外；深色外观、滚轮 / 两指滑、⌘← / ⌘→ / ⌘W、方向键入口、失去 key 的判断、窗口簿记）、`LaunchpadView.swift`（模糊的壁纸、照 macOS 15 比例的 7 × 5 网格、居中占位的搜索框、页点、各层的层次和文件夹开关的时机、按下 / 选中、VoiceOver）、`LaunchpadFolderView.swift`（打开的文件夹：后面糊掉的那层、从方块长出来 / 缩回去的纸、名字 / 图标 / 页点、改名）、`LaunchpadIconView.swift`（图层抖动的 App 图标、文件夹面板里的图标、文件夹方块）、`Launchpad.swift`（总控：开关、后台 App 目录、布局读写 / 读不出来时保护、打开 App、回收、导入 / 恢复 / 撤销、捏合和触发角的起停、收起后放掉）、`LaunchpadRecycle.swift`（抖动模式删 App 的确认，`NSWorkspace.recycle` 可注入）、`LaunchpadImport.swift`（系统旧库只读拷贝 + `mode=ro` 读 WAL）、`PinchRecognizer.swift`（纯状态机：开始 / 每帧进度 / 松手（进度 + 速度）/ 取消，松手走完还是退回）、`TouchpadWatcher.swift`（96 字节触点、Mutex 桥（每帧的进度也在里面）、唤醒重注册）、`LaunchpadMissionControl.swift`（打开前认调度中心、开着就让它退：只认 macOS 27 的 WindowManager 整屏 19 层窗口）、`LaunchpadZoom.swift`（开 / 收那一个数：窗口透明度 + 上面那层的缩放，跟手时屏幕刷新回调每帧取进度，松手和按键入口走同一条临界阻尼弹簧）、`LaunchpadCorner.swift`（每屏一个状态栏层级的透明 `NSPanel`、重新武装、系统触发角只读） |
 | `DockPreview/` | （程序坞预览，第九族，0.7.0，2026-10-22 第 1 批起；拍板和做法在 §10「程序坞预览」）`WindowServer.swift`（窗口服务器的私有接口：窗口编号、截窗口、在哪个桌面、按编号切过去；运行时取，取不到退回公开做法）、`DockWatcher.swift`、`SwitcherWatcher.swift`（⌘Tab 时读系统切换器的选中，2026-11-06）（听程序坞：图标列表的选中变化 → 停在哪个 App 图标上；辅助功能坐标换算；读属性的小函数）、`DockWindows.swift`（一个 App 的窗口：辅助功能表 + 别的桌面上的，并表的纯函数 `merge` / `resolveIDs`；切过去、关掉）、`WindowShots.swift`（缩略图：当场截、主线程外缩小、最多留 20 张）、`DockPreview.swift`（控制器：什么时候弹、换、收，点了切过去 / 关掉；面板是普通 NSPanel + `PreviewHost`）、`DockPreviewView.swift`（面板内容和 `DockPreviewModel`）、`DockPreviewLayout.swift`（纯函数：缩略图多大、一排放不下就缩再换行、面板摆哪、选哪块屏、鼠标还算不算在附近 `keepsOpen`、离开后的倒计时 `Linger`） |
-| `FinderMenu/` | （访达右键，第十一族，2026-11-08；拍板和做法在 §10「访达右键」）`FinderLink.swift`（扩展交过来的网址：解析和凭证、拷贝的字、交给 App 打开哪些都是纯函数，`perform` 做那一步）、`NewFile.swift`（新建文件：自带五种模板在 `Resources/new-file/`、数据目录「新建文件模板」文件夹、重名让开、自定义后缀的框）、`FinderMenuItem.swift`（每一项的开关和默认值）、`FileMoves.swift`（移动到 / 复制到、剪切 / 粘贴、替身、彻底删除；动文件的一条队 `enqueue`、不覆盖的改名 `land`、记账的临时名 `temporary`）、`Archives.swift`（压缩、解压到这里，系统 tar / ditto）、`ZipNames.swift`（读 zip 的中央目录：名字的编码、加没加密）、`NameRepair.swift`（修复乱码文件名，扩展里有一份逐字一样的）、`FileFlags.swift`（显示 / 隐藏 隐藏文件、隐藏所选项、扩展名）、`FileHash.swift`（拷贝哈希） |
+| `FinderMenu/` | （访达右键，第十一族，2026-11-08；拍板和做法在 §10「访达右键」）`FinderLink.swift`（扩展交过来的网址：解析和凭证、拷贝的字、交给 App 打开哪些都是纯函数，`perform` 做那一步）、`NewFile.swift`（新建文件：自带五种模板在 `Resources/new-file/`、数据目录「新建文件模板」文件夹、重名让开、自定义后缀的框）、`FinderMenuItem.swift`（每一项的开关和默认值）、`FinderKeys.swift`（访达里的 ⌘X 剪切、⌘V 移动：第四处事件拦截，issue #33）、`FileMoves.swift`（移动到 / 复制到、剪切 / 粘贴、替身、彻底删除；动文件的一条队 `enqueue`、不覆盖的改名 `land`、记账的临时名 `temporary`）、`Archives.swift`（压缩、解压到这里，系统 tar / ditto）、`ZipNames.swift`（读 zip 的中央目录：名字的编码、加没加密）、`NameRepair.swift`（修复乱码文件名，扩展里有一份逐字一样的）、`FileFlags.swift`（显示 / 隐藏 隐藏文件、隐藏所选项、扩展名）、`FileHash.swift`（拷贝哈希） |
+| `BluetoothSnooze/` | （睡眠关蓝牙，插件，2026-11-17；做法在 §10「睡眠关蓝牙」）`BluetoothSnooze.swift`（睡前关、醒来只打开自己关掉的、授权；私有接口 `Bluetooth`、盖子和外接屏 `Machine`；什么时候关的纯函数 `shouldTurnOff`）。设置页是 `Settings/BluetoothSnoozeTab.swift` |
+| `SmoothScroll/` | （平滑滚动插件，2026-11-17，issue #14；拍板和做法在 §10「平滑滚动」，规矩在 mac-overlay-panel §11 第三处）`ScrollSmoothing.swift`（纯函数：哪些滚轮归它管、修饰键和反向、滚多远、指数逼近的 `Motion`、去抖 `Bounce`、停用的 App 和游戏、别的改滚轮的工具）、`ScrollTap.swift`（滚动线程：事件拦截、按屏幕刷新出帧、合成事件的记号；`ScrollShared` 是主线程和它之间唯一的共享）、`SmoothScroll.swift`（主线程：跟着插件和授权起停、设置和前台 App 写给滚动线程、醒来和回到前台时重建） |
+
+| `AppShortcuts/` | （App 快捷键，插件，2026-11-17；拍板和做法在 §10「App 快捷键」）`AppShortcuts.swift`（控制器：看着 ⌘ 单独按住、到点再确认、读菜单、弹 / 收面板）、`CommandHold.swift`（单独按住 ⌘ 的状态机，纯函数）、`MenuShortcuts.swift`（主线程外读前台 App 菜单栏里的快捷键，还原成符号的纯函数 `keys`）、`AppShortcutsView.swift`（面板内容、`AppShortcutsModel`、排版的纯函数 `AppShortcutsLayout`）。设置页是 `Settings/AppShortcutsTab.swift` |
+| `KeyRemapping/` | （键位映射插件，PR #43，2026-11-22；做法在 §10「键位映射」）`HIDKey.swift`（源键 / 目标键的 HID 用法目录：键帽名、🌐、F1–F24、媒体键）、`HIDKeyMapping.swift`（读写一个键盘服务的 `UserKeyMapping`，纯函数 `plan`：只撤自己写的、和规则一模一样的已有条目算自己的）、`KeyRemapping.swift`（插件的起停、每把键盘的规则、键盘连上 / 断开的 IOKit 通知、移除和退出时撤销）；设置页 `Settings/KeyRemappingTab.swift` |
+| `SnippetExpand/` | （片段展开，插件，2026-11-22；拍板和做法在 §10「片段展开」，规矩在 mac-overlay-panel §11 第五处）`SnippetKeyword.swift`（关键词的规矩：能打出来的字、长度、重名 / 撞前缀 / 全是字母的提醒，纯函数）、`KeyBuffer.swift`（拦截线程上攒的那几个字：哪些键清空、词首、取最长，纯状态）、`KeywordTap.swift`（拦截线程：只听的事件拦截、认出关键词投回主线程、删关键词的 ⌫ 带记号）、`SnippetExpander.swift`（主线程：跟着插件、剪贴板、授权和关键词起停；展不展开、输入法组字、删再粘贴并还原剪贴板、便签正文里就地换、带填空的交给剪贴板面板）。设置页 `Settings/SnippetExpandTab.swift`；关键词存在片段上（`ClipItem.keyword`，clips.keyword 列） |
 | `macos/KittyToolsNowPlaying/` | 正在播放服务 target（XPC，不在 `KittyTools/` 里，2026-11-13 刘海岛扩展第 2 期）：`main.swift`（入口、`NSXPCListener`、合并通知再读、推给 App、替 App 发命令）、`MediaRemote.swift`（全仓库唯一碰私有框架 MediaRemote 的文件：读、通知、封面、支持的命令）、`NowPlayingWire.swift`（和 App 那份逐字一样的约定）；设置在 `Config/NowPlaying.xcconfig`、`NowPlaying-Info.plist` |
 | `macos/KittyToolsFinder/` | 访达扩展 target（不在 `KittyTools/` 里）：`FinderMenu.swift`（只画菜单，点了用 App 的网址交过去）；设置在 `Config/Finder.xcconfig`、`Finder-Info.plist`、`Finder.entitlements` |
-| `Screenshot/` | `ScreenCapture.swift`（逐屏冻结帧 + 同一刻的窗口 Z 序快照）、`RegionSelector.swift`（框选会话、每屏一个遮罩、选区几何纯函数）、`SelectionView.swift`（遮罩画面与交互：图层绘制、窗口悬停、手柄、放大镜、工具栏）、`Redaction.swift`（一键打码：一行字里认手机号、邮箱、卡号、身份证号，识字框换成打码框，2026-11-12）、`ElementFinder.swift`（悬停认窗口里的元素：问指针下那扇窗口的主人这一点上是什么、往上取框；裁剪 / 过滤 / 去重、换层是纯函数，2026-11-08）、`ScreenshotOutput.swift`（PNG、快速保存、另存为）、`PinPanel.swift`（钉图；第二轮体检 F1 起还有「钉住剪贴板里的图」的取图、解码、找位置）、`Annotation.swift`（标注模型，显示与导出共用 draw，M10）、`EditorToolbar.swift`（HUD 主工具栏 + 样式托盘，M10，Whisker 重做）、`TranslationCard.swift`（截图翻译盖回截图上时放不下的段：选区外的译文卡片，2026-11-08）、`FlyCard.swift`（截图飞入右下角 + 快门声，Whisker S1；录屏第 3 批起录屏的最后一帧也从这里飞，落地多播放符号和时长 `VideoMarks`）、`ScrollCapture.swift`（长截图会话：边框、侧边面板、抓帧循环、自动滚动）、`ScrollStitcher.swift`（长截图拼接，纯逻辑）、`ShotKeys.swift`（截图时能改的 21 个键，2026-11-06）、`AnnotateOverlay.swift`（标注遮罩：整屏压暗、图居中、滚动与缩放、工具栏和样式托盘、出图；长截图按 A 和截图历史里双击都用它，2026-10-26）、`ScrollCanvas.swift`（长图画布：只画看得见的那一段 + 标注交互，标注层复用 `AnnotationCanvas`）、`ShotHistory.swift`（截图历史：原图 + 标注 + 缩略图存 <数据目录>/shots/，记录在主库的 shots 表，按天数和总量清理，2026-10-26）、`ShotHistoryWindow.swift`（历史窗口和模型：筛选、按天分组、每条的操作、缩略图缓存）、`ShotHistoryView.swift`（历史窗口的界面：网格 + 预览 + 操作）、`Clothesline.swift`（晾衣绳：面板、什么时候滑下来 / 收起、挂上 / 取下、卡片上的动作，第十族 2026-10-26）、`ClotheslineLayout.swift`（晾衣绳的几何与时机：排法、垂度、菜单栏那一条、收不收，纯函数）、`ClotheslineRope.swift`（绳子的物理：verlet 质点 + 重力 + 阻尼 + 距离约束，纯值类型）、`ClotheslineView.swift`（晾衣绳的内容：绳子、卡片、夹子、悬停和鼠标 `CardMouse`）、`ShotShelf.swift`（CleanShot 式常驻缩略图，Whisker D；录屏第 3 批加视频卡 `ShelfCard.Kind.video`，右键菜单 / 旁白动作同一份 `ShelfCard.menu`）、`SizeField.swift`（遮罩里的尺寸胶囊：就地输入宽高、比例菜单）、`ScreenRecorder.swift`（录屏会话：SCRecordingOutput 先写到同卷、系统不清理的地方再挪进快速保存目录、白名单面板的例外过滤器、选区边框、菜单栏停止项、中断与闪退恢复，录屏第 1 批；第 2 批加倒数、放弃、帧率 / 倒数 / 光标设置；第 3 批挪好后取最后一帧 `poster`；第 4 批按录制条开关配声音 / 麦克风 / 点按（`Options`、`configure`）、开录前问麦克风授权、麦克风断开；录制条（四个开关：系统声音、麦克风、显示点按、显示按键） `RecordBar` 在 `EditorToolbar.swift`、框选是 `SelectionView` 的 `.record` 模式；手测反馈第 1 批起点按圈由 `InputOverlay` 画，`configure` 只管声音，过滤器例外多并一个它的窗口号 `exceptedOwnWindows`）、`InputOverlay.swift`（录屏里显示用户的输入，手测反馈第 1 批 2026-10-01：显示点按开着时盖在被录区域上的透明 NSPanel（普通实例、不接鼠标、层级 popUpMenu + 2），global / local 鼠标监听，按下圆盘 / 右键空心环 / 拖动跟随 / 松开涟漪都是 CALayer 动画；坐标换算、形状、哪些自家窗口上不画是纯函数；手测反馈第 2 批加按键提示：录制条「显示按键」开着时同一块窗口底部居中的 HUD 胶囊，global / local 的 keyDown 监听（global 要辅助功能授权），键名复用 `HotKey.display`，内容和停手清空是纯状态 `Keys`，位置是纯函数；显示点按 / 显示按键任一开着就建窗口）、`RecordingHUD.swift`（录制 HUD：倒数 / 录制中两态、红点呼吸、计时、放弃两下、停止，普通 NSPanel 状态栏层级、能拖，录屏第 2 批；第 4 批录制态加只读声音状态（系统声音 / 麦克风，开录时的麦克风断开变橙）；录音第 5 批加录音形态 `medium = .audio`：电平 `LevelMeter`、暂停 / 继续、「没听到声音」、底部居中从底边长出来；手测反馈第 3 批加录音的待录态 `State.ready`：[系统声音][麦克风] ｜ [✕][●]，来源开关读写 `Prefs.audioRecordSource`，开始后原地换成录制态）、`VideoExport.swift`（录屏转成 GIF，录屏录音第 7 批：15 fps、宽 ≤ 960、最长前 60 s，`AVAssetImageGenerator` 逐帧取、`CGImageDestination` 逐帧编（关全局调色板）、`@concurrent`；帧时刻 / 输出尺寸 / 存盘名是纯函数；常驻缩略图的 GIF 卡是 `ShelfCard.Kind.gif`，入口是视频卡的「转成 GIF」`ShelfCard.convertToGIF`）、`AudioRecorder.swift`（录音会话，录音第 5 批：AVAudioRecorder 录 m4a、授权、暂停续写、20 Hz 电平与 `Levels` 历史、「没听到声音」、中断（系统睡眠 / 输入设备断开 / 磁盘）、停止后画波形 poster；收尾挪文件、闪退恢复、结果岛、菜单栏停止项和录屏共用 `ScreenRecorder` 的 `settle` / `recover` / `summary` / `makeStopItem`（`ScreenRecorder.Medium`），常驻缩略图的录音卡是 `ShelfCard.Kind.audio`；第 6 批加来源 `Source`（麦克风 / 系统声音 / 两者），后两种用 `ScreenRecorder` 的只录声音模式 `audioOnly` 当引擎，电平由它的样本回调算好投过来；手测反馈第 3 批分成两个阶段：`open()` 待录只出控制条，`start()` 才读来源、问 `allowsStart`、开录） |
+| `Screenshot/` | `ScreenCapture.swift`（逐屏冻结帧 + 同一刻的窗口 Z 序快照）、`RegionSelector.swift`（框选会话、每屏一个遮罩、选区几何纯函数）、`SelectionView.swift`（遮罩画面与交互：图层绘制、窗口悬停、手柄、放大镜、工具栏；第五轮体检 H1 按原来的 MARK 拆出同目录的 `SelectionView+Accessibility.swift`（旁白）、`+Drawing.swift`（画面）、`+Toolbar.swift`、`+Annotations.swift`、`+Text.swift`、`+Output.swift`、`+Mouse.swift`（鼠标、跟手）、`+Keyboard.swift`）、`Redaction.swift`（一键打码：一行字里认手机号、邮箱、卡号、身份证号，识字框换成打码框，2026-11-12）、`ElementFinder.swift`（悬停认窗口里的元素：问指针下那扇窗口的主人这一点上是什么、往上取框；裁剪 / 过滤 / 去重、换层是纯函数，2026-11-08）、`ScreenshotOutput.swift`（PNG、快速保存、另存为）、`PinPanel.swift`（钉图；第二轮体检 F1 起还有「钉住剪贴板里的图」的取图、解码、找位置）、`Annotation.swift`（标注模型，显示与导出共用 draw，M10）、`EditorToolbar.swift`（HUD 主工具栏 + 样式托盘，M10，Whisker 重做）、`TranslationCard.swift`（截图翻译盖回截图上时放不下的段：选区外的译文卡片，2026-11-08）、`FlyCard.swift`（截图飞入右下角 + 快门声，Whisker S1；录屏第 3 批起录屏的最后一帧也从这里飞，落地多播放符号和时长 `VideoMarks`）、`ScrollCapture.swift`（长截图会话：边框、侧边面板、抓帧循环、自动滚动）、`ScrollStitcher.swift`（长截图拼接，纯逻辑）、`ShotKeys.swift`（截图时能改的 21 个键，2026-11-06）、`AnnotateOverlay.swift`（标注遮罩：整屏压暗、图居中、滚动与缩放、工具栏和样式托盘、出图；长截图按 A 和截图历史里双击都用它，2026-10-26）、`ScrollCanvas.swift`（长图画布：只画看得见的那一段 + 标注交互，标注层复用 `AnnotationCanvas`）、`ShotHistory.swift`（截图历史：原图 + 标注 + 缩略图存 <数据目录>/shots/，记录在主库的 shots 表，按天数和总量清理，2026-10-26）、`ShotHistoryWindow.swift`（历史窗口和模型：筛选、按天分组、每条的操作、缩略图缓存）、`ShotHistoryView.swift`（历史窗口的界面：网格 + 预览 + 操作）、`Clothesline.swift`（晾衣绳：面板、什么时候滑下来 / 收起、挂上 / 取下、卡片上的动作，第十族 2026-10-26）、`ClotheslineLayout.swift`（晾衣绳的几何与时机：排法、垂度、菜单栏那一条、收不收，纯函数）、`ClotheslineRope.swift`（绳子的物理：verlet 质点 + 重力 + 阻尼 + 距离约束，纯值类型）、`ClotheslineView.swift`（晾衣绳的内容：绳子、卡片、夹子、悬停和鼠标 `CardMouse`）、`ShotShelf.swift`（CleanShot 式常驻缩略图，Whisker D；录屏第 3 批加视频卡 `ShelfCard.Kind.video`，右键菜单 / 旁白动作同一份 `ShelfCard.menu`）、`HoverKeyPanel.swift`（常驻缩略图和晾衣绳共用的面板：指针在卡片上停够、指针下面真是它、最近没在别处打字时临时当 key 接 ⌘C / ⌘S / Esc，移开就还；划词取词前 `releaseAll`，第五轮体检 A3 2026-11-18）、`SizeField.swift`（遮罩里的尺寸胶囊：就地输入宽高、比例菜单）、`WindowShot.swift`（单击窗口截下时的透明圆角 + 两层阴影：画面用冻结帧，单独截的那扇窗口只借形状、补别的 App 挡住的地方；第五轮体检 N1，2026-11-19）、`ShotCountdown.swift`（延时截图的倒数：录制 HUD 的倒数态 + 临时 Esc；第五轮体检 N2）、`ScreenRecorder.swift`（录屏会话：SCRecordingOutput 先写到同卷、系统不清理的地方再挪进快速保存目录、白名单面板的例外过滤器、选区边框、菜单栏停止项、中断与闪退恢复，录屏第 1 批；第 2 批加倒数、放弃、帧率 / 倒数 / 光标设置；第 3 批挪好后取最后一帧 `poster`；第 4 批按录制条开关配声音 / 麦克风 / 点按（`Options`、`configure`）、开录前问麦克风授权、麦克风断开；录制条（四个开关：系统声音、麦克风、显示点按、显示按键） `RecordBar` 在 `EditorToolbar.swift`、框选是 `SelectionView` 的 `.record` 模式；手测反馈第 1 批起点按圈由 `InputOverlay` 画，`configure` 只管声音，过滤器例外多并一个它的窗口号 `exceptedOwnWindows`）、`InputOverlay.swift`（录屏里显示用户的输入，手测反馈第 1 批 2026-10-01：显示点按开着时盖在被录区域上的透明 NSPanel（普通实例、不接鼠标、层级 popUpMenu + 2），global / local 鼠标监听，按下圆盘 / 右键空心环 / 拖动跟随 / 松开涟漪都是 CALayer 动画；坐标换算、形状、哪些自家窗口上不画是纯函数；手测反馈第 2 批加按键提示：录制条「显示按键」开着时同一块窗口底部居中的 HUD 胶囊，global / local 的 keyDown 监听（global 要辅助功能授权），键名复用 `HotKey.display`，内容和停手清空是纯状态 `Keys`，位置是纯函数；显示点按 / 显示按键任一开着就建窗口）、`RecordingHUD.swift`（录制 HUD：倒数 / 录制中两态、红点呼吸、计时、放弃两下、停止，普通 NSPanel 状态栏层级、能拖，录屏第 2 批；第 4 批录制态加只读声音状态（系统声音 / 麦克风，开录时的麦克风断开变橙）；录音第 5 批加录音形态 `medium = .audio`：电平 `LevelMeter`、暂停 / 继续、「没听到声音」、底部居中从底边长出来；手测反馈第 3 批加录音的待录态 `State.ready`：[系统声音][麦克风] ｜ [✕][●]，来源开关读写 `Prefs.audioRecordSource`，开始后原地换成录制态）、`VideoExport.swift`（录屏转成 GIF，录屏录音第 7 批：15 fps、宽 ≤ 960、最长前 60 s，`AVAssetImageGenerator` 逐帧取、`CGImageDestination` 逐帧编（关全局调色板）、`@concurrent`；帧时刻 / 输出尺寸 / 存盘名是纯函数；常驻缩略图的 GIF 卡是 `ShelfCard.Kind.gif`，入口是视频卡的「转成 GIF」`ShelfCard.convertToGIF`）、`AudioRecorder.swift`（录音会话，录音第 5 批：AVAudioRecorder 录 m4a、授权、暂停续写、20 Hz 电平与 `Levels` 历史、「没听到声音」、中断（系统睡眠 / 输入设备断开 / 磁盘）、停止后画波形 poster；收尾挪文件、闪退恢复、结果岛、菜单栏停止项和录屏共用 `ScreenRecorder` 的 `settle` / `recover` / `summary` / `makeStopItem`（`ScreenRecorder.Medium`），常驻缩略图的录音卡是 `ShelfCard.Kind.audio`；第 6 批加来源 `Source`（麦克风 / 系统声音 / 两者），后两种用 `ScreenRecorder` 的只录声音模式 `audioOnly` 当引擎，电平由它的样本回调算好投过来；手测反馈第 3 批分成两个阶段：`open()` 待录只出控制条，`start()` 才读来源、问 `allowsStart`、开录） |
 | `StatusScreen/` | `StatusPreset.swift`（一个状态：标题、说明、图标、样式、电源、自动结束；自带的三个；偏好里的 JSON 和 `sanitized`）、`InputBlock.swift`（事件拦截，全仓库唯一碰 `CGEvent.tapCreate` 的地方；会话是不是锁着 `isSessionAway`）、`ExitHold.swift`（退出判断：按住 esc / 按住退出提示 2 秒，纯状态）、`Passcode.swift`（退出密码：4–8 位数字、钥匙串里的条目、密码框的输入状态，纯状态）、`StatusScreen.swift`（一次会话：进入、触碰、锁屏时让开、退出、退出后拦截的留守）、`StatusScreenView.swift`（每屏一张全屏面板 `StatusScreenPanel` 和画面）、`StatusEmoji.swift`（动画表情：16 个可选 + 眼睛的清单、静止画面、解帧、按帧换图层内容的播放；素材 `Resources/status-emoji-<id>.heics` 由 `macos/status-emoji.swift` 从 Microsoft Fluent Emoji Animated 转来）、`StatusPicker.swift`（按全局快捷键时先出的选状态面板：一排预览卡片、键盘选择、把选中卡片的位置交给会话让画面从它长到整屏）；规矩见 mac-overlay-panel §11、`StatusPresetSync.swift`（状态屏的状态接进全局同步：一个一条 + 顺序一条；2026-10-24） |
-| `StatusScreen/`（2026-11-05 补） | `EmojiPack.swift`（动画表情包：挑的系统表情有 Fluent 动画版时按对照表 `Resources/emoji-pack.json` 从本仓库 release `emoji-pack-<版本>` 下载、缓存在数据目录 `emoji-pack/`（上限 50 MB，删最久没用的），开关 `Prefs.emojiPackDownloads`；表情包由 `macos/emoji-pack.swift` 生成） |
-| `Reminders/` | `ReminderSound.swift`（提示音：系统的、个人「声音」文件夹里的、自己选的文件（拷进数据目录 `reminder-sounds/`），播放最多 30 秒、处理了就停；编号的校验，2026-11-04 用户反馈）、`ReminderPhrase.swift`（启动器一句话建提醒的解析，纯函数）、`ReminderSync.swift`（提醒列表接进全局同步）、`ReminderScreen.swift`（全屏提醒，面板 `ReminderScreenPanel`）、`ReminderGlow.swift`（边框：每屏四条贴边窄窗口）、`Reminder.swift`（一条提醒：标题、说明、表情、开关、时间规则 `Schedule`、提醒方式、全屏多久、声音、催促；三条示例；偏好里的 JSON、逐字段兜底的解码和 `sanitized`；设置页的列表纯函数和摘要）、`ReminderSchedule.swift`（纯函数：一次 / 每周 / 每月的下一次、间隔按锚点和时段、`ReminderCheck.check` 此刻哪几条响 / 算错过 / 下次几点看、`reconciled`；这台电脑的状态 `ReminderState`）、`ReminderCenter.swift`（执行层：一个睡到下一刻的计时任务、锁屏 / 解锁 / 醒来 / 改时钟的监听、间隔提醒的空闲检查、挂在刘海岛上的那一条、知道了 / 稍后）；2026-11-04，§10「提醒」 |
-| `Notes/` | （便签，§10「便签」；2026-10-12 立项、2026-10-18 八批全部做完）**数据**：`Note.swift`（模型、标题 / 摘要、清洗和上限）、`NoteStore.swift`（单独的库、排序搜索、最近删除 30 天、落盘重试）、`NotesBackup.swift`（每日备份留 7 份、打不开时的恢复，和剪贴板的平行）、`NoteSample.swift`（空库首次放一条示例）。**入口和窗口**：`NoteCapture.swift` + `NoteCaptureView.swift`（⌥N 快速记一条）、`NotesWindow.swift` + `NotesWindowView.swift`（全部便签窗口的列表 / 搜索 / 工具栏 / 右键）、`NoteWall.swift` + `NotesWallView.swift`（便签墙的纯函数和视图）。**屏幕边缘**：`NoteEdge.swift`（开关、叫停、面板生命周期）、`NoteDeck.swift` / `NoteDeckModel.swift` / `NoteDeckState.swift` / `NoteDeckOptions.swift` / `NoteDeckLayout.swift` / `NoteDeckPill.swift` / `NoteDeckPanel.swift` / `NoteDeckView.swift`（药丸、标签列、状态机、几何、设置、面板）。**打开的便签**：`NoteSheet.swift` + `NoteSheetModel.swift` + `NotePanel.swift`（那叠和浮动共用）、`NoteFloat.swift` / `NoteFloatModel.swift` / `NoteFloatState.swift` / `NoteFloatLayout.swift` / `NoteFloatPanel.swift`（拖出来、拉大小、固定后回原位；一张一个）、`NoteFloats.swift`（同时浮几张：上限、最久没碰、几张一起记位置，2026-10-22）、`NoteFields.swift`（标题 / 正文输入框）、`NoteColorPicker.swift`（颜色菜单的「其他颜色…」：系统取色面板、最近用过，2026-10-22）。**正文**：`NoteTextView.swift` + `NoteTextView+Images.swift`（显式搭的 TextKit 1；样式只改属性；组字期间不重排不落盘）、`NoteStyles.swift`（行距、五种任务方框、代码块、文字颜色）、`NoteMarkdown.swift`（不用正则的扫描器、标记藏 / 露）、`NoteTasks.swift`（任务和列表的纯函数）、`NoteTaskBox.swift`（任务方框自己画的圆角方框：几何、五种画法、记号取色；2026-10-18）、`NotePaper.swift`（8 种纸色、6 种文字颜色）、`NoteImages.swift` + `NoteImageStore.swift` + `NoteImageAttachment.swift`（令牌、图片目录、附件字符）、`NoteImageCrop.swift`（图片的裁切层：几何纯函数 + 盖在正文滚动区上的视图，2026-10-22）、`NoteMarkdownFiles.swift`（整个 / 单条的导出导入）、`NoteSync.swift`（同步的合并规则：版本钟、状态后改的赢、墓碑，纯函数；2026-10-22）、`NoteSyncFolder.swift`（同步文件夹的写法、一轮该合什么、刹车、该写出去什么，纯函数；2026-10-22）、`NoteSyncDisk.swift`（读写同步文件夹：协调读写、没下载完的文件、缓存，主线程外；2026-10-23）、`NoteSyncer.swift`（同步的执行层：什么时候合、一轮怎么走、刹车、正在编辑的先不换、认出库被退回去了；2026-10-23）、`NoteSyncServer.swift`（连 WebDAV 服务器时本机镜像和服务器之间搬文件：pull / push、账、每轮请求数，主线程外；issue #18，2026-11-13）。规矩：编辑器、Markdown、任务、颜色、图片、导出导入在 mac-overlay-panel §3 §5，那叠和浮动在 §12，长相在 `mac-whisker/notes.md`，备份在 mac-clipboard §1，划词在 mac-translate §5。 |
+| `StatusScreen/`（2026-11-05 补） | `EmojiPack.swift`（动画表情包：挑的系统表情有 Fluent 动画版时按对照表 `Resources/emoji-pack.json` 从本仓库 release `emoji-pack-<版本>` 下载、缓存在数据目录 `emoji-pack/`（上限 50 MB，删最久没用的），开关 `Prefs.emojiPackDownloads`；表情包由 `macos/emoji-pack.swift` 生成；2026-11-17 起图标格子那 28 个里除了自带默认项用的六个也从这里下，包里只带 `StatusEmoji.bundled` 和眼睛） |
+| `KeepAwake/` | （保持唤醒，第一个插件，2026-11-12；拍板和做法在 §10「插件与保持唤醒」）`KeepAwakePlan.swift`（纯函数：定时的时段、跨午夜、下一次要变的时刻、启动器「awake …」的解析、剩多久的说法）、`KeepAwake.swift`（执行层：手动的一段和定时，`ProcessInfo.beginActivity`、到点 / 醒来 / 改时间重新算、岛上说一声） |
+| `Reminders/` | `ReminderSound.swift`（提示音：系统的、个人「声音」文件夹里的、自己选的文件（拷进数据目录 `reminder-sounds/`），播放最多 30 秒、处理了就停；编号的校验，2026-11-04 用户反馈）、`ReminderPhrase.swift`（启动器一句话建提醒的解析，纯函数）、`ReminderSync.swift`（提醒列表接进全局同步）、`ReminderScreen.swift`（全屏提醒，面板 `ReminderScreenPanel`）、`ReminderGlow.swift`（边框：每屏四条贴边窄窗口）、`Reminder.swift`（一条提醒：标题、说明、表情、开关、时间规则 `Schedule`、提醒方式、全屏多久、声音、催促；三条示例；偏好里的 JSON、逐字段兜底的解码和 `sanitized`；设置页的列表纯函数和摘要）、`ReminderSchedule.swift`（纯函数：一次 / 每周 / 每月的下一次、间隔按锚点和时段、`ReminderCheck.check` 此刻哪几条响 / 算错过 / 下次几点看、`reconciled`；这台电脑的状态 `ReminderState`）、`ReminderCenter.swift`（执行层：一个睡到下一刻的计时任务、锁屏 / 解锁 / 醒来 / 改时钟的监听、间隔提醒的空闲检查、挂在刘海岛上的那一条、知道了 / 稍后；专注模式里先压着的那几条）、`ReminderFocus.swift`（专注模式滤镜 `ReminderFocusFilter` 和它现在说的 `ReminderFocus`，2026-11-17）；2026-11-04，§10「提醒」 |
+| `Notes/` | （便签，§10「便签」；2026-10-12 立项、2026-10-18 八批全部做完）**数据**：`Note.swift`（模型、标题 / 摘要、清洗和上限）、`NoteStore.swift`（单独的库、排序搜索、最近删除 30 天、落盘重试）、`NotesBackup.swift`（每日备份留 7 份、打不开时的恢复，和剪贴板的平行）、`NoteSample.swift`（空库首次放一条示例）。**入口和窗口**：`NoteCapture.swift` + `NoteCaptureView.swift`（⌥N 快速记一条）、`NotesWindow.swift` + `NotesWindowView.swift`（全部便签窗口的列表 / 搜索 / 工具栏 / 右键）、`NoteWall.swift` + `NotesWallView.swift`（便签墙的纯函数和视图）。**屏幕边缘**：`NoteEdge.swift`（开关、叫停、面板生命周期）、`NoteDeck.swift` / `NoteDeckModel.swift` / `NoteDeckState.swift` / `NoteDeckOptions.swift` / `NoteDeckLayout.swift` / `NoteDeckPill.swift` / `NoteDeckPanel.swift` / `NoteDeckView.swift`（药丸、标签列、状态机、几何、设置、面板）。**打开的便签**：`NoteSheet.swift` + `NoteSheetModel.swift` + `NotePanel.swift`（那叠和浮动共用）、`NoteFloat.swift` / `NoteFloatModel.swift` / `NoteFloatState.swift` / `NoteFloatLayout.swift` / `NoteFloatPanel.swift`（拖出来、拉大小、固定后回原位；一张一个）、`NoteFloats.swift`（同时浮几张：上限、最久没碰、几张一起记位置，2026-10-22）、`NoteFields.swift`（标题 / 正文输入框）、`NoteColorPicker.swift`（颜色菜单的「其他颜色…」：系统取色面板、最近用过，2026-10-22）。**正文**：`NoteTextView.swift` + `NoteTextView+Images.swift`（显式搭的 TextKit 1；样式只改属性；组字期间不重排不落盘）、`NoteStyles.swift`（行距、五种任务方框、代码块、文字颜色）、`NoteMarkdown.swift`（不用正则的扫描器、标记藏 / 露）、`NoteTasks.swift`（任务和列表的纯函数）、`NoteTaskBox.swift`（任务方框自己画的圆角方框：几何、五种画法、记号取色；2026-10-18）、`NotePaper.swift`（8 种纸色、6 种文字颜色）、`NoteImages.swift` + `NoteImageStore.swift` + `NoteImageAttachment.swift`（令牌、图片目录、附件字符）、`NoteImageCrop.swift`（图片的裁切层：几何纯函数 + 盖在正文滚动区上的视图，2026-10-22）、`NoteMarkdownFiles.swift`（整个 / 单条的导出导入）、`NoteRichPaste.swift`（往正文里粘网页、文稿：RTF / HTML 转成 Markdown，第四轮体检 X4）、`NoteSync.swift`（同步的合并规则：版本钟、状态后改的赢、墓碑，纯函数；2026-10-22）、`NoteSyncFolder.swift`（同步文件夹的写法、一轮该合什么、刹车、该写出去什么，纯函数；2026-10-22）、`NoteSyncDisk.swift`（读写同步文件夹：协调读写、没下载完的文件、缓存，主线程外；2026-10-23）、`NoteSyncer.swift`（同步的执行层：什么时候合、一轮怎么走、刹车、正在编辑的先不换、认出库被退回去了；2026-10-23）、`NoteSyncServer.swift`（连 WebDAV 服务器时本机镜像和服务器之间搬文件：pull / push、账、每轮请求数，主线程外；issue #18，2026-11-13）。规矩：编辑器、Markdown、任务、颜色、图片、导出导入在 mac-overlay-panel §3 §5，那叠和浮动在 §12，长相在 `mac-whisker/notes.md`，备份在 mac-clipboard §1，划词在 mac-translate §5。 |
 
 各 provider 函数签名统一，由 coordinator 里的一个 `switch` 分发。不建 registry 或 factory。
 
@@ -140,6 +153,7 @@
 **窗口体系**
 - **App 入口与菜单栏**：
   - `@main enum Main` 先分流 OCR 子进程，普通 GUI 再进入 `KittyToolsApp: App`，用 `@NSApplicationDelegateAdaptor` 挂 AppDelegate，~~唯一的 scene 是 `MenuBarExtra(.menu)`~~（D 阶段：菜单栏图标和菜单改成 AppKit `NSStatusItem`（`Shell/StatusItem.swift`，图标要做动效），这里只留一个不插入菜单栏的 MenuBarExtra 当 scene）。
+  - **原生悬停提示**（2026-11-16，PR #28 SeyoZhou）：GUI 入口在创建 `NSApplication` 前单独注册 `NSInitialToolTipDelay = 600`（毫秒，`Prefs.toolTipDelay`），截图工具栏和其它原生提示仍由 AppKit 显示，等待从系统默认的 1.5 秒降到约 0.6 秒、整个 App 一样。只注册进程内默认值（注册域），不写持久偏好、不进 `Prefs.defaults`（不导出、不同步），OCR 子进程不注册；用户自己 `defaults write` 的应用级或全局值仍优先。此键不是公开 API，系统不认时退回系统默认。本机 macOS 27.0.1 探针（不弹窗、不动鼠标，读 AppKit 私有的 `NSToolTipManager._toolTipDelay`）：不注册 1.5、注册 600 后 0.6；**提示管理器建好之后再注册不生效**（仍是 1.5），所以只能放在 `Main` 里、不能并进 AppDelegate 注册的 `Prefs.defaults`。PR 作者屏上实测首次悬停到提示出现 0.637 / 0.622 秒，默认 1.544 秒；完整 App 的截图工具栏和别的系统版本按 HANDTEST 验。没加开关：系统默认延迟本身不是我们的功能，嫌快的用户可以 `defaults write` 覆盖。
   - `LSUIElement=YES` 保留：macOS 26 的普通 GUI 入口在 `KittyToolsApp.main()` 前设为 `.regular`，程序坞 / ⌘⇥ 图标从启动起显示并保留到退出；其他系统启动时仍不显示图标。OCR 子进程不走 GUI 入口，不创建 `NSApplication`。
   - ~~菜单项：剪贴板历史 / 划词翻译 / 输入翻译 / 复制即译（Toggle）/ 设置… / 退出。快捷键用 `.keyboardShortcut` 显示；热键为空时显示「未设置」。~~ 现状（N15、体检 A26）：按 `HotKeyAction.sections` 分三节，和快捷键页同名同序，每节末尾接那一节的 `MenuExtra`（暂停记录剪贴板、复制即译、有钉图时的两项）；右边是当前生效的快捷键，没设 / 注册失败的留空；最后 设置… / 关于 / 检查更新…（正式版）/ 退出，启动器的内置动作读同一份。
   - 菜单栏图标默认用单色模板图（2026-09-29 第 9 批起设置 › 通用可改成彩色 App 图标或隐藏，见 §12「菜单栏图标手测」）。左键点击直接弹菜单（HIG 做法），去掉 Tauri 版「左键打开主界面」。
@@ -206,7 +220,7 @@ APP_PRODUCT_NAME = Kitty Tools
 PRODUCT_NAME = $(APP_PRODUCT_NAME)
 PRODUCT_MODULE_NAME = KittyTools
 MACOSX_DEPLOYMENT_TARGET = 15.0
-ARCHS = arm64
+ARCHS = $(NATIVE_ARCH_ACTUAL)
 SWIFT_VERSION = 6.0
 SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
 SWIFT_APPROACHABLE_CONCURRENCY = YES
@@ -333,9 +347,36 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
 - 从书签、快捷链接打开过的网址跟着源头走（issue #10，2026-11-06，0.7.3）：使用记录多记一列 `listed`（最后一次是从这两份列表打开的），这种不当「用过的网址」自己找回来、「常用」里只从现在的列表里取——浏览器里删了书签就搜不到，加回来照旧；手输打开的网址、浏览历史行打开的照旧靠使用记录搜到。修之前记下的（`listed` = 0）照旧会冒出来，⌘⌫ 或「清空使用记录」清掉。
 
 **文件搜索（M13，2026-09-26）**
-- `open 词` 打开、`find 词` 在访达中选中（⌘↩ 互换），空格开头 = open；普通搜索不混排文件（打开过的文件靠使用记录搜到）；不做 in（内容）/ tags、目录导航、自定义关键词、可编辑排除目录。
+- `open 词` 打开、`find 词` 在访达中选中（⌘↩ 互换），空格开头 = open；普通搜索不混排文件（打开过的文件靠使用记录搜到）；不做 in（内容）/ tags、自定义关键词、可编辑排除目录（目录导航 2026-11-18 改为做，见下面「启动器浏览文件夹」）。
 - 查询（`Launcher/FileSearch.swift`）：每个词一个 `kMDItemFSName == "词*"cdw`（拼音也能命中），范围只用主目录，路径在客户端滤（~/Library、node_modules、build 这类）；子串写法要几秒，所以 1 个拉丁字母不查。
 - **授权（实测，用户选「按需申请」）**：Spotlight 按调用方的「文件和文件夹」授权过滤结果、也不弹框，所以文件结果最后一行是授权提示（↩ 逐个 `opendir` 让系统弹框）；问过之前一律不碰这些目录（`Prefs.folderAccessRequested`）。
+
+**启动器浏览文件夹（路径模式，2026-11-18）**（论坛两次反馈：输 `~/.local` 只出一行，想看到下面的子目录和文件；11-09 拍板页
+https://claude.ai/artifact/NQLWKFVipMqoqDabJ2ZQTf 当时没回，11-18 拍板页 https://claude.ai/artifact/BMbwNiPSrhLinB5W1JhAyQ「全部按推荐，除了 1B」
+= 只做单栏、右栏预览先不做；材料在主检出 `macos/build/research/launcher-path-browse-2026-11-09/`、`launcher-file-browser-2026-11-18/`）
+- 以 `/` 或 `~/` 开头（单独一个 `~` 当 `~/`；`~foo`、相对路径、空格开头不算）就只出路径的行（`Launcher/PathBrowser.swift`）。输入正好是一个
+  存在的文件夹（末尾有没有 `/` 都算；包不算）就列它里面的东西，第一行是这个文件夹本身（↩ 打开它，和以前一样）；最后一段没打完就在上一级里
+  先按名字开头、再按名字中间筛（名字中间至少两个字、不带隐藏项；点开头的只比开头：真机实测 `~/L` 带出一串点文件后改的）。文件夹在前、访达的名字顺序，最多 50 行，多的最后一行「还有 N 项」（↩ 在访达中打开）。
+- 隐藏项：还没打字时只列访达里看得见的（点开头、带隐藏标记的 `/usr`、`~/Library` 不列），打了字在全部里找，进到隐藏文件夹里全列。
+- 键：Tab 进文件夹（行上带好补全「输入的目录 + 名字/」，保留 `~` 和符号链接的写法）、⇧Tab 回上一级（`PathBrowser.parentQuery`）、↩ 打开、
+  ⌘↩ 在访达中显示、→ 照旧开动作菜单。文件搜索（open / find）结果里的文件夹按 Tab 也进来。
+- 读目录在主线程外（mac-native §3），按目录缓存到面板收起，打字只在内存里筛；没读到先留着上一次的结果，过 0.15 秒还没到写「正在读取…」。
+  读之前先看位置（解开符号链接后）：桌面 / 文稿 / 下载 / iCloud 云盘没问过授权不读（↩ 允许访问，同文件搜索的开关）；别的 App 的容器、
+  第三方云盘里面不读（↩ 在访达中打开）；`/Volumes` 下的外接盘、网络盘先点一次「允许读取」（`Prefs.launcherVolumesAllowed`，这台电脑自己的、
+  不注册默认值）；读不了的（系统直接拒绝）说没有权限。实测：~ 约 120 项 0.16 ms，/usr/bin 932 项 4.8 ms + 排序 3.2 ms，10 万项约 0.7 s。
+  评审补的（独立审查，读代码得出、没实测弹框）：先按输入的样子判断位置、再解开链接判断（解开要 stat 路径上每一段）；按小写比（盘不分大小写，
+  `~/documents/`）、去掉 `/System/Volumes/Data`；日历、通讯录、照片图库里面也不读；列目录时链接指到受保护位置的不跟过去 stat；
+  提示行的名字不读磁盘；目录还没读到时 ↩、⌘1–9 只响提示音（不打开上一次的行）。ponytail：卡住的网络盘上的读、图标、在不在的检查都占着
+  并发线程池（每个目录同时只读一次），真碰到卡死再给它们单开线程。
+- 顺手修掉主线程 stat：直达项不再出路径（以前每敲一个字 `fileExists`）；路径行的图标按类型取，App 和不知道类型的按路径在主线程外取
+  （`LauncherIcons.load`）；Tab 补全不 stat；收藏、常用里的文件和目录外的 App 在不在，呼出时在主线程外查（`checkPresence`）。
+- 路径的行的 ⌘K（文件搜索的结果、常用里的文件同样）：在终端中打开 ⌘T（设置 › 访达右键「用 App 打开」里排第一的终端，没有就是系统「终端」；
+  选中文件开它所在的文件夹）、拷贝文件 ⇧⌘C、复制终端写法的路径 ⌥⌘C（`FinderLink.shellText`）。移到废纸篓只在主文件夹里面给（主文件夹本身、
+  它下面的系统文件夹、资源库第一层不给），仍不二次确认，岛上多一个「放回」（`FileMoves.land`，不覆盖）。（并进 0.10.1 时和第五轮体检 U5① 合成一个：岛上的按钮是「撤销」，用 `LauncherModel.putBack`——原处有同名的报错、不覆盖，设置里脚本的「移到废纸篓」同用它）
+- 真机实测（按需，`TEST_RUNNER_KITTY_LIVE_PATH=<报告目录>` 跑 `PathBrowserTests/liveRealFolders()`：Dev 版身份读本机真实文件夹，
+  只读、不改偏好）：2026-11-18 本机 20 个输入都在 25 ms 内（/usr/bin 第一次 24.6 ms，别的 0.4–4.5 ms），没问过授权时文稿 / 桌面 / 下载、
+  日历、别的 App 的容器都只出提示行、没弹框；报告在主检出 `macos/build/research/launcher-path-live-2026-11-18/`。
+- 不加开关（跟着「启动器」）。右栏预览、底部一排图标按钮不做（拍板 1B、8A）；Windows 等 mac 真机试过再跟（拍板 16A）。
 
 **系统命令（D2，2026-09-27）**
 - 关键词照抄 Alfred、默认全开，不做改关键词 / 逐个开关 / 排除名单；规格在 `mac-whisker/launcher.md`「系统命令」。带对象的 quit / hide / forcequit / eject 是「关键词 空格」模式（同文件搜索：列一次对象、打字只过滤、不记使用）。
@@ -372,7 +413,7 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
 - 浮窗快捷键在 `TranslateCoordinator.handleKeyEquivalent`：⌘R 重新翻译、⌘D 收藏（体检 A31 前是 ⌘S）、⌘W、⌘P、⌘+ / ⌘- / ⌘0 字号、⌘1–9 复制第 N 张卡；收藏 = 生词本，能导出 CSV / Anki TSV；替换原文：**前台已不是取词的 App、或自家浮层成了 key 时只复制不粘**；浮窗高度随内容、只让拖宽度，卡片折叠按服务存。
 
 **长截图（2026-09-25）**
-- 截图框选后按 S 进入（选区至少 60 点高）；遮罩收起、在实时画面上截（过滤器滤掉本 App）。拼接只用逐行哈希投票（`ScrollStitcher`，单测锁住），**不用 Vision 配准**（有吸顶栏时 50%–90% 算错、置信度却恒为 1）；页脚宁大勿小。自动滚动要辅助功能授权，先把光标挪进选区，移出选区即停。
+- 截图框选后按 S 进入（选区至少 60 点高）；遮罩收起、在实时画面上截（过滤器滤掉本 App，设置窗、全部便签、截图历史这类普通窗口照拍：2026-11-20 `ScreenCapture.scrolledOwnWindows`）。拼接只用逐行哈希投票（`ScrollStitcher`，单测锁住），**不用 Vision 配准**（有吸顶栏时 50%–90% 算错、置信度却恒为 1）；页脚宁大勿小。自动滚动要辅助功能授权，先把光标挪进选区，移出选区即停。
 
 **截图（Phase 3）**
 - 屏幕录制权限（TCC）：用 `CGPreflightScreenCaptureAccess` / `CGRequestScreenCaptureAccess` 检查和申请，同样绑定签名。授权提示由系统提供，App 不能自定义文案（没有对应的 Info.plist 键）。macOS 15 会周期性地再次询问屏幕录制授权。
@@ -389,6 +430,8 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
 **常驻内存（2026-10-07）**
 - 背景：用户让查正式版（0.3.2 本地包，跑了 3 天）`footprint` 342 MB、峰值 510 的构成。只读活进程（两份 memgraph，各停约 3 秒）+ 独立小程序 + 仓库拷贝里跑探针，给了 5 项改法，用户回「全部按推荐」，分批提交。**不是漏**（`leaks` 20 个 / 3 KB；窗口 10 个、面板 3 个、带位图的图层 32 个都对得上）：用过一次就不还的台阶 + 填到上限的缓存 + 堆里空着没还的页。
 - 构成、量法、分批，描边换画法、空闲回收、空闲时放掉识字模型、链接预览的头图，以及便签接进空闲回收（调优 T2）的实现记录和实测数已归档到 `docs/archive/PLAN-batches-2026-10.md`（§10「常驻内存」）；规矩在 mac-whisker §8、mac-clipboard §5「链接预览」、mac-native「测量与诊断」。
+- **PR #39（2026-11-20，外部 PR，作者 DCDYSMRZ）**：设置 › 截图 › 高级 加「空闲时释放识字模型」，**默认开 = 原来的行为**；关掉的模型不放，开着截图或翻译时启动（和刚打开时）就在进程内预热（作者原提交默认关，修正提交改回默认开、只在关掉时预热）。实测（27.0.1）：省第一次识字 0.1–0.3 s；27 上模型在 footprint 的 neural 一类、不计入 phys_footprint，放掉对 phys_footprint 基本没影响（mac-clipboard §1）。下一版更新日志写一句：「设置 › 截图 › 高级 新增「空闲时释放识字模型」，关掉后识字模型一直留着、第一次识字更快」。
+- **下一版更新日志（修复）**：清理 Kitty Tools 的缓存目录后，开着识字相关功能时会在后台重新准备模型，不必重启或等下一次截图识字。 / After Kitty Tools’ cache folder is cleared, the app prepares the model in the background when a text recognition feature is enabled, without waiting for a restart or the next capture.
 - 等用户定（原「链接预览的头图」那条末尾）：头图分档（透镜只要 320 × 180 像素，按它解一张画过才约 0.5 MB，12 条都看过从约 70 MB 降到约 6 MB；代价是 ⌘Y 大卡要另解一张 1200 的，从透镜长出来的头几帧先糊后清）；把 12 条调小。
 - 不做：字形缓存（系统封顶，公开接口清不了）；进程内 Metal（符号动效就会带起来，单把棋盘格 Canvas 换成形状实测省不到 1 MB）；主面板用完放掉（描边改完后三块加起来只再还约 10 MB，每次呼出却要重建）；设置窗的一次性开销（系统控件的堆）；缩略图上限不改（改成空闲时清）；识字全走子进程（现成的 `--ocr` 子进程每次 0.51–0.70 s，进程内热的是 0.22 s，每次都过 0.3 s、都会闪「识别中」）。
 
@@ -443,7 +486,7 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
 - 拍板（D 数据）：① **单独的库和图片目录**，剪贴板的清理、保留天数、锁屏清空、「重新开始」都碰不到；便签库打不开时单独处理。② **正文不加密**（同剪贴板，靠系统的磁盘加密；Noty 的密钥是库旁边的文件，防不了能读到库的人，放钥匙串则换签名 / 换机 / 从备份恢复时一丢全丢）。③ 归档照搬；**删除进「最近删除」留 30 天**，刚删时刘海岛给「撤销」。④ 便签库每天备份（连图片，留 7 份）；便签文字并进导出文件和每日 JSON 备份当第七类；设置 › 便签另有「导出为 Markdown 文件夹」和「导入」（文件头带编号、颜色、日期，原样导回不重复）。⑤ **iCloud 同步这一版不做**，以后单独立项；模型先留好稳定编号、修订号、删除记录。
 - 拍板（E 打通）：① 三个动作进启动器；关键词 `note`：空着列最近的，带关键词搜标题和正文，↩ 打开，⌘↩ 把后面那段话存成新便签；不进默认搜索结果。**2026-10-17 用户去掉**（第 8 批不做）。② 开着便签时从剪贴板面板 / 启动器粘贴要落进便签；点 Kitty 自己的面板不算点别处；剪贴板 ⌘K 加「存成便签」——**粘贴落进便签 2026-10-17 做了（第 8 批 R12），剪贴板 ⌘K「存成便签」用户去掉**。③ 常驻缩略图的菜单加「存成便签」，跟图片那一批——**2026-10-17 用户去掉**。④ 焦点在便签里时划词翻译读便签自己的选区——**2026-10-17 做了（第 8 批 R13）**。⑤ 给别的工具调用的链接（URL scheme）不做。
 - 拍板（F 入口）：① 全局键只有「快速记一条」有默认键 ⌥N；「新建便签」「全部便签」不设默认键；归档并进全部便签窗口。② 设置加一页「便签」；快捷键页、速查表、菜单栏、启动器各加「便签」一节，三项同名同序；便签里的按键固定（⌘K 操作、⌘P 固定、⌘T 任务、⌘F 查找、⌘⌫ 删除、Esc / ⌘W 关），不做成可改。
-- 不做 / 以后再说：Sparkle、Intel 版、Homebrew、多语言不做；txt 导出、合成一个文档、Noty 的归档格式不做。以后再说：自定义纸色和「常用」颜色（2026-10-13 用户提了又说「暂时不做，后面再说」；当时的设想：`color` 整数里另编一段表示 sRGB 色值、由选的颜色推出纸 / 色条 / 墨、系统取色面板、最近选过的 8 个记成常用）、iCloud 同步、同时浮多张、图片裁切和宽度预设、表格 / 有序列表的样式（Noty 也没有）、分隔线、裸网址自动成链接、引用嵌套（代码块和 ⌘B / ⌘I 这类加标记的快捷键第 6 批定成不做，2026-10-15 手测反馈第 4 批做了）、斜杠菜单、自动补全成对的符号、代码的语法高亮、⌘K 当链接键（⌘K 是操作菜单；后四样是手测反馈第 4 批定成不做的）、翻译和识字结果「存成便签」、便签选中文字「存成片段」、「只待在一个桌面」、从 Noty 导入它的归档；把便签里的图片拖到别的 App 成文件、在便签里按住图片挪位置、点开看大图、动图播放（只显示第一帧）、图片说明文字（第 7 批定成不做，图片的工具条 / 裁切 / 宽度预设见上面「图片裁切和宽度预设」）；启动器 `note` 关键词、剪贴板 ⌘K「存成便签」、常驻缩略图「存成便签」（2026-10-17 用户在第 8 批去掉）、文字颜色的快捷键和 ⌘K 入口、任意颜色（取色板）、高亮底色、字号 / 字体、任务状态的快捷键 / 截止日期 / 按状态筛选和排序、导出成一个合起来的文档 / txt / PDF、导入时进子文件夹 / wiki 式 `![[图]]` / 联网下载图片、导出时自动打开访达（第 8 批）；标题 4–6 级的菜单项（能手打）、多选几条一起导出、拷贝为 Markdown、脚注、下划线、任务以外的勾选框（第 8 批之后的一轮）。
+- 不做 / 以后再说：Sparkle、Homebrew、多语言不做（Intel 版 2026-11-16 起能编，见「Intel 编译」）；txt 导出、合成一个文档、Noty 的归档格式不做。以后再说：自定义纸色和「常用」颜色（2026-10-13 用户提了又说「暂时不做，后面再说」；当时的设想：`color` 整数里另编一段表示 sRGB 色值、由选的颜色推出纸 / 色条 / 墨、系统取色面板、最近选过的 8 个记成常用）、iCloud 同步、同时浮多张、图片裁切和宽度预设、表格 / 有序列表的样式（Noty 也没有）、分隔线、裸网址自动成链接、引用嵌套（代码块和 ⌘B / ⌘I 这类加标记的快捷键第 6 批定成不做，2026-10-15 手测反馈第 4 批做了）、斜杠菜单、自动补全成对的符号、代码的语法高亮、⌘K 当链接键（⌘K 是操作菜单；后四样是手测反馈第 4 批定成不做的）、翻译和识字结果「存成便签」、便签选中文字「存成片段」、「只待在一个桌面」、从 Noty 导入它的归档；把便签里的图片拖到别的 App 成文件、在便签里按住图片挪位置、点开看大图、动图播放（只显示第一帧）、图片说明文字（第 7 批定成不做，图片的工具条 / 裁切 / 宽度预设见上面「图片裁切和宽度预设」）；启动器 `note` 关键词、剪贴板 ⌘K「存成便签」、常驻缩略图「存成便签」（2026-10-17 用户在第 8 批去掉）、文字颜色的快捷键和 ⌘K 入口、任意颜色（取色板）、高亮底色、字号 / 字体、任务状态的快捷键 / 截止日期 / 按状态筛选和排序、导出成一个合起来的文档 / txt / PDF、导入时进子文件夹 / wiki 式 `![[图]]` / 联网下载图片、导出时自动打开访达（第 8 批）；标题 4–6 级的菜单项（能手打）、多选几条一起导出、拷贝为 Markdown、脚注、下划线、任务以外的勾选框（第 8 批之后的一轮）。
 - Noty 怎么做的、立项时的实测、做法（数据，第 1 批照它写的库、备份和导出格式）、分批和各批一行摘要（提交号、`HANDTEST.md`「便签手测」编号）已归档到 `docs/archive/PLAN-batches-2026-10.md`（§10「便签」）；各批的详细实现、量到的数和评审记录在 `docs/archive/PLAN-notes.md`。
 - 已知取舍（便签的备份，2026-10-12 评审时记下）：① 便签全删光之后不再备份（空表不备），旧备份不再轮换、一直留着。② 永久删除的便签在 `notes-backups/` 里最多还留 7 份（不是每天都开就更久），在每日 JSON 备份里同理。③ 便签连续 7 天不可用（每次都选「这次先不用」、或者一直是更新版本写的库）时，带便签的每日 JSON 会被不带的顶光——这期间 `notes-backups/` 不动，数据还在。
 
@@ -503,7 +546,18 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
 - **窗口**：自建窗口的新例外 `LaunchpadPanel`（mac-overlay-panel §1）：盖满鼠标所在那块屏、`.statusBar`、`.nonactivatingPanel` + `canBecomeKey`、不激活本 App、每次打开新建、收起放掉。盖住整块屏（菜单栏和程序坞都在下面）——普通窗口做不到「盖住菜单栏又让程序坞露在上面」，这是唯一做不到和 macOS 15 一样的地方（SPEC §3.2）。
 - **布局**：一份 JSON 存 `Prefs.launchpadLayout`（注册空串默认值，SettingsArchive 的「设置」一类跟着导出 / 导入和每日备份走；不另开库）。App 按 bundle id 认（没有的按解开链接后的路径）。第一次打开、还没存过布局时：有系统旧启动台库就自动导入（SPEC §5.4），读不到用默认排法（系统 App 在前、`Utilities` 进「其他」文件夹、其余按显示名）。
 - **入口**：菜单栏一项、现有启动器里一条「启动台」、全局快捷键（默认不设）、触控板捏合（第 3 批，主入口）、触发角（第 3 批，默认关）。总开关 `Prefs.launchpadEnabled`（2026-10-21 并进功能开关 `Feature.launchpad`，见下面「功能开关」）。截图 / 录屏 / 状态屏 / 正在录快捷键时不响应；打开别的功能先收起。
-- **不做**（这一版）：下载中的 App 进度图标、往程序坞拖、iCloud 同步布局、小组件、按分类自动整理、多块屏同时显示、「启动台」作为独立 App 出现在程序坞里、自定义图标、隐藏某个 App、给文件夹换颜色、「最近使用」排序。
+- **不做**（这一版）：下载中的 App 进度图标、往程序坞拖、iCloud 同步布局、小组件、按分类自动整理、多块屏同时显示、「启动台」作为独立 App 出现在程序坞里、自定义图标、给文件夹换颜色。（隐藏 App、常用的一排 2026-11-22 issue #44 加了，见下一条）
+- **隐藏 App、常用的一排**（issue #44，2026-11-22；拍板页 https://claude.ai/artifact/L36y2Kgb2BuY8pcnc4pBPz ，用户「全部按推荐」）：
+  报告人要隐藏 / 显示、调顺序、顶上一块按使用次数变的「热门」、文件夹——调顺序和文件夹 0.6.0 就有（回复里教了怎么用）。
+  **隐藏**：设置 › 启动台 推进去「隐藏的 App」（`LaunchpadHiddenPage`，能搜的列表、开关 = 显示着），存 `Prefs.launchpadHiddenApps`（id 一行一个）；
+  排布时当成没装（`Launchpad.layoutApps`：打开时合并、默认排法、导入后合并都用它，导入读旧库仍给整个目录，免得被说成「已经卸掉」），
+  不变式不用改；搜索照样搜得到；再显示的接在最后一页末尾。系统旧启动台没有隐藏（只能塞进文件夹），对标 LaunchNext / Launchie 都有。
+  **常用的一排**（`Prefs.launchpadFrequentRow`，**默认关** = 照 macOS 15 原样；26 的「应用程序」视图和 iOS 资源库顶上都有「建议」，算苹果自己的做法）：
+  网格上面固定一排（列数个），按 `LauncherItem.systemUse`（Spotlight 按天、28 天衰减，程序坞 / 访达打开的也算）+ `LauncherUsage` 全局分（启动器 / 启动台里打开的，14 天衰减）排，
+  0 分的不上，隐藏的不上；打开那一刻排好、这次开着时不变；占原来网格区域最上面一格高，网格往下让、格子跟着矮（`LaunchpadMetrics.frequentRow`，页点不动）；
+  搜索、开文件夹、抖动时淡掉、地方留着；只能点开，不能拖，方向键不进这一排。两个偏好跟启动台别的设置一样只在这台 Mac（`SettingsSync.localKeys`），跟着导出走。
+  - 下一版更新日志（启动台）：设置 › 启动台 里能隐藏不想在网格里看到的 App（搜索照样搜得到）；打开「顶上一排常用的 App」后，网格上面多一排最近用得多的 App。 /
+    In Settings › Launchpad you can hide apps from the grid (they still show up when you search), and turn on a row of your most-used apps above the grid.
 - 四批进度、两轮评审（FIXES F1–F46、FIXES-2 G1–G29）、七轮真机反馈、捏合跟手、调度中心里打开、四指捏合两处修复和 R11 量出来的数已归档到 `docs/archive/PLAN-batches-2026-10.md`（§10「启动台」）；规矩在 `mac-launchpad` + `mac-whisker/launchpad.md`，手测 `HANDTEST.md`「启动台手测」。
 - 还没做 / 没量的（原文在归档各轮里）：系统手势开着也能用（B）等用户在场时跑探针（`build/research/launchpad/probe/`），过了做第 2 批；没做「系统手势开着时拦下系统的捏合给自己用」（要事件拦截 + 私有事件类型，另议）；PR #1（2026-11-06）只收了 macOS 26 读 `showSpotlightGestureEnabled` 和「复制命令」，没收的两块：26 上「显示桌面」和四指张开 / 捏合撞车（作者的会话层吞事件拦截 + AX 观察程序坞；用户 2026-11-06 定先不做）；26 上关掉设置窗后启动台没法打字：2026-11-12 收了作者后推的 fc87e37c（26 上从启动起 `.regular`、程序坞图标常驻、运行中不降策略），按外部 PR 的规矩做成设置 › 通用「在程序坞显示图标」（只在 26 上出现、默认开，`NSApplication.keepsDockIcon`）；开发机是 27，没在 26 真机上验；没做：面板常驻（A8 的 ②，开头那约 0.1 s 真机觉得慢再做）、逐渐加模糊；拖动 / 跟手的每帧时间、真机第一帧、静置 CPU **都还没量**（单测里不注册触控板回调，HANDTEST 10 / 16）；Release 单测构建在这个仓库里本来就编不过（和这一族无关），量的是 Debug / `-O` 覆盖。
 
@@ -963,6 +1017,28 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
       `CAFilter variableBlur`，**做了**（本批）；专注模式 = 私有名字的分布式通知（只知道开 / 关；名字和图标要「完全磁盘
       访问」或者读系统日志流，公开的 `INFocusStatusCenter` 要受限的权利），**只做开 / 关，等探针**；锁屏上显示 = 窗口
       服务器的私有 Space（绝对层级 400），**不做**。
+- **第五轮体检（2026-11-18，拍板页 https://claude.ai/artifact/5S1NM4U7MNwxcHKGmVPW6d「全部按推荐」，第 3 批：刘海岛、状态屏、插件）**：
+  - **E4 日程卡片**：「加入会议」不再是打开类（点岛本身不执行它，只能点按钮：会拉起会议 App、可能开麦开摄像头，停在刘海上
+    自动展开时卡片冒到指针下面那一下也会落上去）；点卡片本身是「打开日历」。只打开「日历」、不跳到那个日程（能跳的只有没公开的
+    `ical://ekevent/` 网址，没验过；ponytail）。
+  - **E11 状态屏里醒来**：`MediaKeys` 醒来 / 回到前台的重建在状态屏开着时不做（新建的拦截是头插、会排到状态屏那一处前面，
+    音量键、亮度键穿过去），记下欠一次，`StatusScreen.onExit` 时 `resume()` 补；偏好变了要新建时同样等。
+  - **E12 换屏**：屏幕参数一变，耳朵露着、没展开时按现在的刘海屏重摆一次（`place`：位置、刘海宽高都跟上）；展开着的不动，
+    ponytail：展开期间换的屏，收起缩回耳朵时不补摆。
+  - **U6 接不住时说一声**：`MediaKeys` 变成 `@Observable`、有 `status`（关 / 没授权 / 字段核对没过 / 建不起来 / 在跑，
+    纯函数 `MediaKeys.status`）；线程自己退了经回调记成 failed（同 `SmoothScroll`）。设置 › 刘海岛「音量和亮度」在后两种
+    时一行橙字（`IslandTab.keyWarning`）。
+  - **U13 到头再按的回弹**：`Level.pushed`（按住连发只有第一下）→ `Island.levelBumps` +1 → 细条整条往那一头顶出 6 pt、
+    snap 弹回（`IslandLevelBar`，keyframe + 渲染变换，减弱动态效果时不动）。
+  - **U14 调音量的提示音**：跟系统「调节音量时播放反馈」（`com.apple.sound.beep.feedback`，没存过 = 关——10.12 起的默认；
+    开发机 27.0.1 上读不到这个键），开着就在调完音量后回主线程放 BezelServices 的 `volume.aiff`；连按 / 按住时停下 0.15 秒
+    才放、先停上一声；静音、亮度不放；设置页不加开关。
+  - **A2 键盘够得着岛上的按钮**：按「打开刘海岛」时岛上正挂着带按钮的提示 / 活动卡片 → 展开成卡片、键盘交给它的按钮
+    （`Island.focusButtons`：↩ 执行选中的、←→ 换、Esc 同 ×，选中的外面一圈强调色焦点环、读屏念按钮名），再按一次才是
+    那一张；拿着键盘时新提示先排着。评审另修：全屏时藏着的岛不交键盘；岛失去 key 当场还键盘；挂着的提醒拿着键盘时指针离开不 arm；按钮换了夹选中（`Island.reselected`）；回弹的触发改成细条自己的计数，岛上原本没有这一条时出现后补弹一次。
+  - 单测 `MediaKeysTests.bumpsAtTheEnds` / `reportsWhyKeysAreNotTaken`、`IslandExcerptTests.buttonsTakeTheKeyboard`、
+    `NextEventTests.activityOnIsland`（改）；截图 `island-keyboard-*`、`settings-island-keys-*`。手测 `HANDTEST.md`
+    「第五轮体检手测」35–50。
 
 
 ### 晾衣绳（第十族，0.7.0，2026-10-26 立项）
@@ -1062,6 +1138,143 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
 - **2026-11-05 修**：用户报「没开任何提醒，刘海却提示新提醒」——是「+」›「新提醒」点开看了一眼就退回的那条：一点就存进去、开着、
   定在下一个整点，整点真的响了，点了「知道了」又按 D7 自己删掉，列表里找不到。改成先不存，详情页第一次改动才加进列表
   （`Reminder.saving`），没改就离开（退回、换页、关窗）的不留，同系统提醒事项里空着的那行。调度本身没问题（关着的不排不响）。
+- **2026-11-17 三条反馈**（拍板页 https://claude.ai/artifact/84shNCU3oAamwMtvWBX8Eg，用户「全部按推荐」；分支 `claude/reminder-seconds`，
+  工作树 `.claude/worktrees/reminder-seconds`，从 macos `9acd4306`）：
+  - **秒数**（03f584f0）：「现在 + 1 分钟」的倒数从 58 起。详情页「日期和时间」的下限是带秒的「现在」，系统的日期选择器把比下限早的值
+    夹成下限本身、连秒带毫秒（屏外实测）；改成下限 = 下一个整分（`Reminder.earliestPick`）、存的值去秒（`Reminder.picked`）。
+    启动器 / 菜单的「多久之后」照旧精确到秒；「提醒建好了」带「编辑」停 6 秒盖住耳朵是有意的。
+  - **倒数的样子**（第 1 批，C1–C6）：右耳读数还剩 10 分钟以上只写分钟（「42分」，往上取整），10 分钟以内走秒，最后 1 分钟强调色
+    （`Island.Activity.wingReading` / `isClosing`，只管耳朵；一小时以上照旧「4小时」；卡片、菜单栏那一项、读屏是精确倒数）；右耳的字全部活动统一 11 pt 中粗、白 85%
+    （原来 12 pt 粗体，录屏计时一起改）；设了图标的提醒左耳画它的静止画面（`Activity.emoji`，画法同设置里的图标、深色表情垫浅底）；离响超过 1 小时照旧不挂；耳朵上不写标题。
+    截图自检 `island-wings-reminder-*`。
+  - **专注模式**（第 2 批，B1–B8）：系统的专注模式滤镜（`Reminders/ReminderFocus.swift`，AppIntents `SetFocusFilterIntent`，不要授权）：
+    用户在 系统设置 › 专注模式 › 某个模式 › 专注模式滤镜 里加 Kitty Tools 的「提醒」，选「只在刘海上挂图标」（推荐配置）/「先不提醒，
+    结束后再响」/「照常提醒」。**模式关掉时系统再调一次 `perform()`、参数是声明的默认值**（WWDC22「Meet Focus filters」），所以默认值是
+    照常。开着时到点的（没开「专注模式时也照常提醒」`Reminder.duringFocus` 的）先压着（`ReminderCenter.heldFired / heldMissed`、
+    `ReminderCheck.heldBack`）：不弹、不响、不升方式、不催；挂图标时耳朵上一个活动（`Kind.heldReminder`：左耳闹钟、右耳几条，强调色），
+    点开是卡片（知道了 / 稍后）；间隔类不攒（`check(focus:)`，同离开电脑），结束后从那一刻重新数。回到照常时压着的照轻提醒的样子弹一次、
+    响一声——**补弹在 `check()` 里做**（`releaseHeld`：锁着屏、在状态屏里、暂停着时等回来那一下再弹；评审：定时的睡眠专注 7:00
+    结束时还锁着屏，原来当场在锁屏上响）。设置 › 提醒 最下面「专注模式」一节（现在生没生效 + 打开系统设置那一页），详情页「专注模式时
+    也照常提醒」（给压着的那条打开它就放出来照常挂）。没做 App Intents 扩展：App 没开着时系统会不会叫起它没实测，启动、醒来时都读
+    `current`（**问不到当照常**：记着的「安静」不能一直卡着），读到之前按偏好里记的上一次（`Prefs.remindersFocus`，本机的、不注册默认值）。
+    刘海岛插件没添加时耳朵挂不上，「挂图标」实际等于「先不提醒」，插件加上时重挂（`AppDelegate.applyFeatures` → `recheck`）。
+    **没实测**：滤镜在自签不上架的 App 上出不出现在系统设置里、`current` 和关掉时那一次回调（HANDTEST 提醒手测 44–49）；
+    构建产物里的 `Metadata.appintents` 已确认登记成 `FocusConfiguration`。
+- **2026-11-18 修**：用户报刘海上的提醒「鼠标一移上去，提醒内容和『知道了』之间多出『延后 5 分钟』，把位置顶走，
+  好几次点错」。原因：收着那一行只露第一个按钮，悬停换成通用卡片——第一行重排（说明挪到下面、「稍后」插在「知道了」
+  左边、× 插在右边），卡片按内容重新定宽、以刘海为中线左右长，「知道了」跟着挪（截图自检里约 11 pt，没说明的更多），
+  原来的左半边正好被「稍后」占了。改成挂着的那条（`Island.Content.isPinned`，`pin` 设）用自己的视图
+  `IslandView.pinnedCard`：一弹出来两个按钮就并排露着（「稍后」灰底、「知道了」白底在最右，主次分开），收着、展开是
+  同一个视图，展开只往下长出完整说明（行内的说明原地淡掉、位置空着），宽度只按第一行定（`CardLayout.firstRowOnly`），
+  没有 ×（它就是「知道了」）；展开时不再记「刚展开 0.3 s 内的点击不算」（按钮不挪了，留着只会吞掉快点的那一下）；
+  催促时指针在岛上不抖。`rowRoom` 改收按钮列表。别的带按钮的提示（存成文件的「在访达中显示 / 打开」等）没动：
+  收着照旧只露第一个，悬停展开时那个按钮仍可能挪几到几十 pt（× 插在右边、卡片变宽）。截图自检 `reminders()`
+  多了胶囊 / 刘海屏没说明的两对，并逐像素比刚弹出和悬停两张图里穿过按钮的那一行。手测「提醒手测」56、57。
+- **第五轮体检（2026-11-18，拍板页 https://claude.ai/artifact/5S1NM4U7MNwxcHKGmVPW6d「全部按推荐」，第 2 批）**：
+  - **E5 时钟变了**：`NSSystemClockDidChange` 只收明显往回调过的——记在将来超过 1 分钟的处理时刻收回到现在（差几十秒的对时不动），
+    推到的时刻超过实际能推到的最远（`ReminderCenter.farthestSnooze` 65 分钟 = 一小时以内的倒数 + 推后 5 分钟）才截回，暂停最多 2 天
+    （`ReminderState.pulledBack`）。原来一律截到 30 分钟，推后 1 小时的一对时就提前响。
+  - **E6 暂停**：暂停期间间隔类同离开电脑（不响不攒），暂停到点（`ReminderState.endPause`）、手动恢复时从那一刻重新数；暂停着时菜单「下一个」
+    不列间隔类。「暂停到明天」= 明天第一个时段开始（`ReminderCheck.pauseUntilTomorrow`：开着的、那天勾了的、设了时段的间隔提醒里最早的开始，
+    只有一部分设了时段时取设了的里最早的，没有就 8:00；半夜之后、今天的还没到时是今天的），菜单上写到几点（「暂停到明天 9:00」，今天的只写钟点），
+    岛上「提醒暂停到明天 9:00」（英文 tomorrow 小写，单独一句）。原来到 0:00 就结束、周六零点弹出工作日的提醒。
+  - **E7 全屏自己收起**：倒数期间没人碰过键盘鼠标（系统空闲时间 ≥ 出来的秒数）、或会话切走 / 锁着屏（`InputBlock.isSessionAway`）时不算知道了：
+    不是间隔类的收起全屏、挂到刘海岛上等处理（不再催）；间隔类照旧算处理了、重新数（`ReminderCenter.unattended`；评审：「休息眼睛」照做的人
+    正好 20 秒不碰键鼠，挂到岛上会让锚点空着、之后不再数）。原来一次性的会就这样被删掉。
+  - **E13 换屏**：全屏和边框听 `didChangeScreenParametersNotification`，显示着就按现在的屏重摆（已有的挪过去、新屏补、没了的收），倒数、按钮
+    状态、边框的呼吸都接着；换屏补的边框窄窗口排在已有的那几条后面（`order(.below, relativeTo:)`），不盖住刘海岛。
+  - **U10**：全屏的说明改准（点不到后面的窗口、打不了字，↩ / Esc 收起）；间隔的时段能跨过半夜（结束早于开始 = 算到第二天，归开始的那一天；
+    `Schedule.windowMinutes`，页头「比间隔还短」按它算；「到」下面一行「第二天」）。**各台都升级才能设跨半夜的时段**：编码只在跨半夜时多写
+    `overnight`（别的提醒字节不变），0.8.0–0.10.0 同步时解了再编对不上、提醒这一类停下说先更新这台 Mac，不会把它收拾成 22:00–24:00 再推回来；
+    没升级的那台导入设置文件、从备份恢复时，那一条在它自己那里退成到半夜（不传回来，同步那时已经停了）。非间隔类没有时段，照旧收拾成到半夜。
+  - **评审另修**：过了点、此刻已经出了时段的间隔类不补响、从现在数交给下一个时段（`ReminderCheck.Result.rested`：从状态屏出来、时钟往前跳、
+    醒得晚都走这里；推过的照响）。
+  - 手测 `HANDTEST.md`「第五轮体检手测」19–34。
+
+### 专注模式（0.10.0，2026-11-17）
+
+- 用户 2026-11-17：「系统的专注模式也要自动认出来，像 Alcove 那样在刘海上显示，提醒在任何专注模式下都自动只挂图标」，中途加「alcove 的功能
+  尽量对齐」「不只是专注模式，其他功能也看一下」。拍板页 https://claude.ai/artifact/7XAhtx3TEY8AJkJyiHcVE2（源文件 `macos/build/research/focus-2026-11-17/page/`），
+  **用户回「全部按推荐」**。
+- **怎么读（A1）**：系统日志。donotdisturbd 每次切换写一行 `Did receive state update, will handle; stateUpdate=<DNDStateUpdate …; state: <DNDState …;
+  activeModeConfiguration: <… mode: <DNDMode …; name: 午睡; modeIdentifier: …; symbolImageName: headphones; tintColorName: systemIndigoColor; …>;
+  activeModeIdentifier: …>; previousState: …`（关掉时编号是 (null)；整行在 1062 字处截断，新状态完整、previousState 常缺后半截）。
+  `Shell/SystemFocus.swift` 常驻 `/usr/bin/log stream --style ndjson --predicate 'subsystem == "com.apple.donotdisturb" AND category == "ServiceProvider"
+  AND eventMessage BEGINSWITH "Did receive state update"'`，起来时 `log show --last 7d` 同谓词拿最后一条当「现在」。实测（本机 27.0）：常驻 90 秒
+  CPU 0.01 秒、约 4 MB，logd 量不出差别；往回查 7 天空闲时 2 秒、CPU 1.2 秒（评审时机器忙，9 秒）；自定义模式有名字、图标、颜色，系统自带的名字是英文（按编号翻）。
+  - 没选的：② 同 Alcove 在进程内用私有的 LoggingSupport（它的公开字串里有 `OSLogEventStream`、`activeModeIdentifierRegex`）——私有接口；
+    ③ 完全磁盘访问读 `~/Library/DoNotDisturb/DB` 的两个 JSON；④ 只用滤镜。公开的 `INFocusStatusCenter` 走不通：要 Communication Notifications
+    这个写在描述文件里的 entitlement，Apple Development 签名带描述文件的 App 只能在登记过的 Mac 上打开（推断，没注册 App ID 去试），而且只给开 / 关。
+  - **读不到**（log stream 起来不到 10 秒就退出、连着三次：不是管理员账户 log 不让读之类；它一起来就先写一行「Filtering…」，
+    所以只看活了多久）：`isReadable = false`，刘海上不出、提醒只剩滤镜，设置两页各一行橙字。往回查失败只记日志。苹果改了写法时
+    stream 照样跑、一行都认不出：等于一直没开专注模式。日志里没见过的符号名（「工作」写的 `person.lanyardcard.fill` 在 macOS 上没有）换成意思相近的 / 月亮。
+    往回查只有 7 天：查不到切换时留着偏好里记着的那个；偏好里也没记着的（更早开的、头一次用）认不出来，下一次切换才知道（ponytail）。
+    每次起 stream（包括断了重起）都往回查一次，按「第几次」（`round`）认，stop 之后、上一次的结果和缓冲着的行都不算（评审）。
+    App 退出时 `terminate` 当场停掉 log（任务取消来不及走到停子进程，评审：原来会留给 launchd）；闪退时留给 launchd、下一次切换写日志时
+    管道断了才退。只认 ndjson 里 `userID` 是自己的（快速切换用户时别的用户的 donotdisturbd 也看得见；`getuid()` 登进 mac-native §3）。
+  - **谁要它才跑**（`SystemFocus.apply`，同 SystemNotices）：刘海岛插件添加着且「在刘海上显示专注模式」开着，或者提醒开着且「专注模式开着时」不是照常。
+    现在的模式记在 `Prefs.focusMode`（本机的，不注册默认值）：刚启动、往回查的两秒里先按它，提醒别在这一下把压着的弹出来。
+- **刘海上（B1，默认开）**：开、关、换模式时贴着刘海两边出 2 秒（`Island.Level` 的 `.focus`，同耳机、电源那种提示）：左边模式的符号（模式的颜色）+ 名字，
+  右边「开 / 关」（关掉时都是暗白）；每侧照名字量多宽（`Level.wing`，最窄同音量提示 90、最宽 160 截尾；形体和跟边走的 `EdgeRide` 都按它算）。
+  起来时读到的「现在」不提示；锁着屏时切换的不补。没刘海的屏上是一行胶囊。VoiceOver 念「专注模式「…」已打开」。
+- **提醒（B2）**：设置 › 提醒「专注模式开着时，到点的提醒」（`Prefs.remindersDuringFocus`，默认只在刘海上挂图标，跟着设置导出、同步）对任何专注模式都算；
+  滤镜的默认值改成「跟着 Kitty 的设置」（`ReminderFocusStyle.follow`，= 这个模式没另选，关掉时系统送来的也是它），另选了的以滤镜为准
+  （`ReminderFocus.effective`，单测锁住）。单条的「专注模式时也照常提醒」照旧最优先。
+- **2026-11-18 装上测试包后用户：「刘海上出来了，但是会消失，alcove 好像是一直展示的」**：加「开着时一直挂在刘海上」（默认开）——开着专注模式时
+  一个活动（`Activity.Kind.focus`，最不要紧，放歌、倒数、录制时让给它们；没刘海的屏上不进菜单栏那一项，系统自己有专注模式的图标）：左耳模式的
+  符号（模式的颜色），点开是卡片「勿扰模式 · 专注模式开着」+「专注模式设置…」。卡片圆底用活动自己的颜色（`Content.tint`，日程的日历颜色同）。
+  Alcove 的字串里有 `focusStatusSymbolContainer`、`isFocusStatusSymbolVisible`，对得上「一直显示」（推断）。
+- **第 2 批：Alcove 另外几项专注模式的设置**（设置 › 刘海岛「专注模式」那一节，都默认关，「在刘海上显示专注模式」关着时变灰、也不起作用）：
+  睡眠模式刚打开时响一声（系统的「Purr」，录屏 / 录音时不响；`Mode.isSleep` 认编号里的 sleep、`bed.double` 符号、英文名 Sleep）；
+  正在播放的右耳跳动条换成模式的符号和颜色（`Island.focusMark`，SystemFocus 在变了、偏好变了时更新；任何专注模式都换，Alcove 能只选一个
+  模式——日志里只见过切换到的那几个，列不全，ponytail）；专注模式开着时不弹电源 / 电量低 / 耳机 / 网络的提示（`SystemFocus.quietsNotices`，
+  SystemNotices 四处看它；低电量的门槛照样记下，不在结束后补弹）。音量、亮度键的提示照常（键是用户自己按的）。
+- **第 3 批：拍板页 C 节「这次做」的四样**（都默认关）：
+  - 整点报时（C8，「日程」一节；`Shell/Chime.swift` 的 `HourlyChime`：一个任务睡到下一个整点，连续时钟，醒来时晚了 1 分钟以上的不响）；
+  - 日程开始时响一声（C9，「下一个日程」开着才能开；`NextEvent` 记着挂在刘海上的那一条，到开始那一刻 refresh 时响，`isStarting` 只认 1 分钟以内）；
+  - 提示音都走 `Chime.play`：系统自带的 Tink / Glass / Purr，录屏 / 录音时不响，开着专注模式时只有睡眠那一声响（整点、日程算打扰；
+    这两样开着时 SystemFocus 也读，`wanted(chimes:)`）；
+  - 低电量模式打开 / 关掉（C14，「系统提示」一节；`NSProcessInfoPowerStateDidChange` 交主队列，样子同专注模式的开 / 关：
+    `Island.Level` 的 `.focus` 改名 `.toggle`，黄色电池 +「低电量模式」+「开 / 关」，3 秒）；
+  - 截图、录屏时不显示刘海岛（C17，`Island.hidesFromCapture` → 窗口 `sharingType = .none`，同触发角的面板；**没实测**系统截图 / 录屏、
+    本 App 的截图里是不是真没有——开发机的命令行没有屏幕录制授权，HANDTEST 里人看）。
+- **第 4 批：拍板页 C 节「以后」里不要授权的几样**（用户 2026-11-17「其他功能麻烦也看一下」；默认都和原来一样）：
+  - 提示停多久（C20）：短 0.6 / 标准 1 / 长 1.8 倍（`Island.DwellLength`、`dwellScale`；进行中的不算）；停在刘海上多久展开 0.3 / 0.6 / 1 秒
+    （`Island.hoverDelay`，「停在刘海上自动展开」开着才能选）；
+  - 音量 / 亮度提示（C13）：停多久 1 / 2.2 / 3.5 秒（`levelStay`）、细条用强调色、细条旁边写百分比（细条从 68 缩到 40、右边 30 宽的 11 pt
+    百分比，每侧仍 90）。Alcove 另有的「速度」（即时 / 快 / 平滑）、「三种进度条样式」没做：我们的提示只有一种出场动画，细条两种颜色够了；
+  - 电量低时写还能用多久（C15）：`IOPSGetTimeRemainingEstimate`，算出来了才写「还能用约 25 分钟」，两边照这句话加宽（`SystemFocus.wing(extra:)`）；
+    拔掉电源那一下系统多半还在算，不写；
+  - 正在用放歌的 App 时刘海两边不显示正在播放（C5）：`NowPlaying` 看着前台 App 换了重画一次，前台是放歌的那个（浏览器里的视频按上级 App 认，
+    `isSource`）时 `onWings` 为假；卡片照样轮得到。
+- **第 5 批：日历（C10，「日程」一节，都默认关）**：用日历的颜色（`Entry.color` = `EKCalendar.cgColor`：耳朵、卡片上日历符号的颜色
+  `Activity.color`，那一张月历旁今天的日程行首一个小圆点）；显示已拒绝的日程（`pick` / `today` / `busyDays` 的 `declined`）；月历上标出有日程的
+  日子（`Agenda.busy`：那一张打开时多读这一个月，跨天的每天都算、结束在零点整的不算第二天）；选择日历（有「日历」授权时列这台 Mac 的日历，
+  关掉的编号存 `Prefs.islandHiddenCalendars`——编号只在这台 Mac 上有意义，不注册默认值、不导出不同步；都关掉了就不读）。偏好变了 `NextEvent.apply`
+  比一下 `filterKey` 重读。
+- **第 7 批（一部分）：描一圈细边**（Alcove 1.7 的对比描边，默认关）：刘海屏上形体的发丝线从 0 改成白 22%（`Island.outlined`），
+  收着时形体藏在真刘海后面、看不见。
+- **2026-11-18 用户在场跑了探针**（`build/research/focus-2026-11-17/probe/`；装着的还是旧的 0.10.0，没看到刘海提示，后来装了测试包、看到了）：
+  - 勿扰开关四次，log stream 都在 4–15 ms 内收到；老的分布式广播 `_NSDoNotDisturbEnabledNotification` 一条都没有。专注模式滤镜在系统设置里**出现了**
+    （Kitty Tools「Due reminders」三个选项，预选「Only show an icon on the Notch」）——那时装的是旧包，没有「跟着 Kitty 的设置」那一项。
+  - 正在播放（npdump，签成 com.apple. 才读得到）：「音乐」31 个字段、32 个命令；Chrome 视频 14 个字段、5 个命令。**倍速**：音乐的 #19 关着、Chrome
+    没有，**不做**；**音质标签、Explicit**：字段里没有，**不做**；**拷贝链接**：音乐只给商店编号，链接要带账号的地区（cn 能开、us / jp 404），读不到地区；
+    浏览器 / Spotify 要新的自动化授权、还得按标题猜是哪个标签，**不做**；**收藏**：音乐的「Like」命令关着，但它的 AppleScript 有 track 的 `favorited`，做。
+  - 全屏（fullscreen）：Safari 全屏 26 秒——前台窗口从刘海下沿到底、和屏一样宽（1710 × 1074），程序坞那扇窗口不在；放大的窗口到程序坞上沿、程序坞在；
+    菜单栏那层窗口全屏时照样在；`currentSystemPresentationOptions` 只管本 App；换桌面的通知探针里没收到（不是完整的 App）。
+- **最后一批（2026-11-18）**：全屏时藏起来（C18，默认关；`Shell/IslandFullScreen.swift`：`CGWindowListCopyWindowInfo` 按上面的认法，换桌面、换前台 App
+  时看，0.8 / 1.6 秒后再看两次；藏起 = 窗口透明 + `isSuppressed`；**程序坞自动隐藏时放大到底的窗口可能被当成全屏，没实测**）；正在播放的颜色（C4 的一部分：
+  封面的颜色 / 强调色 / 白色，`Island.MediaColor`、`NowPlaying.tint`；Alcove 的渐变没做）；播放卡片上的收藏（C7，默认开、只在放「音乐」时出：
+  `NowPlayingFallback.musicFavorited` / `toggleMusicFavorite`，AppleScript `favorited of current track`，读之前看 `canAutomate` 不弹框，点了才可能弹授权）。
+  游戏时藏起没单独做（游戏多半全屏）。
+- **第 2 批到最后一批的独立评审（2026-11-18）**，修了：全屏时藏起原来整扇窗口透明——摆到外接屏上的提示、快捷键叫出来的那一张（看不见却拿着键盘）、
+  音量 / 亮度提示都看不见了：改成只在窗口摆在刘海屏上、不是那一张、不是音量 / 亮度提示时才透明（`Island.hidesNow` / `syncFullScreenAlpha`），
+  藏着时 `track` 不接鼠标；刘海岛插件移除后这两样（全屏时藏起、截图时不显示）不再生效；程序坞那扇窗口在别的屏上时一律不算全屏（认不了）；
+  整点报时醒早了几十毫秒会把同一个整点响两遍（从上一个整点之后算下一个）；一直挂着的专注模式活动只在模式变了时设（原来偏好一变就重设、卡片
+  反复重画）；专注时不弹系统提示也不再丢 10% 的电量提醒；自己颜色的圆底上亮色（黄、薄荷绿）换深色符号（`IslandLeading.ink`）；设置页给了
+  「日历」授权后「选择日历」当场出来。
+  不做：选在哪块屏显示、刘海宽高微调（C19）——我们只在刘海屏上画岛、别的屏用菜单栏那一项（定过不画药丸），宽高直接取系统给的刘海区域，
+  没有要微调的模拟刘海。
 
 ### 功能管理（2026-11-04 立项）
 
@@ -1116,6 +1329,15 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
   永远系统样子、不动）；动画表情存「pack:编号」。缩略图 96 × 96 HEIC 共约 3.2 MB 打进包里（Resources/emoji-thumbs/），中文名和搜索
   关键词用 Unicode CLDR 的中文注释（cldr-json 46.0.0 annotations + annotationsDerived 的 zh，约 1 MB，只在生成时用，放 build/emoji-pack/cldr/）。
   发表情包之前在本机试：`defaults write <bundle id> emojiPackTestServer http://127.0.0.1:<端口>`，在 `macos/build/emoji-pack/out/` 起一个静态文件服务器（只认 http 的 127.0.0.1 / localhost），用完 `defaults delete`。
+- 2026-11-17 瘦身（「插件代码要不要放 GitHub 按需下载」评估的结论：代码不拆，体积大头是这批表情；用户「挪表情到线上」）：图标格子那 28 个的动画
+  原来全打进包里（5.7 MB），改成包里只带自带的默认项用到的——三个状态的举手、发光的星、闹钟，三条示例提醒的热饮、睡觉、挥手——和眼睛
+  （`StatusEmoji.bundled`，约 1.3 MB；评审时补上提醒那三个：不然一打开设置 › 提醒就为没选过的示例下载、断网时全屏提醒不动），另外 22 个和
+  「动画表情」一样第一次用到时从 `emoji-pack-1` 下（release 上本来就有、和原来包里的是同一份，不用另发；编号不同的四个见
+  `EmojiPack.choiceAliases`），没下好、没联网时垫包里的缩略图（格子里本来就小，看不出；告示上放大了略软）。存的 id 不变（导出、同步、0.7.x
+  都不受影响）。图标格子里没选的不下，选上了（详情页大预览、列表行、进入状态屏、全屏提醒）才下；「自动下载动画表情」关着时这 22 个一直是缩略图
+  （老用户关着它、又用着这 22 个之一的，升级后那个表情不动了：发版时更新日志写一句）。下载因为没联网失败的不再记「10 分钟内不重试」
+  （`EmojiPack.isOffline`），联网后下次用到就下。缩略图（746 个 2.5 MB）留在包里：它是离线时的退路，挪走就只剩系统表情字。
+  包里的表情动画 5.73 → 1.28 MB（−4.45 MB），zip 的量法见提交说明。
 
 ### 新功能标记（2026-11-05 立项）
 
@@ -1324,7 +1546,7 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
   只存改过的（`launcherCommandAliases` / `launcherCommandsOff`，注册默认值 ""，跟着设置导出、同步——E1）；内置命令不改各自的
   解析，搜索一开头把别名换回原关键词、原关键词改掉 / 关掉的挡掉（`LauncherCommands.canonical`）；撞词（含网页搜索关键词）描橙框。
 - 自带 9 个（D1 D2）：Unix 时间戳 time、JSON 格式化 json、UUID 生成器 uuid、进制转换 bcvt、URL 编码 & 解码 url、Base64 编码 &
-  解码 b64、正则表达式测试 regt、切换深色模式 dark、防止睡眠 awake，`Resources/scripts/script-*.sh`（打进包里平铺），只用 zsh 和
+  解码 b64、正则表达式测试 regt、切换深色模式 dark、防止睡眠 awake（2026-11-12 删掉，换成保持唤醒插件），`Resources/scripts/script-*.sh`（打进包里平铺），只用 zsh 和
   osascript（JavaScript）——python3 / swift 在没装开发者工具的 Mac 上一跑就弹安装框，jq 在 15.0 上有没有没核实。随 App 只读、
   跟着更新，「命令」表里右键「复制一份到我的脚本」（同时关掉自带那条）。flomo、简悦要账号，不自带。搜索菜单栏（D3）另立一项。
 - 不做：每个脚本的全局快捷键、定时刷新的 inline、按内容自动出现、只跑一次的本地过滤列表、选中文字交给脚本、脚本商店、
@@ -1535,6 +1757,16 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
     编辑器全给（同 OpenInTerminal）；拷贝路径后刘海岛说「已拷贝路径」（同 Raycast、Menuist 拷完有提示）；「新建文件」
     「拷贝路径」在设置里各能单独关（四五家都有）。各家不一致的不动：默认文件名、重名加「 2」、路径不加引号 / 不转义、
     文件夹路径不带结尾的「/」。没做（几家有、算不上必须）：访达工具栏按钮、平铺 / 子菜单切换、关掉菜单图标、建好后打开。
+  - **issue #34（2026-11-18，0.10.0 上报的，26.6）：建好后进入改名的是父文件夹，⌘⌫ 把整个文件夹扔进了废纸篓**。分栏视图里
+    选着左边一栏的文件夹、在右边那一栏新建：`activateFileViewerSelecting` 之后访达过一会儿才把选中和焦点挪到新文件上（27.0.1
+    实测：访达已在前台时 0.3 秒左右，图标 / 列表 / 画廊 0.1–0.35 秒），原来「到前台再等 0.1 秒就按回车」按早了，回车落在焦点那一栏
+    原来选中的父文件夹上；用户以为在改新文件，接着 ⌘⌫ 删的也是它（东西在废纸篓里，「放回原处」能找回）。别的视图按早了也会让原来
+    选中的那个进入改名。原来的注释以为「只是进入改名、不会改掉名字」，没想到后面那一下删除。改法：按回车前读访达的辅助功能
+    （`NewFile.finderSelects`，主线程外）：有焦点的那个视图（四种视图一样：焦点是 AXList / AXOutline，选中的项往下一两层有 AXURL）
+    里选中的正好是新文件、访达还在前台才按，每 50 ms 问一次、最多 4 秒（访达刚被叫醒时实测有 2 秒多才对上的），对不上只选中不改名。新建文件的三条路（模板、从剪贴板、
+    自定义后缀）都走这一处；别处的「在访达中显示」只选中、不按键。单测 `NewFileTests.renamesOnlyWhenNewFileIsTheSelection`；
+    实机自检 `liveRenameLandsOnNewFile`（AGENTS.md 常用命令）五种情况都过，换回旧做法跑它，分栏里进入改名的正是父文件夹。
+    HANDTEST「访达右键新建文件后的改名」。
   - 右键扩充（11-08 用户「右键功能丰富一点，参考 GitHub / 业界」）：调研 8 个开源项目（RClick、finder-menu、FinderRight、
     SuperRight 等，大多读了源码）和超级右键、Menuist 等，拍板页 https://claude.ai/artifact/DgkYJzZGMKZkK9NUrxBEy3（源文件主检出
     `macos/build/research/finder-menu-more-2026-11-08/decisions.html`），用户「全部按推荐」：加 11 项、5 项默认开，分三批。
@@ -1615,6 +1847,92 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
   找出确切路径，转义后写进临时文件交给 `tar -X`（`skipped` / `escapedForTar`）；进度的总大小 = 全部 − 跳掉的那几样。只压一个包走
   ditto 时不用名单；解压不受影响。不做：压成 RAR（系统的 libarchive 只读不写 RAR，要装 WinRAR 的命令行）、「这一次不跳过」。
   单测 `ArchivesTests.skipNames` / `skipWhileCompressing`（真压 zip、7z：跨层通配、[old]、.app 里面、选中的 node_modules）。
+  **2026-11-15 设置改成推进去的一页**（用户：那一行文本框「对用户体验不友好」——220 宽一行写逗号列表，长了看不全、要懂通配、
+  写错了只有带「/」的有反馈、说明两行挤在标签里、常见的几项都得自己打）：「压缩和解压」里留一行「压缩时跳过 ›」（`SettingsPushRow`，
+  小字 `CompressSkipPage.summary`：跳哪几个、几条写错了），推进 `Settings/CompressSkipPage.swift`：两组常见的开关（项目文件夹里的：
+  node_modules、.git、.venv、__pycache__、*.log；别的系统、软件留下的：~$*、Thumbs.db、desktop.ini——默认都关，默认值还是空的；
+  Mac 自己的杂文件本来就跳，只写在页脚、不列成开关）+「另外跳过的」一行一个的列表（写错的那条下面橙字说为什么不算，
+  `Archives.skipProblem`）+ 系统样式的「+ −」：「+」弹小框，打字时就说哪里不对（带「/」、超长、重复、只写「*」、超过 50 个），
+  逗号隔开一次加几个、结尾的「/」去掉（`CompressSkipPage.additions`）。**存法没变**：还是那一行逗号隔开的字，开关和列表都是拆出来
+  （`Archives.skipEntries`，写错的也留着）、改完拼回去（`joined`，「, 」隔开），导出、同步、0.9.0 照认；`skipNames` 改成
+  skipEntries 里过得了 skipProblem 的前 50 条，结果和原来一样。对标：BetterZip 是命名过滤器库（规则编辑器）+ 预设里一个「去掉 Mac
+  的杂文件」勾选，Keka 只有那一个勾选，同步盘客户端多是一行一条的忽略列表、内置的规则只读列出；没选：多行文本框（还是要懂语法、
+  没法逐条标错）、标记输入框（NSTokenField，一条一个胶囊，标不了错也放不下说明）、整套规则编辑器（为一行设置太重）。
+  单测 `ArchivesTests.skipEditing`，截图自检 `SnapshotProbeTests/finderMenuSettings()`。
+- **压缩成 TAR.GZ**（2026-11-17，0.10.0；用户问能不能加 tar 包）：「压缩为 ▸」多一项 TAR.GZ（`Archives.Format.tarGz`，网址动作 `tgz`），
+  只加这一种。本机实测系统 tar（bsdtar 3.5.3 / libarchive 3.7.4，38 MB 源码 + App）：不压缩的 .tar 38.5 MB / 0.5 s、.tar.gz
+  19.3 MB / 1.7 s（同 zip 20.5 MB / 1.9 s）、.tar.bz2 17.8 MB / 4.3 s、.tar.xz 16.0 MB / 22 s（同 7z）；.tar.zst 做不了（系统 tar
+  没带 zstd、要外面的 zstd 程序，App 的 PATH 里没有，报错）。gz 是 Linux、macOS、Windows 11 资源管理器、Windows 10 起的 tar.exe、
+  7-Zip 都认的那一种；xz 慢十几倍只小两成、Windows 10 的 tar.exe 不带；.tar、.tar.bz2 用的人少，菜单不加长，有人要再加。
+  **要另加 `--no-xattrs --no-acls --no-fflags`**：`--no-mac-metadata` 只管 ._ 那份，扩展属性（每个文件都有的 com.apple.provenance、
+  下载来的隔离标记）、隐藏 / 上锁标志照样写进 pax 头（`LIBARCHIVE.xattr.*`、`SCHILY.xattr.*`、`SCHILY.fflags`，实测），Linux 的
+  GNU tar 解的时候每个文件报一句「Ignoring unknown extended header keyword」；加了之后头里只剩 path / mtime。格式用 tar 默认的
+  （用得着才写 pax 头），名字是 UTF-8。App 打成 tar.gz 再解出来签名照样过（`codesign --verify --deep --strict`，实测）。重名的
+  「 2」加在整个扩展名前面（`Archives.freeName`：「资料 2.tar.gz」；移动、复制照旧只认最后一段、同访达）——「资料.tar 2.gz」再
+  解压会被当成只压了一个文件的 .gz。解压本来就认 .tar.gz / .tgz。单测 `ArchivesTests.tarGzRoundTrip`。
+- **整体优化**（2026-11-17，用户「超级右键的功能尽可能优化完善」「尽量做成完善的功能，能对标业界最高标准」）：拍板页
+  https://claude.ai/artifact/Tzdz5U58nvctiZQ58vh1Qm（源文件 `macos/build/research/finder-menu-polish-2026-11-17/decisions.html`），
+  用户「全部按推荐」：修 3（A1 工具栏按钮、A2 只差大小写、A3 读不到点名）、改 4（B1 放不下换地方、B2 解压后移到废纸篓、B3 ⌥ 解压到…、
+  B4 移动后撤销）、加 1（C1 拷贝图中文字），不做 8（图片转换、更多 tar 格式、带密码的压缩、默认收进子菜单、拖动排序、右键跑脚本、
+  文件夹图标 / 二维码 / 谁在占用 / SHA-512 / 管理描述文件拦扩展的提示）。分 4 批，在 `tar-wip` 上提交。
+  - 第 1 批（A2 A3 B1，`Archives`）：解压加 -v、跑在 UTF-8 的 locale 里（GBK zip、RAR、7z 照过），`caseClashes` 找出被盖掉的
+    （路径不分大小写、不分合成形式对得上、写法不一样；最后解的留下），每个单独再解到旁边的临时文件夹（tar 的匹配分大小写，
+    `--` 后面跟转义过的写法），名字加「 2」放回原来那一层；出错原因先去掉 -v 报的名字（`extractErrors`）。压缩失败按 tar 的
+    「Can't open `x'」「x: Couldn't visit directory」「x: Cannot stat」点名（`unreadable` / `packFailure`），写不了包本身时 tar 只说
+    「Failed to open」。动手前 `unwritable` 看文件夹写不写得了（只读的卷 / 没权限），刘海岛带「放到下载」「选择位置…」再做一遍
+    （`compress` / `extract` 多了 `into`）。实测：「\」分隔的 zip 系统 tar 自己转成层级；加密的 7z 说法对。
+    独立评审后改了：分大小写的盘上不做（两个本来都在，另存会多一份）；文件被只差大小写的文件夹顶掉（BUILD 之后 build/，tar 照样
+    退出 0）也认——文件夹参与比、只报文件，同一个写法后面又来一次不算丢，另存出来是文件夹的跳过；被顶掉的一轮一次解完
+    （`rounds`：同一组丢了不止一个才分轮，原来一个文件读一遍包，内核源码要读十几遍），进度条照走；名字里有「\」的
+    （-v 打成「\\」）、包里是绝对路径的、落不下的算没能另存，刘海岛照实说几个；包里带的只读文件夹先临时加上写权限再放；
+    `escapedForTar` 多转义 ^ $（开头的 ^ 被当成锚点：「^Readme」解出了「Readme」）；-v 的输出按「\n」拆（名字里的 U+2028）。
+  - 第 3 批（B2 B3 B4）：解压成功后、设置开着时压缩包 `trashItem` 进废纸篓，刘海岛带「放回压缩包」（挪回原处，不覆盖）
+    （`Prefs.finderTrashAfterExtract`，注册默认值 false、跟着导出）；按住 ⌥ 时扩展把「解压到这里」换成「解压到…」
+    （`do=extract&to=choose`，`FinderLink.Action.extract(choose:)`，别的 to 不认），App 弹选文件夹的面板再走 `into`；
+    移动 / 复制做完的刘海岛带「撤销」（`FileMoves.undoMove` / `undoCopy`）：移动的挪回原来的文件夹、原来的名字，原处已经有同名的、
+    挪过去的又被挪走的不动、照实说，走同一个 `move`（不覆盖、跨卷先拷完再删），排进同一条队能停；跨卷移动有原件没删掉时也是
+    这一条（原件还在的跳过，不把已经挪走的那几样连着复制品扔进废纸篓）；复制的把复制出来的移到废纸篓（同访达撤销复制）。
+    第二轮评审后改了：有只差大小写、没能另存的文件时不把压缩包扔进废纸篓（那几个只剩包里这一份）；扔不进去（只读的盘、没有
+    废纸篓的盘）照实说；「放回压缩包」分清「废纸篓里没有它了」和「原来的文件夹不在了」；另存时写法后面加「$」只认这一条
+    （tar 的写法按前缀认，「a」会把 a/ 下面的都解出来；zip、7z、tar 的文件夹 -v 都带「/」，实测），类型用 lstat 看
+    （解出来是文件夹、指向文件夹的替身都不当成文件），丢的文件 a 和丢的 A/b 分到两轮；跨卷移动原件没删掉的那几样，撤销时原件
+    还在就把复制品移到废纸篓、原件后来被删了就照常挪回去，挪回去时那边没删掉也照实说。解压后在主线程上拆 -v 输出写了 ponytail。
+  - 第 4 批（C1）：右键图片「拷贝图中文字」（`FinderMenuItem.copyText`，默认开；扩展只在选中的都是图片时出：按扩展名
+    `UTType` 认图片、不算 SVG），网址 `do=ocr`，App 经 `FinderLink.copyImageText` 交给 AppDelegate（识字要等模型、做完排空闲回收）：
+    `OCR.image(at:)` 在主线程外按照片里记的方向转正、长边缩到 4096（8192 一张要解成约 268 MB，评审），每张同截图识字——有二维码 /
+    条码拷它的内容，没有就识字、按设置接不接行，几张之间空一行，`Paster.write(record: true)`；排进访达右键那条队
+    （`FileMoves.enqueue`：超过 1 秒挂进度条「3/20」和「停止」，停了什么都不拷），一次最多 50 张；还没从 iCloud 下载的不读。
+    AppDelegate 里等模型那一段拆成 `prepareRecognition`，截图识字照旧走 `recognizing`。第 2 批（A1 工具栏按钮）先问了用户要不要
+    「控制访达」的授权：苹果文档写明扩展管不到的位置点工具栏按钮时 selectedItemURLs / targetedURL 都是 nil，iCloud 文件夹多半就是。
+  - 第 2 批（A1，2026-11-18 用户选「要授权」）：访达工具栏按钮「Kitty Tools」（`toolbarItemName` / `ToolTip` / `Image`：`pawprint`
+    模板图；系统不让替用户放，设置页脚写怎么拖上去）。有选中的同右键选中的、没选中同右键空白处；两样都拿不到（iCloud 云盘、
+    网盘）时菜单照全的列（`FinderMenu.blind`：空白处的项、按类型才出的项都列上），点了交的网址不带文件、带 `finder=items /
+    folder / auto`（拷贝路径、在“X”中打开是 auto：选中的，没选中就是这个文件夹）。App 先核对凭证（`FinderLink.finderScope`：
+    别人借它让 App 去读访达不行），再跑 osascript 问访达（`finderScript`：`insertion location` + `selection as alias list`，POSIX
+    路径、NUL 隔开；进程外，第一次时系统问要不要让 Kitty Tools 控制访达），换上文件（`withFiles`）照常走 `parse`。没授权（−1743 /
+    −1744）刘海岛带「打开系统设置」，用户点了取消（−128）不说。设置 › 访达右键第一组多一行「控制访达」（`Permissions.automation`：
+    允许 / 没问过 / 拒绝过，没问过点了跑一句问访达名字的 AppleScript 让系统问）；桌面或文稿同步在 iCloud（`isUbiquitousItem`，本机
+    没开这项，没真机验过）时页脚下面多一行橙字。Info.plist 的 NSAppleEventsUsageDescription 加了这一条（中英）。功能关着时点按钮
+    一行灰字；废纸篓里不选东西点按钮一行灰字。单测 `FinderLinkTests.toolbarAsksFinder`，截图自检 `finderMenuSettings()`。
+    独立评审后改了：iCloud 云盘（~/Library/Mobile Documents/…）、网盘（~/Library/CloudStorage/…）在资源库里，新建文件原来一律拒绝
+    （`NewFile.allowsNewFiles` 放开这两处、它们的根不算）；设置页「授权…」原来跑 `return name`（AppleScript 自己答、不发事件，
+    系统不问）→ 改数访达窗口；问文件夹不用 `insertion location`（「最近使用」、搜索窗口给的是桌面，新建、粘贴会悄悄落到桌面上）→
+    `target of Finder window 1`，不是文件夹就说「最前面的窗口不是一个文件夹」；路径结尾的「/」去掉（同右键）；选中的超过 2000 个
+    脚本里先回一句、拼字用 text item delimiters；超时（授权框一直没人点）单独说；授权框开着时再点不问第二遍；工具栏图也先画成
+    小位图；全关了点开说一声；桌面同步在 iCloud 另看访达自己的 FXICloudDriveDesktop / Documents（两路都没在开着的机器上验过）。
+  - **访达里 ⌘X 剪切、⌘V 移动**（issue #33，2026-11-18 用户「按推荐做」；参考 guyue55/MacRightClick 745f5f9b，Apache-2.0，
+    只看思路）。访达的「剪切」对文件是灰的，要 ⌘X / ⌘V 只能接管按键。三条路：A 不做、教 ⌥⌘V；B 事件拦截（推荐、做了）；C 访达
+    在前台时才注册 ⌘X / ⌘V 的系统热键（分不出键是给访达还是给浮在上面的面板，改名框里要自己转发，不要）。参考实现的两个坑我们没
+    跟：拦截在主线程（主线程一卡全系统打字跟着卡）；只看前台 App 是不是访达（启动器、别家搜索框这类不激活的面板浮在访达上时，
+    ⌘V 会被劫成「移动文件」）。做法（`FinderMenu/FinderKeys.swift`，第四处事件拦截，mac-overlay-panel §11）：访达右键里一个开关
+    「在访达里用 ⌘X 剪切、⌘V 移动」（`Prefs.finderMenuKeys`，默认关，不注册默认值、不导出不同步，同 `islandKeyLevels`；设置 ›
+    访达右键「整理文件」，开着又没辅助功能授权时下面一行橙字）；会话层加了注解的那一点建拦截、单独的线程，只管事件上「要送去的
+    进程」是访达的（实机自检 `FinderKeysTests.liveTargetsKeyWindowOwner`：平常是前台 App，不激活的面板当 key 时是面板的进程）；
+    访达里焦点在输入框（辅助功能，0.1 s 超时）放行。⌘X → 替访达按 ⌘C、等剪贴板换了读文件 → `FileMoves.cut`（和右键「剪切」
+    同一个剪切，岛上改说「按 ⌘V」）；⌘V 且剪切有效 → 改发 ⌥⌘V 让访达自己移动（撤销、同名的提示、进度都是访达的；右键「粘贴」
+    仍是我们自己的 `FileMoves.paste`），之后忘掉剪切；拦截线程只看 `FinderKeys.armed`（剪切 / 忘掉时设），主线程按剪贴板再核，
+    作废了原样补发 ⌘V。只要辅助功能，不用自动化授权。没验的：访达里的真按键（改名框、搜索框、前往文件夹、显示简介、桌面、分栏
+    视图、Quick Look 开着时），HANDTEST「访达 ⌘X / ⌘V 手测」。
 
 ### 截图识别元素（下一版，2026-11-08）
 
@@ -1650,6 +1968,24 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
   （`ScreenCapture.hoverWindows`、`ElementFinder.dockBar`；第一次读程序坞 42 ms、之后 0.6 ms）；③ 一层的下限 24 → 20 点
   （菜单栏图标高 22）。评审后又改：缓存按进程分开、钻过的只在指针还在最里面那块时用（不然同一个大容器里换一行还给旧的）、往下钻的超时封在一半里、主菜单层级只认 WindowServer 的那一条、菜单栏看不见时不收。没做：AX 挪出主线程（现在有总时限和命中缓存，够用）、第三方菜单栏图标（要挨个问所有 App，第一次几百毫秒）、
   核对 AXWindow、窗口边上 = 整扇窗口、替 Chromium / Electron 临时打开辅助功能（拍板 B2；macshot 是开、结束时只撤自己开的那次）。
+- 第三轮（2026-11-15，用户：「希望更精细一点，现在还是有很多识别不到」；拍板页 https://claude.ai/artifact/Nxzsp9Nssftomsw8FVjn96 （标题叫「第二轮」），
+  8 项「全部按推荐」；探针、原始数据、别家调研在工作树 element-detect-v2-f18765 的 `macos/build/research/element-detect-v2/`）：
+  用只读探针（和产品的 `ElementFinder.swift` 一起编译）在 8 个 App 上每 30–40 点问一次，拿整棵树对照归因。认不到的大多是我们没去拿：
+  ① 从不读 App 对象本身，Chromium / Electron 一直不打开无障碍（读一次 App 的 AXRole、不设任何属性，约 0.3 s 后 Obsidian 认出的点 0% → 95%；
+  本机有别的程序给不少 App 设了 AXEnhancedUserInterface，所以本机的 Chrome / VS Code 本来就能认）；② 下限 20 点筛掉文件名框（18）、链接（19）、
+  开关（16）（访达 32% 的点）；③ 缓存只看指针在不在钻到的那块里，没看进没进它的子元素（系统设置 5% 的点停在大一层）；④ macOS 26 起内容铺到
+  玻璃工具栏底下，指针在工具栏按钮上时访达的命中测试给的是底下被盖住的那一行（4–15% 的点）。往下钻读更多个、钻更久、先读 AXVisibleRows 都
+  不改变结果；Safari 网页被盖住 62 秒后照样答（遮罩不会让它不答）；Xcode 编辑区空着、终端内容区一整块是对的。图像兜底试了多尺度 XY 切分：
+  一扇窗口 12–25 ms，网页这类有留白的版面切得像样，原生 App 里和 AX 的块对得上的 13–30%（侧栏列表、淡底色卡片、整行切不开），别家也都不拿
+  图像做悬停识别，C1 先不做。做了：A1 下限（短边 16、长边 20 点）、A2 缓存看子元素和工具栏、A3 工具栏优先（第 1 批，`5fb82400`）；
+  B1 叫醒网页（第 2 批：设置 › 截图子开关「也认网页里的元素」默认关，每个进程一次框选读一次 App 的角色，指针停着、还很粗时 0.4 s、1.2 s 各再问一次，刚叫醒 1.5 s 里超时的不拉黑；
+  端到端实测新开的 Obsidian 叫醒那一次 1.2 ms、0.4 s 后从「整扇窗口」变成一行字 ⊂ … 7 层）。
+  不做：B2 设 AXManualAccessibility / AXEnhancedUserInterface、C1 图像兜底、D1 修饰键只认最小那层、D2 挪出主线程（改完 p95 2–14 ms）。
+- 第四轮（2026-11-16，用户手测 0.10.0：两个开关都开着，截图翻译里悬停不框元素、单击不翻，只能拖框）：⌥S 开着「盖回截图上」时走截图
+  同一个编辑页（`autoTranslate`），本来就有窗口悬停，只是照 C3 类推关了元素识别、单击选中后也没接自动翻译。C3「截图翻译不加，加了反而多一步」
+  说的是没有悬停的那条（`select`，翻译浮窗、识字），对这条不成立。改了：这条认元素照两个开关、单击选中那一块（元素 / 窗口 / 整屏）就直接翻、
+  顶部提示「拖动框选要翻译的文字 · 单击翻译 · 滚轮 换大小 · Tab 只认窗口 · Esc 取消」（不提双击拷贝）。没改：默认那条（不盖回、出翻译浮窗）和识字，
+  照 C3 仍只拖框（同日问过用户，定了保持）。
 
 **启动器 / 启动台按使用习惯排 App（2026-11-10）**（论坛反馈：「唤出启动台之后输入 s 然后回车，结果启动了 Safari」，想要
 Shadowrocket；用户看了建议回「按推荐改」；调研笔记和探针在主检出 `macos/build/research/launcher-app-ranking-2026-11-09/`）
@@ -1679,12 +2015,6 @@ Alfred 的 Related Apps、BetterTouchTool 按 App 停用，调研和测开销的
 
 ### 插件与保持唤醒（2026-11-12 立项）
 
-- **2026-11-13 用户：保持唤醒先从 0.9.0 脱离出来**（推到之后的版本）。0.9.0（分支 `release-0.9.0`）里拆掉了保持唤醒本身：
-  `KeepAwake/`、设置页、`Feature.keepAwake` / `SettingsPage.keepAwake` / `HotKeyAction.keepAwake`、菜单栏子菜单、启动器「awake …」那几行、
-  速查表那一组、偏好、图标、单测、更新日志那一条；0.8.0 自带的 awake 脚本放回来（不然升级上来 awake 这个词就没了）。插件框架
-  （插件卡片、默认不添加、启动器里的「添加…插件」、七样改插件）留在 0.9.0。保持唤醒的代码在分支 `plugins-wip`（`0ec42986`），
-  下面写的是它在那条分支上的样子；刘海岛活动里的 `.awake` 那一类留着（没有谁会挂上来，等保持唤醒回来再接）。
-
 - 用户 2026-11-12：「#3 和 #14 的功能如果做进来就考虑做成插件化的功能了，后续大模块的新功能基本都会以插件的形式存在了」。
   拍板页 https://claude.ai/artifact/UDBE97XGLMnZT9HobHz1mk （源文件在工作树 `issues-plugins-463c97` 的
   `macos/build/research/plugins-2026-11-12/decisions.html`，同目录 `demo.html` 是网页模拟的演示），10 项，用户「全部按推荐」。
@@ -1695,7 +2025,7 @@ Alfred 的 Related Apps、BetterTouchTool 按 App 停用，调研和测开销的
   欢迎引导、「功能」列表和主界面的「N 个功能关着」（`Feature.listed` 不含插件）；添加了才进侧栏「插件」一组（排在功能后面）、菜单栏、
   主界面、快捷键页、速查表、启动器。正看着的插件页被移除时回到「功能」页。不做：能下载的进程内插件包（同团队签名载得进来，但没有
   稳定的模块接口、卸不掉、崩了一起崩）、别人写的原生插件（要关库验证）、独立插件 App（等第一个真要隔离的模块再搭）。
-- **在哪添加**（A2）：设置 › 通用 › 功能 下面一组「插件」，每个一张卡（40 pt 色块、名字、一句话、要的授权、后台做什么，
+- **在哪添加**（A2；2026-11-17 起改成侧栏的「全部插件」，§10「插件页改版」）：设置 › 通用 › 功能 下面一组「插件」，每个一张卡（40 pt 色块、名字、一句话、要的授权、后台做什么，
   `Feature.pluginFacts`）+「添加」/「移除」（`FeaturesPage.PluginCard`）。已有的十个功能不挪（A3）。
 - **启动器里的「添加…插件」**（A4，`LauncherModel.pluginOffers`）：没添加的插件，打到它的名字或关键词（`Feature.pluginWords`；整个词打全、
   英文至少 4 个字母、中文至少 2 个字）时，本地结果后面、兜底前面一行，↩ 打开 设置 › 通用 › 功能、滚到那张卡、描一圈强调色两秒
@@ -1714,6 +2044,8 @@ Alfred 的 Related Apps、BetterTouchTool 按 App 停用，调研和测开销的
     剩连接词；`LauncherModel.keepAwakeItems`，行是 `.prompt` + `awake-` 前缀；只打关键词的是内置动作那一行，搜得到 awake）；
     开始 / 停止 / 到点 / 进出时段刘海岛说一声。关键词进网页搜索保留词；**不进「命令和别名」表**（插件自己能移除，没添加时表里不该有它）。
   - 0.8.0 自带的「防止睡眠 awake」脚本删掉（B3），awake 这个词给插件，插件没添加时打 awake 出「添加…插件」那一行。
+  - **0.9.0 里没有它**：发布前按用户「拿掉」拆出去（`07da6ad3`，awake 脚本放回来）；2026-11-16 用户要合回来，`git revert 07da6ad3`
+    原样加回（含刘海岛完善第 1 批的「手动那段挂上刘海」），awake 脚本再删掉，更新日志写在下一版（0.10.0）。
   - 做不到写进设置页：合上盖子照样睡（接着电源和外接显示器时除外）。
 - 独立评审（一个没看过改法的 agent，9 处，都修了）：时段里手动那段到点时岛上说成「照常睡」、和「时段结束」连弹两条（并成一句）；
   偏好变化碰巧赶上到点时不提示（到点总要说，只有定时被改引起的进出不说）；每天全天写成「到 明天 0:00」（只算真的进出）；
@@ -1723,7 +2055,7 @@ Alfred 的 Related Apps、BetterTouchTool 按 App 停用，调研和测开销的
   （图以 plugins- 开头）。待手测 HANDTEST「插件与保持唤醒」。
 - **七样改插件**（2026-11-13，拍板页 https://claude.ai/artifact/DEKeRvQeZR3VxkVA9Bx2Fr 第 2 版，用户「全部按推荐」）：功能只剩剪贴板、
   启动器、翻译、截图、录制（P1），便签、提醒、状态屏、启动台、程序坞预览、访达右键进 `Feature.plugins`，另加 `Feature.island`。
-  - 升级不动（P2）：偏好键、默认值都照旧（`defaultOn` 只有程序坞预览、访达右键是 false），开着的就是添加着；
+  - 升级不动（P2）：偏好键、默认值都照旧（`defaultOn` 只有程序坞预览、访达右键、保持唤醒是 false），开着的就是添加着；
     刘海岛没人存过、按添加着算，升级上来点刘海照旧能用。新装由 `seedNewInstall` 写成全没添加。
   - 刘海岛只做「多出来的」那一半（P1b）：`Island.hasExtras`（AppDelegate.applyFeatures 跟着给）挡 `setActivity`、进行中缩进耳朵、
     常驻的刘海监听；点刘海 / 停留 / 下滑看 `respondsToNotch`（插件添加着且「点刘海打开」——原来叫「点刘海叫出那一张」——开着）；「打开刘海岛」动作归
@@ -1734,7 +2066,71 @@ Alfred 的 Related Apps、BetterTouchTool 按 App 停用，调研和测开销的
   - Windows 这次不动（P8）。单测：FeatureTests（转过来的默认添加着、新装全没添加、功能剩五个）、SettingsListTests、HomeTests、
     ShortcutsTests、IslandActivityTests.extrasFollowPlugin、KeepAwakeTests.pluginOffers；待手测 HANDTEST「七样改插件」。
 - **#14 平滑滚动**排在后面另发（C1 C2）：第一版只做鼠标平滑 + 鼠标单独反向 + 按 App 停用 + 修饰键；拦截放在 Kitty 里单独一条线程
-  （要改 mac-native §3、mac-overlay-panel §11 两条红线），先做探针。Mos 是 CC BY-NC 4.0，不拷代码。
+  （要改 mac-native §3、mac-overlay-panel §11 两条红线），先做探针。Mos 是 CC BY-NC 4.0，不拷代码。2026-11-17 开做，见下一节。
+
+### 平滑滚动（插件，issue #14，2026-11-17）
+
+- 来历：issue #14「希望把 Mos 也加进来」；插件化拍板页（上一节）C1「做，第一版三样」、C2「Kitty 里单独一条线程」，用户 2026-11-12
+  「全部按推荐」。11-13 在 `plugins-wip` 上起了个头没提交（只拷出来用，那个工作树没动）；2026-11-17 从 origin/macos `09e5eced`
+  另开分支 `smooth-scroll-wip`（检出 `kitty-tools-macos-smoothscroll`）接着做。对标 Mos 的行为（CC BY-NC 4.0，**不拷代码**），
+  做法是通用的「目标 + 指数逼近」。插件，默认不添加（A1）。
+- **只管鼠标滚轮**：不连续的滚轮事件（`scrollWheelEventIsContinuous` = 0）且没有滚动 / 惯性阶段的才接；触控板、妙控鼠标不平滑。
+  **妙控鼠标只反向**（2026-11-18，用户装了 0.10.0 反馈「怎么设都不对、鼠标没反向」：用户接的是妙控鼠标，原来连续的一律放过，
+  平滑和反向对它都不起作用）：只听的探针实测它和触控板发的事件一模一样（连续，开始 / 变化 / 结束 + 惯性，开始那个行数是 0、像素 1），
+  只有发送设备不同——没公开的字段 87 是设备在 IORegistry 里的编号（惯性那段也带着），挂在 `AppleMultitouchMouseHIDEventDriver` 下
+  就是妙控鼠标（触控板挂 `AppleMultitouchTrackpadHIDEventDriver`；两台的 `DeviceUsagePairs` 一样，分不开）。开着反向时同一下的
+  每个事件都就地反（不看距离是不是 0）；不平滑（它本来就滑着滚）。对标的 Mos 按「有阶段就是触控板」认、同样分不出妙控鼠标
+  （它源码注释写明分不出，caldis/Mos #471 #753「妙控鼠标反向不起作用」至今开着），按发送设备认是这里自己的做法。修复在分支 `claude/smooth-scroll-magic-mouse`，没并。
+- **滚多远**：系统给的行数（定点的 `FixedPtDeltaAxis`，带系统设置里「滚动速度」的加速；一格至少按一行算）× 每行 40 点（浏览器内核
+  给滚轮定的换算，100% 时在网页里和不平滑差不多远）×「滚动距离」（50%–300%，默认 100%）。**这两个数没拿真鼠标量过**：
+  `SmoothScrollTests/record()` 只听不改，跑的时候拨滚轮就打印系统给的值，量出来不对就改 `pointsPerLine` / `lines(_:)`。
+- **怎么滑**：每格加进「还没滚完的」，每帧放剩下的 1 − e^(−dt/τ)，τ 由「平滑程度」0…100 定（40–200 ms，默认 50 → 120 ms，
+  约 0.36 秒滑完九成五）；剩不到一个点一次放完；像素整数地发、零头攒着，加起来一点不差；两帧之间最多按 50 ms 算。往回拨一格把
+  没滚完的扔掉、马上往回走；**去抖**：离上一格不到 50 ms、方向相反的单独一格当成滚轮抖了一下，吞掉不理，连着两格反向才认。
+  滑着时鼠标按下（左 / 右 / 其他键）就停（同触控板手指一碰惯性就停）。
+- **修饰键**（C1「一个修饰键临时不平滑或改横向」）：⌥ 按着不平滑；⇧ 按着上下换成左右、照样平滑（系统已经换成左右的不再换）；
+  ⌘ / ⌃ 按着不平滑（缩放交给 App 和系统）。反向不看修饰键；⇧ 拨的还是上下那个滚轮，跟着「上下反向」。合成的帧把修饰键清空：
+  滑到一半按下 ⌘ 不会变成缩放。**平滑程度拉到 0 = 不平滑、只反向**（评审建议：单独反向鼠标是这类工具的主要用途之一，不另加开关）。
+- **滚轮缩放**（issue #37「开了平滑滚动后无法用滚轮放大缩小图片」，2026-11-19，报告里没说哪个 App、怎么缩放）：按着 ⌘ ⌃ ⌥
+  的一格本来就原样放过（单测从真的 CGEvent 取修饰键锁住），这次补上**这一格把正在滑的那一段停掉**（`ScrollSmoothing.halts`：
+  原来剩下那截接着往下滚，和缩放搅在一起）；Kitty 自己的钉图是不按修饰键、滚轮直接缩放的，平滑后收到的是没有手势阶段的
+  像素增量（一行 40 点），原来按触控板算、一格放大约 50%，改成按一行 8 点折回来（`PinPanel.zoomDelta`，同不开插件的约 8%）。
+  **别的 App 里不按修饰键、滚轮直接缩放的看图**（聊天软件的看图窗口、网页看图层这类）在事件这一层认不出来：平滑把一格换成一串
+  触控板式的像素增量，它们有的当成两指拖动、有的按 `deltaY` 取整成 0，所以不缩放——没加自带名单（拍板要求不靠名单），也没用
+  辅助功能问光标下是不是滚动区（每下滚动问一次别的 App，Chromium 系会因此整个打开无障碍树、变慢）；用户的办法是把那个 App
+  加进「在这些 App 里停用」或按住 ⌥ 拨。等报告人说是哪个 App 再定要不要例外（先问用户）。
+- **反向只反鼠标**（滚轮鼠标和妙控鼠标）：上下、左右各一个开关（默认关）；系统设置里的「自然滚动」鼠标和触控板是同一个开关，这里在它的结果上再反一次，
+  设置页副标题照系统现在开没开写。停用的 App 里不反。合成的帧照抄原滚轮的「方向已经按自然滚动翻过」（没公开的字段 137，
+  `NSEvent.isDirectionInvertedFromDevice`，反向开关反过的再翻一次）：按物理方向算的地方（截图框选里滚轮换层）不会反。
+- **停用的 App**：按前台 App 认（光标下的后台窗口不另认，ponytail）。用户的名单（默认空）+ 自带的虚拟机 / 远程桌面（一格会变成
+  几十个小滚动传过去，`ScrollSmoothing.builtInExcluded`，不在名单里显示）+ App 自己写了游戏分类的（`LSApplicationCategoryType`
+  …games）。**Kitty 自己的启动台、截图框选当 key 时也不平滑**（评审发现：启动台一格一页、框选一格换一层要的是一格一格；这两块
+  面板不激活本 App，前台还是别的 App），`SmoothScroll.pausesSmoothing`。
+- **别的改滚轮的工具**开着（认得出的几个 bundle id，`ScrollSmoothing.otherTools`）：运行中添加插件时刘海岛橙字说一声，设置页
+  「权限」下面橙字；界面上只显示它们自己的名字（读运行中 App 的名字），文案里不写产品名。拍板说的是「插件卡上橙字」，插件页改版
+  之后没有卡片了（「全部插件」一行一个、介绍页），改成了添加时刘海岛 + 设置页。
+- **偏好**：`smoothScrollStrength` / `Speed` / `ReverseVertical` / `ReverseHorizontal` / `Excluded`；添没添加（`Feature.syncsAddition`：
+  一添加就要这台给辅助功能、跟这台接没接鼠标有关）和两个反向（`SettingsSync.localKeys`）不同步，平滑程度、距离、名单跟着同步和导出。
+- **插件页改版之后**（0.10.0）：`Shell/Plugin.swift` 里登记（新建的「键盘与鼠标」一组、要「辅助功能」和为什么、介绍页三条、怎么用、后台），
+  设置页用统一的 `PluginPermissionSection`（缺授权时排到最上面）和 `PluginAboutSection`。英文照 TRANSLATION.md（功能名 Smooth Scrolling）。
+- **拦截**：第三处事件拦截（mac-overlay-panel §11 写了红线，mac-native §3 C 接口名单），照刘海岛 `MediaKeys` 的写法单独一条线程
+  （`Thread` + 自己的 run loop、`perform(_:on:)` 停）：会话层、头插、会吞事件，只收滚轮和三种鼠标按下；出帧是这条线程 run loop 上的
+  `Timer`（间隔 = 最快那块屏的一帧，60–240 Hz），拨下去当场先放一帧。合成事件是像素单位、标成连续的、带记号
+  `eventSourceUserData` = 'KTSC'（Dev 版和正式版同一个，两个都开着只平滑一遍）、发到会话层，回到拦截里认出记号放行。被系统停用当场
+  重开；醒来、本 App 回到前台、设置窗当 key、系统设置里辅助功能的名单变了（等一秒）时整条重建；没授权不建，授权显示有却建不起来、
+  端口自己失效记 `failed`。滑着时鼠标按下、触控板来了都停。`SmoothScroll.apply` 是唯一的
+  起停口子（启动时、偏好一变都调），插件移除 = 线程退出、拦截作废。
+- **测试**：单测 `SmoothScrollTests`（decide、距离、修饰键和反向、平滑程度 0、τ、就地反向的三个字段和「方向已经翻过」、
+  Motion 守恒 / 叠加 / 反向 / dt 夹取、去抖、停用和游戏、别的工具、设置页橙字、读偏好）；实机自检 `liveProbe()`（探针模式：真的滚轮放过，只认带探针记号的合成滚轮，帧也吞掉；量第一帧延迟、
+  总距离、主线程卡半秒时还出不出帧、停了线程退没退；2026-11-17 用户点头后在开发机（M3 Air 内建屏 60 Hz、macOS 27）跑过：
+  第一帧 8 ms，3 行滑出 120 点、28 帧、约 0.58 秒，主线程卡住的半秒里照样出了 26 帧，停了线程退出、拦截撤掉）；截图自检 `SnapshotProbeTests/smoothScrollSettings()`（图以 smooth- 开头）。
+  待手测 HANDTEST「平滑滚动手测」1–21（要接真鼠标）。
+- 独立评审（第 1 批，没看过思路的 agent，9 条 + 7 条建议）：修了就地反向反了两遍（写行数时系统重算另外两个，只建事件的小程序
+  实测）、启动台一格一页被平滑弄坏、帧丢了字段 137、端口失效卡在「在跑」、⇧ 跟哪个反向、NonCoalesced 位、探针会漏到窗口 / 吞另一个
+  Kitty 的帧、测试里的 `SmoothScroll` 带着真监听、滑块没用强调色、页脚说满了；建议里采纳了「平滑程度 0 = 只反向」「触控板一碰就停」
+  「授权后自动接上」。没采纳：按光标下的 App 认停用（`eventTargetUnixProcessID` 在会话层有没有值没把握，要实测）、点击不经过这条线程。
+- ponytail / 没做的：出帧没跟屏幕刷新对齐（手测看出顿挫再换成挂在滚动线程 run loop 上的 `CADisplayLink`）；按住哪个键临时不平滑
+  不能改（固定 ⌥）；没有「只反向、不平滑」的开关；按键映射、罗技专有按键、模拟触控板手势（C1 不做）；停用按前台 App 认。
 
 ### WebDAV 同步（issue #18，2026-11-13，0.9.0）
 
@@ -1751,14 +2147,29 @@ Alfred 的 Related Apps、BetterTouchTool 按 App 停用，调研和测开销的
   那一份：本机写了没传上去的留着下一轮接着传，服务器上变了的才 GET。没拿下来的放旧式 iCloud 占位 `.名字.icloud`（NoteSyncDisk
   当成没下载完）、有没拿下来的那一轮整个当成没读清楚；超上限的放同样大小的空洞文件。只写自己的子文件夹和共用 images/（临时名
   + MOVE、不覆盖）；device.json 最后传；服务器上有、本机图片目录里也有的同名图从本机克隆进镜像。每连一次服务器换一个新的镜像
-  目录，停止同步时整个删掉（主线程外）。
+  目录。不用了的镜像（停止同步、换服务器）在主线程外删（第五轮体检 E14）：停止同步时先取消正在跑的那一轮（只在网络请求上
+  停得下来，停下来后看到文件夹换了就收手），等它走完再删；留哪个**删的时候再看**（停止后马上又连上，新镜像不能删）；只删
+  `sync-server/` 下名字是 UUID 的子文件夹；上次没删完就退了的，启动时清掉（`NoteSyncer.removeStaleMirrors`，没连服务器时全清）。
 - **请求数**：每轮最多 40 个 GET / PUT / DELETE / MKCOL / MOVE（`NoteSyncServer.budget`），列目录每轮 3 + 2 × 电脑数个
   PROPFIND（Depth 1：有的服务只认 1）；连服务器时一分钟一轮（`NoteSyncer.serverInterval`）；429 / 503 退避 5、10、20、30 分钟
   （Retry-After 更长按它），这期间的一轮直接停在「请求太多」。坚果云的限额不公开（网上说每半小时 600–1500 次），两台空闲时每半小时
   约 210 次 PROPFIND。
 - **认证与密码**：每个请求先带 Basic，Digest 走 URLSession 的认证回调；密码只在钥匙串（`NoteSyncer.passwordKey`），偏好里只有网址和
   用户名（`Prefs.syncServer` / `syncServerUser`，不注册默认值，不跟着导出、不跟着设置同步）。http 地址照连（局域网 NAS），表单上橙字说
-  明文。证书照系统的判断。
+  明文。证书照系统的判断（自签的在钥匙串访问里设成始终信任就能连；过期 / 还没生效、加密连接没建成各说各的）。
+- **密码不对不硬试**（第五轮体检 E1，2026-11-18）：认证回调**不递第二次同一组**——请求头里带过 Basic 的 401、被拒过的 Digest 都
+  cancel，拒的那一下记在回调上，`send` 认成「用户名或密码不对」（不凭「已取消」认）。macOS 27 回环服务器实测：密码不对时一个请求
+  Basic 1 次失败登录，只认 Digest / 两种都声明的 Basic 1 次 + Digest 1 次（不答走默认处理的话系统会带着原头再发一遍：2 次、3 次）。
+  401 / 403 之后**自动的轮（定时、醒来、打开便签窗口、勾一类）不发请求**，停在「密码不对」/「不让读写」；设置里「立即同步」照发
+  一次；同步那一行给「更新密码…」（`SyncPasswordForm`：只换钥匙串里的密码，镜像和账留着，换完接着同步）；钥匙串里没有密码
+  （`noPassword`）同样给它。拒过的记号只在内存里：每次重新打开 App 会再试一次。连服务器时「停止同步…」先确认（删钥匙串里的密码
+  和本机镜像、服务器上的不动，危险色）；http 连着时服务器名后面一个橙色的「未加密」（前面一个开着的锁）。连接表单测试 / 连接时「取消」和 Esc 能用、
+  收起就取消在跑的请求，「连接」看过的那一眼交给 `enable(server:seen:)` 不再列一遍；落盘前看到取消就什么都不记。
+- **停了要让人知道**（第五轮体检 U1）：要你处理的（不是那个文件夹、更新版本写的、密码不对 / 不让读写 / 没有密码）马上在刘海岛说
+  一次，带「打开同步设置」（设置 › 通用，滚到「同步」那一节）；别的（文件夹不在、还没下载完、连不上、请求太多……）一直停满 30 分钟
+  才说（睡着的那段不算：按开机后醒着的时间算，`systemUptime` 睡眠时不走）；一段停着里同一种只说一次（别的那几种合起来算一种）。说过的同时主界面底栏
+  「设置」前面一个橙色小圆点（直接读 `NoteSyncer.needsAttention`，主界面开着时也跟着变），好好走完一轮、停在等确认、停止同步就收掉。
+  刹车照旧自己上岛。
 - **设置**：「同步」没开时「连接服务器…」+「选择文件夹…」，表单 `Settings/SyncServerForm.swift`（地址、文件夹（默认「Kitty Tools
   同步」，服务器上没有就建）、用户名、密码，「测试连接」写一个点开头的小文件再删）；有别的电脑在用先问合不合在一起（同选文件夹）。
   开着时那一行是服务器图标 + 文件夹名（悬停看网址和用户名），状态行另说还有几个没拿下来 / 没传上去，请求太多时「HH:mm 后接着同步」。
@@ -1772,6 +2183,433 @@ Alfred 的 Related Apps、BetterTouchTool 按 App 停用，调研和测开销的
 - ponytail：请求数按轮限、不按时间窗；服务器不支持 MOVE 时图片直接 PUT 正式名（传一半断了会留半张）；传了临时名后 App 退了，
   临时文件留在 images/；刹车、不是那个文件夹这类停在合之前的一轮不 push（上一轮没送完的等下一轮）。
 
+### 多语言（2026-11-15 立项，随 0.10.0）
+
+- 用户「需要开始支持多语言了，先支持英语」。盘点 + Xcode 27.1 原型后出拍板页 https://claude.ai/artifact/6AKf54goosrR568Gs1smAj ，
+  用户「全部按推荐」。盘点：Swift 里 5,218 处中文字面量（去重 3,799 条、约 3.4 万字，201 个文件），不改代码 SwiftUI 字面量能抽出约
+  900 条；访达扩展 26 处、权限说明 7 条、更新日志 15 版 335 条；Windows 约 5,000 处。数据和脚本在当时的工作树
+  `macos/build/research/i18n/`（不进仓库）。做法、流程、口径、术语表在 `macos/TRANSLATION.md`，红线在 mac-native §2「多语言」。
+- **定了的**：D1 String Catalog、中文原文当 key，同字不同义显式 key；D2 跟系统 + 设置 › 通用「语言」，升级上来的保持中文（第一次打开
+  带英文的版本、按系统会变英文的定成中文，刘海岛说一声），繁体系统落回简体（Info.plist 列 zh-Hant、不建 lproj），其他语言落到英文；
+  D3 英文照 macOS 自带 App 的写法；D4 每批 agent 改写法 + 翻英文，`LocalizationTests` + 中文截图逐像素不变 + 英文截图逐张看 + 最后
+  一批的漏网检查 + HANDTEST 英文手测；D5 更新日志中英两份、旧的 15 版补英文，发布说明中文在前英文在后，DMG 背景中英两行；D6 存下来要
+  读回来比对的字存原文、显示时翻；D7 搜索中英都认，解析中文输入的这一轮只补英文关键词；D8 在 `i18n-wip` 上分批做、做完一次并进
+  macos，英文随 0.10.0；D9 看英文截图修长度，不为英文另做布局；D10 Windows 等 mac 英文版发了再跟（WinUI `.resw`，共用术语表）；
+  D11 规则在第 0 批改。刘海岛叫 Notch、插件叫 Plugins；官网 / README 英文版单独一项，收尾后再定。
+- **实测**（Xcode 27.1、macOS 27.0.1，别重测）：sync 时目录文件名必须是表名；switch 里返回 `LocalizedStringResource` 的字面量会被抽出；
+  显式 key 在中文界面没有 zh-Hans 表时用代码里的默认值；构建不看 knownRegions；Main 里第一次取字之前写 `AppleLanguages` 当次生效；
+  **`Locale.current` 跟着界面语言**（定成中文 zh_CN、跟英文系统 en_CN）；开发机系统语言英文在前（en-CN、zh-Hans-CN）——单测宿主
+  不钉中文会大面积红。包体积：装好的 App 约多 0.5 MB、下载约多 0.2 MB。
+- **批次**：0 基建（xcconfig、两份目录、`sync-strings.sh`、`InterfaceLanguage`、通用页「语言」、升级保持中文、测试钉中文、
+  `LocalizationTests`、`TRANSLATION.md`、规则）→ 1 外壳 A（菜单栏、主界面、刘海岛、AppDelegate）→ 2 外壳 B（设置外框、侧栏搜索、
+  通用页、功能 / 插件、快捷键页、速查表、引导、关于）→ 3 剪贴板 → 4 翻译 → 5 截图与录制 → 6 启动器 → 7 便签与同步 → 8 插件（提醒、
+  状态屏、启动台、程序坞预览、访达右键含扩展）→ 9 收尾（更新日志补英文、发布说明、DMG 背景、漏网检查、`requiresEnglish` 打开、英文全套
+  截图、HANDTEST 英文手测，升 0.10.0）。
+- **第 9 批的更新日志和发版**（2026-11-16）：`changelog.json` 每版多 `summaryEn`、每条多 `textEn`（一条仍是一行），`scope` 是
+  功能名、走目录（`ChangelogTests.everyEntryHasEnglish` 查每版每条有英文、scope 在目录里有英文）；关于页和「已更新到 x」读界面语言那份
+  （`AboutTab.localized`，英文缺了退回中文）。`build-dmg.sh` 这一版缺英文（或 scope 没英文）中止，`notes.txt` 中文在前、英文在后，
+  各带「安装」（「仍要打开」两份）；「从旧版升级」「感谢」照旧发布时手写。DMG 背景说明中英各一行（`brand-icons.swift`，顺手把
+  「隐私与安全」改成系统里的「隐私与安全性」）。
+
+### 插件页改版（2026-11-17）
+
+- 用户「插件越来越多了，插件页要不要优化」。插件 9 个（便签、提醒、状态屏、启动台、程序坞预览、访达右键、保持唤醒、睡眠关蓝牙、
+  刘海岛；长按 ⌘ 在另一个会话拍板），原来全挤在 设置 › 通用 ›「功能 ›」推进去之后、核心五个开关下面的大卡里。拍板页
+  https://claude.ai/artifact/FddFbxDbUETWmu2x7asZQv （16 项，源文件和截图在共享笔记 `plugins-page-2026-11-17/`），用户「全部按推荐」。
+  对标只写在这里：PowerToys / iStat Menus（总表 + 每个模块一页）、系统设置「登录项与扩展」（按类别）、Alfred（缺配置时按钮变橙）。
+- 定了的：D0 从 `i18n-wip` 尖切 `plugin-page-wip`，睡眠关蓝牙拣进来；A1 侧栏「插件」组第一行固定一页「全部插件」，下面照旧只列添加了的；
+  A2 按用途分组（记录与提醒｜桌面｜睡眠与屏幕，组内按 Feature 的先后；拍板页上的「键盘与鼠标」2026-11-17 平滑滚动先来、建了这一组，长按 ⌘ 那个插件来了也放进去）；A3 一行一个（28 pt 色块、名字、一句话；
+  没添加的「添加」、添加了的打勾 + ›）；A4 页里不加搜索框，侧栏搜索搜到没添加的插件落到「全部插件」描出那一行；A5 没添加的点进去是
+  介绍页（能做什么、怎么用、要的授权和现状、后台、同步），不放截图；B1 插件的设置照旧各占侧栏一页，页底「关于这个插件」；C1 授权写成
+  结构化的几项、现查；C2 加了却缺授权的那一行橙色「要授权」，插件页「权限」组排到最上面；C3 添加时能弹框的当场弹，只能去系统设置的
+  跳到它自己的页；D1 通用 › 功能只留核心五个，两页互链，通用页加一行「插件 ›」；D2 脚本命令不合并、只互链；E1 新插件没添加也标「新」，
+  添加了算碰过；F1 导入前的「后果」加「会添加的插件」；F2 同步改成插件自己声明（结果不变）；G1 启动器「添加…插件」去介绍页。
+- 第 1 批（底子，界面不变）：`Shell/Plugin.swift` 的声明；`Permissions.Kind` 加 `finderExtension` 和 `isGranted`（不弹框，自动化
+  等查不了的是 nil、不算缺）；`SettingsSync.localKeys` 读 `syncsAddition`（启动台、程序坞预览、访达右键、睡眠关蓝牙，和原来点名的一样）；
+  `WhatsNew.Entry.plugin`（没添加时标、添加着不标，`AppDelegate.applyFeatures` 里添加的那一刻 `touch(plugin:)`；同一版几个新插件算一个）。
+  单测 `PluginTests`。
+- 第 2 批（全部插件页）：`SettingsPage.plugins`（侧栏插件组第一行，`Settings/PluginsPage.swift`）、介绍页 `PluginIntroPage.swift`、
+  授权一行 `PluginPermissionRow.swift`（每种授权的名字、色块也在那里）；`SettingsPage.matching` 没添加的插件对上了算「全部插件」对上
+  （原来落到通用页），`hiddenPlugin` 描出那一行；启动器「添加…插件」去介绍页；正看着的插件页被移除时回「全部插件」描出它；
+  通用 › 功能 只剩核心五个，底下一行「插件 ›」，通用页「功能 ›」下面加一行「插件 ›」；`PluginCard`、`Feature.pluginFacts` 删掉；
+  `WhatsNew` 加 0.10.0 两个新插件（保持唤醒、睡眠关蓝牙）。截图自检 `plugins()`（图以 plugins- 开头：列表、描边、三种介绍页）。
+- 第 3 批（各插件页收口）：`Settings/PluginSections.swift`——「权限」组 `PluginPermissionSection`（按声明画，缺授权时排到页面最上面；
+  程序坞预览、睡眠关蓝牙换成它，状态屏补上）和页底「关于这个插件」`PluginAboutSection`（后台、同步、移除，替掉 `PluginRemoveSection`）；
+  访达右键那一行原来就在第一组第一行、刘海岛的几项挂在各自的开关下面，不动。导入 / 恢复前列出会添加的插件
+  （`SettingsArchive.addedPlugins`，要授权的橙字）；脚本命令那一节的说明提一句插件在哪；更新日志 0.10.0 加睡眠关蓝牙、插件页两条。
+  待手测 HANDTEST「插件页改版手测」1–14。
+
+### 睡眠关蓝牙（插件，2026-11-17）
+
+- 有用户问能不能做「MacBook 休眠时自动关蓝牙、唤醒时打开」（放在包里被蓝牙鼠标 / 键盘误触唤醒），参考 Bluesnooze。2026-11-16 评估
+  （共享笔记 `bluesnooze-eval-2026-11-16.md`）：脚本命令做不了（没有睡前触发、系统没有开关蓝牙的命令）；用户 11-17 定「都做成插件，
+  暂时还是由我们来实现」「对标 Bluesnooze，主要是要对标业界的标准」——「脚本插件」拍板页（给脚本加自动运行）搁置。
+- 对标（只看行为，不拷代码）：Bluesnooze 原版（`NSWorkspace` 睡前通知关、醒来通知开，私有 `IOBluetoothPreferenceSetControllerPowerState`；
+  每次睡眠都关、醒来一律开、关机也关）；它最常用的 fork stefansundin/bluesnooze（醒来恢复睡前的状态，本来关着的不开）；原版没合的
+  PR #61（macOS 26 起要 `NSBluetoothAlwaysUsageDescription`，不然一调就被系统杀掉）、PR #62（接着外接显示器和电源时不关，合盖模式下
+  蓝牙键鼠才叫得醒）；Vorssaint 的「睡眠时的蓝牙」（两个开关：睡眠时关闭、唤醒时重新打开——只打开它自己关掉的；用户 11-17 发来截图）；issue #11 #45（只想合盖时关）、#21 #35 #39（记住原来的状态）、#43 #52（醒来后 20–30 秒才回来、偶尔不回来）。
+- 做法（`BluetoothSnooze/BluetoothSnooze.swift`）：插件、默认不添加、只在有盖子且私有接口在的 Mac 上出现（`isSupported`）；开关不同步
+  （要这台的蓝牙授权，同程序坞预览）。设置页两个开关（跟着导出 / 同步；添加插件就是 Vorssaint 的「睡眠时关闭蓝牙」）：
+  「只在合上盖子时关」（`Prefs.bluetoothSnoozeLidOnly`，默认开，关掉 = 每次睡眠都关）、「醒来时重新打开蓝牙」（`bluetoothSnoozeReopen`，
+  默认开，关掉 = 醒来后蓝牙一直关着等你自己开）；都是接着外接显示器时不关。关之前先在偏好里记一笔（`bluetoothSnoozeHeld`，这台的状态、不注册默认值），醒来、启动（睡着时闪退、
+  没电重启）、移除插件时只打开记了的那一次（开着「醒来时重新打开」时）；关机不管（原版关机也关，下次开机登录界面上蓝牙键盘打不了字）。醒来打开后 5 秒还没开
+  再试一次，再 5 秒还没开刘海岛说一声。没有蓝牙授权时一个私有接口都不调；运行中添加时用公开的 `CBCentralManager` 弹授权框。
+  不做：Wi‑Fi 一起关（fork 有，默认关）、只断开某几个设备（原版 FAQ 说不做）、菜单栏图标。
+- ponytail：开着盖子先睡着、之后才合上的，那一次没有睡前通知，开着「只在合上盖子时关」时不关（要每次都关就关掉它）；睡前用的是 `NSWorkspace`
+  的通知，系统不等我们——真机上关不及时再换 IOKit 的 `IORegisterForSystemPower`（能拖住休眠）。
+- 验证：单测 `BluetoothSnoozeTests`（什么时候关、偏好认不出、「上次」那一行、登记和 Info.plist）；截图自检
+  `SnapshotProbeTests/bluetoothSnoozeSettings()`（图以 bt- 开头）。真的开关蓝牙只在真机：HANDTEST「睡眠关蓝牙手测」，**都还没走**。
+
+### Intel 编译（PR #21，2026-11-16）
+- 用户：「#21 也做」，之前已经在本机交叉编过 0.8.1 的 x86_64 包（`build/dsym-0.8.1-x86_64`）发给用户测，没收到反馈。
+- 收了 yml2213 的 PR #21：`ARCHS = $(NATIVE_ARCH_ACTUAL)`；macOS 27 才有的接口包 `#if compiler(>=6.4)`（Intel 最高 Xcode 26.x）；
+  Swift 6.2.4 在 x86_64 上的推断 / 优化器问题改了几处写法（行为不变）。Xcode 27.1 下 arm64 编译零警告，`ARCHS=x86_64` 交叉编也过
+  （原来的 macos 在 27.1 下加 `ARCHS=x86_64` 本来就能编，PR 的代码改动是给 Xcode 26.3 的）。
+- 补的：App 内更新按架构挑包（`Updater.archiveSuffix`，Intel 上只认 `_x86_64.zip`；清单只写 arm64 的包，Intel 上认不出就退回 API
+  按后缀挑，release 里没有就当没更新；装前用 `Bundle.executableArchitectures` 再核一遍）；`build-dmg.sh` 加 `ARCH`（默认 arm64），
+  每个可执行文件 lipo 核对、产物名带架构、只给 arm64 写清单。
+- 已经发出去的 0.8.1 x86_64 测试包是旧的更新逻辑：它会下 0.9.0 的 `_arm64.zip` 换上去，换完打不开。拿到测试包的人要手动重装 Intel 包。
+- 用户 2026-11-16 定「两个包」，不做通用包（Apple 文档、Sparkle 的惯例是通用包；本机实测通用包的 DMG 约是 arm64 的 1.6 倍，
+  0.9.0 的 15 MB 会到约 24 MB）：arm64 照旧是主包和清单，Intel 每版另传 `_x86_64.zip`（和 DMG）到同一个 release，不传就不提示更新。
+- ponytail：Intel 只靠交叉编和 PR 作者的 Intel 本机验过，没有 Intel 真机手测；Intel 上 App 内更新走 API（没登录每个 IP 每小时 60 次）。
+  要省掉这一点，清单加一个 x86_64 的键（只加新键，老版本不受影响）。
+
+### 截图提示、放大镜开关和钉图选字（2026-11-17）
+- 用户转来三条：框选时的快捷键提示能关、放大镜旁的色值能关、钉图上能像 QQ / PixPin 那样直接拖选文字。拍板页
+  https://claude.ai/artifact/67856ZhHfWmLgz2hfmanfs （D0 A1–A2 B1–B3 C1–C5），同日用户「全部按推荐」。调研、探针和实测数在
+  `macos/build/research/pin-text-2026-11-17/`（README）。在 `i18n-wip` 尖上切的 `shot-pin-wip`（工作树 kitty-tools-macos-shotpin）分三批做；
+  同日用户「放到 0.10.0 里面去」：变基到当时的 i18n-wip 尖、补 0.10.0 更新日志（两条），快进进 i18n-wip（没推）。
+- 第 1 批（两个开关）：设置 › 截图「工具栏位置」那一节最前面加 **「框选时显示操作提示」**（`Prefs.screenshotShowsHint`，默认开）和
+  **「框选时的放大镜」**（`Prefs.screenshotLoupe` / `Prefs.Loupe`：放大镜和色值（默认）/ 只显示放大镜 / 不显示），都注册默认值、跟设置导出走；
+  截图、截图翻译 / 识字、录屏的框选同一套，每次框选新建遮罩时读一次（同「保持屏幕原色」，单测和截图自检直接给）。
+  提示关掉只关开场那条 3 秒的，被挡下时临时说的一句（`flashHint`）、Tab 换认法时的那一下照出。色值卡和格子本来就是两层：
+  不显示色值时 C 不取色、不结束截图（看不见要拷的是什么；同类里有一家明写「放大镜可见时才复制色值」），托盘的吸管照常——
+  点了吸管放大镜和色值照常出来，取完回到设置的样子（`SelectionView.showsColorCard`）；按住 ⌘ 的十字准线不再跟着放大镜开关
+  （`magnifierMoment`）。录屏本来就没有色值卡，C 只在「放大镜和色值」时照旧取色。
+- 第 2 批（钉图选字）：设置 › 截图「钉图上的字可以直接选」（`Prefs.pinSelectsText`，默认开，照用户点名的那家）。用系统的实况文本
+  （VisionKit，§2 加了一行）：鼠标第一次停到钉图上（和圆钮出现同一刻，0.3 s）才认字（`PinView.startText`，所有钉图共用一个
+  `ImageAnalyzer`，一张只认一次，关钉图取消），认出字才叠一层 `ImageAnalysisOverlayView`（压在圆钮和缩放百分比下面，藏掉系统角上
+  的「实况文本」钮）。代理 `shouldBeginAt`：按在字上、没按 ⌥ 才归选字层（顺手 `makeKey`），别的都落回钉图——空白处的拖动、
+  双击（关）、滚轮（缩放）选字层本来就不接（探针实测），字上双击是选词、不关钉图；按键一律归钉图（`shouldHandleKeyDownEvent`
+  false），右键换成钉图自己的菜单（`updatedMenuFor`：系统那份的拷贝绕过 Paster、动作是私有方法）。命令表加两项（第 0 组，只在
+  用得上时出现：`Command.available`）：选中了字时「拷贝」⌘C 拷贝字（交给 `PinBoard.textOutput`，AppDelegate 接 `Paster.write(string:
+  record: true)` + 岛「已复制」），整张图那项改叫「拷贝图像」、不带键；认出字后「全选文字」⌘A。Esc 先清选区、再按才关。
+  ponytail：语种跟系统首选语言（探针：只给中英会整行丢韩文，不给时粗体中文标题偶尔认成拉丁字母），认错的用 O 识字；
+  按住 ⌥ 时字上的光标仍是 I 形（系统选字层管光标）。
+- 第 3 批（选中后的菜单）：选中了字时右键第一组是「拷贝 ⌘C / 翻译「…」/ 用 X 搜索 / 查询「…」/ 全选文字 ⌘A」（「…」是选中的字的
+  开头 12 个字，同系统菜单；翻译功能关着时没有翻译，启动器关着、没有搜索引擎时没有搜索，查询只在选了一行、40 个字以内时有——
+  一大段交给词典会画成伸出钉图的一长行、什么也查不到），读屏的自定义动作同一份。翻译 = `coordinator.translate`
+  + 翻译浮窗（同钉图的「翻译」，只是不用再识一遍字），搜索 = 启动器的兜底搜索（`WebSearch.primary`，同启动器的 ⌃↩；空白并成
+  一个空格；同启动器在后台打开，打不开时岛说），查询 = 系统词典的小窗（`showDefinition(for:at:)`，挂在右键按下的地方；探针：不激活的钉图当 key 时弹得出来，
+  App 不在前台时会不会把它拉到前台没测出来，见 HANDTEST）。三样都只在钉图上选着字时有，不加按键。
+
+### 键位映射（插件，PR #43，2026-11-22）
+
+- 来历：外部 PR #43（作者 Jiao77）：第三方键盘没有 🌐 键，把 F24 映射成 🌐 / Fn。用系统自带的 `UserKeyMapping`（`hidutil` 那一套，
+  `IOHIDServiceClientSetProperty`），不装驱动；每把键盘按「厂商:产品:连接方式:序列号」各存一组规则。评估和拍板页
+  https://claude.ai/artifact/L36y2Kgb2BuY8pcnc4pBPz ，2026-11-22 用户「全部按推荐」= 收下、缩小范围。
+- **不要 Fn 补齐**：作者的 `FnEditingKeys` 在主线程 run loop 上建了会话层的事件拦截（看得见每一次按键）补 Fn + 退格 / 回车 / 方向键，
+  是第五处拦截、没拍板，修正提交删掉了。HID 那边补不了：`FnKeyboardUsageMap` / `FnFunctionUsageMap` 只在系统给苹果键盘建服务时读一次，
+  运行时设不进去（IOHIDFamily 源码 `IOHIDKeyboardFilter.mm`）。所以第三方键盘映射成 🌐 后单按能用，Fn + 退格这类没有；真要做另议拦截。
+- **不轮询**：作者每 2 秒重建一次 HID 客户端列全部服务；改成 IOKit 的 `IOHIDEventService` 出现 / 消失通知（主线程 run loop，0.5 s、2 s 各核一次）
+  + 醒来 + 设置页打开时核一遍。别的工具运行中把 `UserKeyMapping` 清掉，要到下一次这几件事之一才补回。
+- **只撤自己写的**：系统里别的来源写的条目原样留着；和规则一模一样的已有条目算自己的（闪退、被强退后重开，上一次写的留在系统里，
+  不认的话移除插件撤不掉、改规则报「已有其他映射」）。ponytail：别的工具恰好写了同一条时会连它一起撤。映射只活到键盘断开或重启，
+  App 没跑的时候不生效。
+- 规则 `Prefs.keyRemappingRules` **不注册默认值**：不导出、不导入、不同步（别人给的文件不该能改你的键；键盘也跟着这台 Mac）。插件添加状态不同步（`syncsAddition`）。
+- 授权：映射功能键、🌐 不要授权；macOS 14.2 起改字母、数字这类要「输入监听」，系统不收时页面上说并给按钮（`CGPreflightListenEventAccess`，不弹框）。
+- 没做：自家的功能图标（先用 SF 符号 `keyboard`）；真机映射没测（会改评审那台 Mac 的键位），手测 HANDTEST「键位映射」。
+
+### App 快捷键（插件，2026-11-17）
+
+- 用户要把「长按 ⌘ 列出当前 App 全部快捷键」做成插件（对标 CheatSheet，已停更；同类 KeyClu、Keysi、KeyMinder、KeyCue，
+  Raycast 的「搜索菜单栏项」、Alfred 的菜单搜索工作流）。调研、本机实测和拍板页 https://claude.ai/artifact/VLQHAjrkwkjyHSZagBzfem
+  （源文件、探针 `menu-probe.swift`、逐条 dump 在 `macos/build/research/cheatsheet-plugin-2026-11-17/`），2026-11-17 用户「全部按推荐」。
+- 本机实测（macOS 27，只读）：AX 读整个菜单栏之后 4–40 ms、第一次最多 0.3 s（Chrome）；访达 117、Xcode 221、VS Code 107 条，
+  Electron / Tauri 的菜单照样读得到，9 个 App 1,000 多条全还原成符号。`AXMenuItemCmdModifiers` 的 16 是 🌐（头文件没有）；
+  键先看字形、再看字符（U+F700 起是功能键私用区）、再看键码；`AXEnabled` 和标题是上次打开菜单时的、不可信。
+- 拍板（全部按推荐）：插件「App 快捷键」默认不添加，家族色键盘橙、自画图标 `kitty.app.shortcuts`；单独按住 ⌘ 1 秒（0.6 / 1 / 2 秒，
+  `Prefs.appShortcutsDelay`；`appShortcutsHold` 能关）；按着时按了键、鼠标、滚轮、别的修饰键就作废（⌘Tab、⌘ 拖动、⌘C 都不弹，
+  和连按两下 ⌘ 不重叠）；Panel 皮肤、对齐速查表的卡片和键帽（`mac-whisker/app-shortcuts.md`）、一个顶层菜单一张卡、几列排、
+  放不下竖着滚；苹果菜单不列、灰着的不画灰；松开就收，按着时按组合照常给 App；读不到 / 没有 / 没响应各一句；每次现读不缓存、
+  主线程外读（mac-native §3）、整次 1 秒；Windows 不跟。
+- 第 1 批（骨架、按住、读菜单、只看的面板、设置页）：除了拍板，评审另加的几条——本地监听也喂状态机（不然在自家面板里松开的
+  修饰键漏掉，下一次按住 ⌘ 不弹）；鼠标键按着（按着 ⌘ 拖东西）、指针挪出 30 点（按着 ⌘ 去点链接）、本 App 的窗口拿着键盘、
+  别家不激活的面板拿着键盘（系统级 `AXFocusedApplication` 不是前台那个）、安全输入开着时都不弹；读菜单在松开时取消；
+  子菜单最多三层、一个菜单最多看 300 项（书签、历史上千项）；列底放不下的长菜单拆到下一列（标题写「续」），访达在 13 寸屏上
+  一屏放得下。
+- 第 2 批（执行、留住、快捷键、速查表）：点一行 = 先收起面板、再对那个菜单项 AXPress（`MenuShortcuts.press`：按读时记下的
+  位置一级级找回去、标题对得上才按，主线程整次 0.5 秒；菜单变了按不了刘海岛说一声）；点一下面板（多半是搜索框）面板拿到键盘
+  = 留住（`NSWindow.didBecomeKeyNotification`），能搜（标题、子菜单、菜单名，中文认拼音全拼和首字母，同启动器的粗筛）、↑↓、↩，
+  Esc 先清空再收起，面板大小不跟着结果变；留住时按列表里有的组合执行那一项，别的 ⌘ 组合只收起（⌘A ⌘C ⌘V ⌘X ⌘Z ⇧⌘Z ⌘W 照常
+  给搜索框 / 面板）。新全局动作「显示 App 快捷键」（`HotKeyAction.appShortcuts`，加在枚举末尾，默认没设）：快捷键、菜单栏、
+  启动器、主界面里打开成留住的样子；「按 App 停用」只勾它也挡住按住 ⌘。速查表加「App 快捷键」一组。
+  评审另改的：按着 ⌘ 点面板时系统不一定让它当 key，本地监听自己 makeKey；快捷键打开时读菜单的任务和按住 ⌘ 的分开（松开
+  ⌘ 不取消它）；留住时 ⌘⌫ ⌘⌦、⌘（⇧）方向键交给搜索框（不然打着字按 ⌘⌫ 会把访达选中的文件移进废纸篓）；会弹确认框的项
+  按下去 App 不回话（cannotComplete）也算按了，按的那一下只等 0.1 秒；带 ⇧ 的标点（菜单写「⌘?」）两种写法都试；面板最窄 440、
+  列跟着放宽；切到别的 App、切桌面时留住的也收。
+- 2026-11-18 用户「快捷键应该可以修改，而不是只能 command」：按住哪个键能换（设置 › App 快捷键「按哪个键」：⌘ ⌥ ⌃ ⇧，默认 ⌘，
+  `Prefs.appShortcutsHoldKey` 存 `ModifierTaps.Key` 的 rawValue，跟着导出、同步；认不出按 ⌘），状态机改名 `ModifierHold`、每次现给键；
+  选 ⇧ 时那一行下面提醒中文输入法会切中英文。界面里写死「⌘」的说法都改成跟着设的键（没响应那句插进键的符号，速查表第一行写现在的键）；
+  🌐 / fn 不给选（系统拿它开听写、表情），分左右的不做。
+- ponytail：同一组合只按「同一处同名」去重，隐藏的菜单项（AX 分不出）照列；Java（JetBrains）、Qt、游戏没测；选中高亮是每行
+  自己的一块底、不在行间滑（几栏之间滑一块要算跨栏的位置，等真机看了再说）。
+- 第五轮体检（2026-11-18，第 3 批）P1：按住的那一刻起挂一个全局监听（按键、鼠标键、滚轮、指针挪出 30 点，`watchBreaks`），
+  一有动静就作废这一次、取消在读的菜单（原来只在 0.3 秒、到点、读完这几个时刻查 `quiet`，按着 ⌘ 按 ⌘C、挪鼠标时前台 App
+  照样把整个菜单答完）；H3②：留住时按组合找那一项改用 `firstNonNil`（红线不许 `lazy.compactMap(f).first`）。
+- 验证：单测 `AppShortcutsTests`（还原快捷键、标题、状态机、分组、排版、时长；`TEST_RUNNER_KITTY_LIVE_MENU=1` 实读访达）；
+  截图自检 `SnapshotProbeTests/appShortcuts()`（图以 app-shortcuts- 开头）。真机手感：HANDTEST「App 快捷键手测」，**都还没走**。
+- 2026-11-20 改版（用户嫌面板不够惊艳、截图里叠字）：调研 10 家（原版、KeyClu、Keysi、KeyCue、iPad 三代、Raycast 搜菜单项、系统菜单、
+  VS Code / IntelliJ 速查卡），拍板页 https://claude.ai/artifact/4wNyemdCHoRjJFrUZ1pTNj （材料在 `macos/build/research/app-shortcuts-panel-2026-11-20/`），
+  用户「全部按推荐」：不画卡片、连续分栏各栏差不多一样高 + 栏间发丝线，组接到下一栏写「续」、栏底不留光杆组名、组尾不只剩 1 条（A1 D1，
+  `AppShortcutsLayout` 按「组名 / 子菜单小标题 / 快捷键 / 收起的一行」排）；一串符号的快捷键、主键对成一列（B1，`MenuKeys`）；
+  栏宽按最长一行量、210–300（B2）；标题的「…」画回来（B3，`MenuShortcut.hasEllipsis`）；子菜单小标题 + 缩进引导线（C1）；
+  系统「移动与调整大小」按 🌐⌃ 组合认、收成一行、点开面板往下长高（C2）；一屏放不下竖着滚（D2）；头部图标 28 / 名字 17 / 搜索框 240
+  （E1）；命中的字黄底（E2）；各栏依次浮现（F1）；按着 ⌘ 再按住 ⇧⌥⌃🌐 只亮相关的（F2）；不做常用 / 收藏（G1）。顺手修了 🌐 🎤
+  画成彩色 emoji（共用 `KeyCap` 也改）、启动器菜单项副标题里 🌐 写成 fn。规格在 `mac-whisker/app-shortcuts.md`，手测
+  HANDTEST「App 快捷键手测」37–45；更新日志等下一版发版时写。
+
+### 片段展开（插件，2026-11-22）
+
+- 用户建议片段能像那类工具一样设关键词，在任何 App 里打出来就换成片段（对标 Alfred Snippets、Raycast Snippets、TextExpander、aText、
+  Espanso，系统「文本替换」只在系统文本框里、要接空格）。调研、本机探针和拍板页 https://claude.ai/artifact/PNApPJNxAgNG36JcSC1q1B
+  （源文件在共享笔记，探针 `macos/build/research/snippet-expand-2026-11-22/`），2026-11-22 用户「全部按推荐」（15 题）。
+- 本机实测（macOS 27.0.1，探针自己的窗口里）：删 N 个 + ⌘V 在系统单行 / 多行框、WKWebView input / textarea / contenteditable 全对；
+  **0 ms 就还原剪贴板会粘出原来的内容**，50 / 300 ms 对；网页框里 ⌘V 后紧跟的 ← 有 1–2 个抢在粘贴前面，等 ≥30 ms 全对；密码框里拦截
+  一个键都看不到；微信输入法、系统拼音的中文模式下 ; 直接上屏成「；」、字母进组字，照常删再填结果也对；组字状态
+  `AXTextInputMarkedRange` 在系统文本框、网页输入框上读得到，候选窗微信输入法在它自己的进程、系统拼音的在被打字的 App 自己的进程
+  （层级 20）。用户自己用微信输入法：「中文输入法就不展开」对他等于不能用。没测：Chrome、VS Code、终端、微信这些别的 App。
+- 拍板（全部按推荐）：插件「片段展开」放「键盘与鼠标」组，默认不添加、添加状态不同步，家族色剪贴板，自画图标 `kitty.snippet.expand`；
+  关键词是片段上单独一个字段（不拿名称当），可见 ASCII 2–32 个字、大小写严格、不强制前缀（全是字母的提示建议 ; 开头）；
+  打完最后一个字立刻展开、只在词首、取最长；删关键词 + 粘贴，剪贴板借用时带 transient、300 ms 后没被动过才放回；正在组字不展开；
+  自己一张「不展开」名单（默认同剪贴板「不记录」的密码管理器和钥匙串访问、「密码」）；Kitty 自己的窗口只在便签正文里展开（就地换，
+  不借剪贴板）；占位符沿用整套，带 {input} 的删掉关键词后交给剪贴板面板问；不另做撤回；只要辅助功能（先建只听的拦截，建不起来换
+  不吞键的）；重名不让存、撞前缀只提醒；导出、备份、同步都带关键词；剪贴板面板 {cursor} 的 ← 顺手改成等 50 ms；Windows 等 mac 手测后跟。
+- 做法（三批，到 0de7d1a5 之后的第 3 批）：
+  - 数据：`clips.keyword` 列（旧库打开时补，不升 user_version；0.10.x 的读写都写明列名、碰不到它）。导出文件 `Clip.keyword`（没有时
+    不写，旧版本忽略，不升 format；读文件时不合规、不是片段的丢掉、一个文件里重复的只留第一条；导入时本机这条没有才用、撞上别的
+    片段的不带）。全局同步：`SyncedClip.keyword` 没有时不写（没设关键词的记录和 0.10.x 一字不差）、只给片段；有关键词的旧版本
+    `decodeExact` 解不回来，那一类整个不落、说先更新——不会把关键词冲掉；不合这一版规矩的关键词同样整条不落（.newer），不收拾成
+    合规的再发出去。移出片段时关键词留着，再存成片段时它已被别的片段用了就去掉（`markSnippet`）；同步来的重名在设置页标「重复」，
+    展开时用列表里最前（最近用过）的那条。
+  - 拦截与展开见 `SnippetExpand/` 文件头和 mac-overlay-panel §11 第五处。认出关键词之后主线程慢了、用户又打了别的键（拦截上的
+    第几个键对不上）就不动，免得删错字。日志只记没展开的原因。
+  - 剪贴板面板：新建片段多一行关键词（`CommandTextField` 的对话框框给了 focusRequest 时不再抢初始焦点），已有片段 ⌘K / 右键「关键词…」。
+  - 已知取舍（ponytail）：用户在主线程处理前紧接着打的字会让这次不展开；借用剪贴板的 300 ms 里自己按 ⌘V 会粘出片段；
+    候选窗认法的层级 20 是 macOS 27 上量的；便签的标题框里不展开（只认正文 `NoteTextView`）。
+
+### 第五轮体检（2026-11-18 拍板、11-18–19 做完，进 0.10.1）
+
+拍板页 https://claude.ai/artifact/5S1NM4U7MNwxcHKGmVPW6d（52 项，用户「两页都按推荐」；新功能 N1–N3 做，N4–N12 和 H2 以后），条目原文和依据在 `build/research/checkup-5-2026-11-17/build-decisions.py`。
+会话 checkup5-impl 在 `claude/checkup5-0dbe08` 串行九批，每批实现 + 独立评审（高风险批两名 + 复核），一批一个提交，做完一批由 0.10.1 集成分支以合并提交收进去；
+手测在 HANDTEST「第五轮体检手测」1–115。各批的做法和取舍写在对应族的那一节、规则和提交说明里，这里只记跨批的和偏离条目原文的：
+
+| 批 | 提交 | 条目 |
+|---|---|---|
+| 1 同步与 WebDAV | `f722e397` | E1 E14 U1 U2 |
+| 2 提醒 | `6bc786b6` | E5 E6 E7 E13 U10 |
+| 3 刘海岛、状态屏、插件 | `c2fc5484` | E4 E11 E12 U6 U13 U14 A2 P1 H3② |
+| 4 截图与录制 | `7d3d6373` | E3 E8 U3① U7 U11 A3 H4 P2（截图部分） |
+| 5 翻译、启动器、剪贴板、便签 | `5468069d` | U4②③ U5① U8 U9 U12 A1 A4 P2（余下）P3 P4 |
+| 6 键盘、快捷键、更新 | `92a057af` | E2 E9 E10 U3②–④ U4① U5② |
+| 7 代码健康 | `51553261`（并集成分支 `d5aa8dc2`） | H1 H3（② 之外） |
+| 8 新功能 | `10875af2`（之前快进到集成分支 `9db8dff2`） | N1 N2 N3 |
+| 9 收尾 | 本节 + 更新日志 | — |
+
+- **偏离条目原文、实现时定的**（都在提交说明和报告里写了）：E7 只把不是间隔类的挂到岛上（间隔类照旧收起重新数，不然「休息眼睛」照做不碰键鼠就停了）；E9 加了「这个字母是系统语言（或当前布局的语言）里用得到的、且同一布局不按 ⌥ 打不出来」的条件（照字面做会让所有中英文新装丢掉 ⌥C ⌥A ⌥O ⌥S），新装空着的键只记在这台 Mac（`Prefs.hotkeysWithheld`，不导出不同步）；E4 只打开「日历」、不跳到那个日程（`ical://` 没公开）；A3 缩略图的空格没接（没有现成的快速查看）；U14 系统那个开关没存过时按关；P3 实量流式每段 4 ms 超过 2 ms，照条目改了；H3③ 撤销走 `FileMoves.rename`（不是 `land`：撞名会换名）；H3⑥ 正在播放服务实测 footprint 约 2.7 MB，写「约 3 MB」（条目的 15 MB 复现不出）；N1 画面一律用冻结帧、单独截的那张只借形状和别的 App 挡住的那几块（评审抓到出图时盖实时画面会让标注指错、抹掉同 App 的弹层）；N3 灰着的菜单项照列（AXEnabled 不可信）。
+- **跨批的**：E2 之后浮层里的 ⌘ + 字母 / 标点一律经 `NSEvent.typedKeyCode`（按着 ⌘ 取布局 ⌘ 那一层的字），以后新加面板快捷键照它写；H4 之后「鼠标所在的屏」一律 `NSScreen.underMouse`、数字键表一律 `HotKey.digitKeys`；H1 之后 AppDelegate / LauncherModel / SelectionView / Island 的方法按段在同目录的 `+*.swift` 里（§4 文件表），新代码落进对应的那一个。
+- **没做的**：N4–N12、H2（拍板「以后」）。
+
+### 窗口截图带阴影、延时截图、启动器搜菜单项（第五轮体检第 8 批 N1–N3，2026-11-19）
+
+- 拍板页 https://claude.ai/artifact/5S1NM4U7MNwxcHKGmVPW6d「全部按推荐」里的三项新功能，用户看截图点头再提交。
+- **N1 窗口截图带阴影**（设置 › 截图 › 高级，`Prefs.screenshotWindowShadow` 默认开；`Screenshot/WindowShot.swift`）：冻结帧那套不动，
+  **画面一律是冻结帧**（评审：出图时才截的实时画面会让标注指错、抹掉同一个 App 的工具提示 / 菜单 / sheet、换掉延时截图等来的
+  悬停状态、丢掉带上的指针）。单击选中一扇整个在这块屏里的窗口（冻结时的窗口快照带上窗口号 `ScreenCapture.Window.id` /
+  `Shot.windowIDs`，`SelectionView.clickedWindow`），选区没再动过、没贴就地翻译的译文，按拷贝 / 存储 / 另存为 / 钉图时，
+  `SelectionView.output` 在交出那一刻（遮罩还在）就开始用 ScreenCaptureKit 单独截那扇窗口（`desktopIndependentWindow`、
+  `ignoreShadowsSingleWindow = true`、不垫白底，2 秒封顶；`SelectionSession.snapshotWindow` 单测换成假的），连同「冻结时排在它
+  前面、属于别的进程的窗口盖住的那几块」（`WindowShot.covered`，连同它投下的影子那一圈、按留边估；同一个 App 的子窗口不算）
+  放进 `Capture.window`。
+  `AppDelegate.deliver` 等它截完再 `WindowShot.dress`：只有 covered 那几块换成单独截的（**画了打码的连这几块也不换**），单独截的
+  那张只借形状（alpha ×4），按形状裁、四周留边（上 30 / 左右 48 / 下 64 点）画两层阴影（往下偏的一大片在 1/4 大小上画再放大，
+  贴边一圈原大小）。截不到、几乎全透明（受保护的内容）、尺寸差 2 像素以上照旧矩形裁切。frame 往外扩出留边、标注挪进去，
+  `Capture.isWindow` 标记跟着走：历史多一列 `shots.window`（幂等 ADD COLUMN，同 frame 那列；裁过就清掉）、角落缩略图的卡片、
+  钉图（`PinBoard.pin(window:)`）——**钉图按这个标记、不按透明度猜**：不裁圆角、不描边、不加系统阴影，悬停的圆钮按缩放让进窗口
+  本体里；剪贴板里透明底的 PNG 照旧带框。「截图拷贝为 PNG 文件」时 deliver 在等单窗口截图**之前**就取号、承诺文件（来读得早的
+  当场拿矩形那张），合成完再用带阴影的 PNG 写盘，一次拷贝只写一次剪贴板（mac-native §5）。
+  ponytail：合成在主线程（同 Annotation.render）；半截在屏幕外的窗口不做。
+- **N2 延时截图**（`HotKeyAction.delayedScreenshot`，加在枚举末尾、归截图、默认不设键；菜单栏、主界面、启动器、速查表按分节自动有；
+  设置 › 截图 › 高级「延时截图倒数」5 / 10 秒，`Prefs.screenshotDelay` 默认 5，读用 `Prefs.screenshotDelaySeconds`）：
+  `Screenshot/ShotCountdown.swift` 复用录屏倒数的那一套——录制 HUD 的倒数态（鼠标所在屏可见区底部居中，点数字马上截、✕ 取消）、
+  `HotKeyCenter.registerEscape` 的临时 Esc、开始时的播报；再按一次延时截图也是取消。倒数不算 `isCapturing`：这几秒里程序坞预览、
+  App 快捷键、刘海岛照常弹，才截得到它们；倒数中开始了别的框选（`beginCapture`）、截图功能被关掉都取消倒数。临时 Esc 全 App
+  只有一个（`HotKeyCenter.holdsEscape`）：录屏倒数、录音待录条挂着它时延时截图响一声、不开始。ponytail：倒数的循环没和 `ScreenRecorder.countDown` 合成
+  一个（那边的事件流还管停流、授权），只共用 HUD 和 Esc。
+- **N3 启动器搜前台 App 的菜单项**（归 App 快捷键插件、要辅助功能；`Launcher/MenuSearch.swift`，`LauncherItem.Kind.menuItem`）：
+  `MenuShortcuts.read(includesPlain:)` 也收没有快捷键的项（面板照旧只要有快捷键的）；呼出时记下前台 App（是本 App 时不读），
+  打字够长（同书签）时在主线程外读一次、行和拼音在同一次读里算好（`MenuSearch.read`），按 App 留 30 秒，启动器收起 30 秒后丢掉；
+  排在本地结果后面、浏览历史前面，最多 5 行，**本地结果一条都没有时排到兜底搜索后面**（菜单项不当默认选中的第一行），读完重搜时
+  选中留在原来那一项；配法：先粗筛，每个词对上标题或路径的一段、至少一个词对上标题（拼音、首字母都认）。灰着的不列 / 不画灰
+  没做：`AXEnabled` 是上次打开菜单时的样子（同面板），↩ 时 App 自己定，用不了刘海岛说。↩ 收起启动器、App 不在前台先切回去、
+  `AppShortcuts.press`（面板点一行同一个）。
+- 验证：单测 `WindowShotTests`、`MenuSearchTests`、`SelectionInteractionTests.clickedWindowGoesToWindowShot`；截图自检
+  `ScreenshotSnapshotTests/renderBatch8()`（shot-delay-countdown、shot-window-shadow*）、`SnapshotProbeTests/batch8()`
+  （settings-screenshot-batch8、launcher-menu-items*）。真机：HANDTEST「第五轮体检手测」102–115。
+
+### 截图圆角：框和截出来的图同一个圆角、设置里能调（2026-11-20）
+
+- 来由：用户反馈「框选时预览的选区是圆角，框选完成后变成了直角」。查下来是**框线前后不一致（A）**，出图（B）0.10.1 已经对了：
+  悬停时洞和粉框一律圆角 10（不管是窗口、窗口里的元素还是菜单栏那条），单击选中时洞 10 → 0（`pop`）、选区双描边是矩形；
+  可单击窗口拷贝出来的图是 N1 的透明圆角带阴影（框是直角、图是圆角，正好反过来）。另外 27.0.1 上窗口的真实圆角是 16.5，
+  固定的 10 本来就贴不住。第一版（b9561d6d）按「框 = 出图」把窗口以外的都改成直角；用户看了说**要圆角、截出来的图也要圆角、
+  设置里能调**，第二版（同一分支下一个提交）改成下面这样。
+- **设置 › 截图「截图圆角」**（`Prefs.screenshotCornerRadius`，0–24 点、滑块 2 一格，0 = 直角；默认和系统窗口的圆角一样（用户「和苹果统一」，`Prefs.screenshotCornerRadiusDefault`）：15 上 10、26 起 16（27.0.1 实测 16.5，取滑块上的 16；苹果没公开这个数，15 的 10 是常见说法、没在 15 上量过）；
+  跟着设置导出导入走，导入时夹进范围）：框选时的框（悬停、拖动中、选中）和拷贝 / 存储 / 另存为 / 钉图出去的图都按它
+  （`SelectionView.cornerRadius(of:)` / `selectionRadius`；`output` 按同一个半径用 `WindowShot.rounded` 把成品和历史的原图四角
+  裁透明，识字 / 翻译的输入不裁）。例外：截图模式、开着「窗口截图带阴影」时，单击选中的整扇窗口（整个在这块屏里、有窗口号）
+  悬停和选中都按窗口**真实的圆角**（出图本来就换成透明圆角带阴影的那张），拖边 / 挪动 / 微调过一下就换成「截图圆角」；录屏录的是
+  矩形，框一律直角；长截图出图照旧是矩形（另一条出图的路，没动）。
+- 窗口的圆角怎么来：**量**（`WindowShot.cornerRadius(of: 窗口号)`）——ScreenCaptureKit 单独截那扇窗口的左上角 48 点见方
+  （`sourceRect`，原点在窗口左上，27.0.1 实测），沿对角线找 alpha 过半的那一点、按圆弧反推半径（`cornerRadius(of: 图)`，纯函数
+  配单测）。`SelectionSession.windowRadius`：第一次问一扇窗口时先给 `WindowShot.defaultRadius`（15 上 10、26 起 16.5）、在后台量，
+  一次只量一扇、这次框选记着，量完各屏重画（悬停着的 `glide` 过去）。量不出的按默认的记下。不用固定值：26 上不同样式的窗口
+  圆角不一样（没在 26 上量过，推断），App 自己画的无边框窗口（本 App 的浮层、别家的启动器）各不相同；量一次约 50 ms（含列窗口），
+  只发生在第一次悬停到那扇窗口时。
+- 本机实测（27.0.1，`WindowRadiusProbeTests`）：微信、访达、VS Code、Claude、Chrome 的窗口四个角都是 16.5 点；单独截整扇
+  25–35 ms、只截左上角同样 16.5；列窗口 23 ms。
+- 出图的影响：只出 PNG（`ScreenshotOutput`，没有 JPG 的透明问题）；拷贝进剪贴板的 PNG 四角透明，粘进不认透明的 App 四角会是
+  黑 / 白（设置的 ⓘ 里写了，调到 0 就没有）；钉图（不是窗口截图的）圆角取 max(10, 截图圆角 × 缩放)、圆弧角，不然透明的角露在
+  描边里——ponytail：按钉上时的设置猜，历史里按更大的圆角截的图钉出来角上会露一点透明，要准得把圆角记进历史；四角圆弧外的标注
+  出图时被裁掉；在主线程整张重画一遍裁角（同 Annotation.render 出图，5K 整屏几十毫秒）。
+- 验证：单测 `WindowShotTests.measuresCornerRadius`、`SelectionInteractionTests.windowFrameFollowsOutputShape` /
+  `cornerRadiusSettingRoundsFrameAndImage`、`SettingsArchiveTests.dropsInvalidPreferences`；截图自检
+  `SnapshotProbeTests/windowCorners()`（corner-*，几秒，含拷贝出去的那张）；本机量圆角
+  `TEST_RUNNER_KITTY_LIVE_WINDOW_RADIUS=1 … -only-testing:'KittyToolsTests/WindowRadiusProbeTests/measure()'`。
+  真机：HANDTEST「截图圆角」1–10。
+
+### 搁着的计划（第四轮体检新功能，2026-11-17）
+
+- 来由：第四轮体检（2026-10-30）的 24 项新功能 X1–X24 加 T3、T5，拍板页「全部按推荐」；2026-11-17 用户「先按照你推荐的全部开始执行直至全部完成」。
+  推荐「做」的 X1–X20、T3、T5 在 `claude/backlog-0de062`（工作树 `.claude/worktrees/backlog-0de062`，从 `i18n-wip` 的 `161c2925`）按族分 5 批做完、
+  各批评审后一个修改提交（86cc9cb8；99f966e8 / 789679d4；8ce9274d / 09c70e9d；87736032 / f21f4d4f；2626a860 / fa0808b8）；
+  选了「以后」的 X21–X24 没做（§12「以后可能做的」）。拍板页的源文件在主检出 `macos/build/research/checkup-4-2026-10-30/build-decisions.py`。
+- 翻译（X1 X2）：`Lang` 末尾加 19 种（共 30 种），各家语言码对照写在 `Language.swift` / 各 Provider（百度用自己的三字母码；挪威语在百度、有道、Google、火山、
+  腾讯是 no，微软、DeepL 是 nb——百度、腾讯、DeepL 的码没在官方文档逐个核对，按记忆写的）；泰文不进查词。长文分段 `LongText`：只切大模型（智谱 1024、
+  AI 服务按 max_tokens），估出来超过上限六成时按段 / 句 / 字切，依次翻、同一张卡里接着显示；传统接口不切（拍板写「约 2000 字」，实际按 token 预算）。
+- 剪贴板（X3 X13 X20 T5）：带图的 RTFD 优先存（扁平包里除了正文还有别的文件才算，2 MB 上限，ponytail：不算进图片占用）；暂停时菜单栏图标挂灰色暂停角标；
+  片段占位符的日期偏移 / 自定格式（只认像日期格式的，`Snippet.isDateFormat`）和填空 `{input:名字}`（拖出去不问、原样留着）；数据库「重新开始」后把
+  `damaged-…/backups` 里的设置自动备份拷回来。规矩在 mac-clipboard。
+- 便签（X4 X5 X6 X16 X19）：粘网页 / 文稿转 Markdown（`NoteRichPaste`，纯函数；先去掉会去外面取东西的标签；⌥⇧⌘V 粘纯文本）；快速记一条贴图
+  （草稿里的图算有人引用）；全部便签窗口多选和整批操作（`NoteStore.updateAll` / `erase(all:)` 一个事务）、导入后整批撤回；新全局动作
+  「屏幕边缘的便签」（`HotKeyAction.noteDeck`，枚举末尾、不设默认键）和扇出后的 ↑↓ ↩ Esc；按最近修改排（只在「全部」）。
+- 截图录制（X7 X8 X9 X17 X18）：键名、默认值照 Windows 先做的那版。缩略图「改标注」走长图标注那扇窗口，等历史记好这一条接着改；带指针
+  （冻结帧时画进去，识字 / 截图翻译不带）；隐藏桌面图标（截图排除访达桌面图标层那扇窗口；录屏排除整个访达、每秒补列它别的窗口——一闪而过的菜单
+  最多晚 1 秒，设置页写明）；标注裁剪（键 X，`ShotKey.crop`；出图只渲框里那一块；回写历史时一定重写原图、写完盘才换标注和尺寸、清掉钉回原位的框，
+  `ShotHistory.update(cropped:)`）；录屏选麦克风（开流那一刻核对，不在了跟随系统、岛上说；录音不动——要换采集方式，没做）。
+- 启动器、外壳、程序坞（X10 X11 X12 X14 X15 T3）：快捷指令走系统的 `/usr/bin/shortcuts`（进程外列 / 跑，不带输入、不收输出，ponytail）；更新的
+  跳过版本（`Prefs.updateSkippedVersion`，本机）和后台下载、退出时安装（`Prefs.updateInstallOnQuit`，默认开）：**退出时装和点「更新」走同一个
+  `Updater.replace`**，校验一条不少（sha256、bundle id、版本号、架构、团队签名），装不成照常退出；解包、验签的子进程 2 分钟上限。
+  评审后加固（包在缓存目录里一放几天，本机别的进程写得进去）：解出来是符号链接的拒绝；换上之后对装好的那一份再核一遍、
+  不过就换回原来的（原来的暂放成同文件夹里的隐藏项 `.<名字>.before-update`，核过就删、下次启动也清）；退出时最多等 30 秒；
+  磁盘上已经是一样新或更新的版本就不装；同一版按「版本号 + 下载地址」认。主界面打字转启动器；
+  关于页「反馈问题」（只预填版本号、芯片、系统版本）；程序坞预览卡片的最小化（AXMinimized）和中键关；别名查重算上应用别名。
+- 和 Windows 不一样的：Windows 先做了 X8 X9 X17 X18（键名照抄）；其余是 mac 先做，Windows 还没有。快捷指令、程序坞预览的中键 / 最小化、
+  AX 相关的几项 Windows 要另找做法。
+- 验证：各批全量单测、swift-format、Dev 偏好 md5 不变；新单测 `LongTextTests`、`NoteBacklogTests`、`ShotBacklogTests`、`ShellBacklogTests`、
+  `ShotHistoryTests.updateCroppedRewritesTheOriginal` 等；屏外截图在 `macos/build/shots-b2` … `shots-b5`。真机：HANDTEST「搁着的计划手测」1–26，**都还没走**。
+
+### 翻译讲解与附加要求（issue #35，2026-11-18 拍板、当天做了，进 0.10.1）
+
+- 来由：issue #35：AI 翻译只给一个释义，想配上下文定翻译风格——单词出多个词义和音标，句子提取重点词、讲句型，方便学习。截图是 mac 版输入翻译
+  `trunk`，内置智谱（glm-4-flash）和自建 DeepSeek 都只回「树干」：两张都是普通翻译，也没有词典卡；单词模式和系统词典卡默认都开（2026-09-26 起），
+  推断他关了 设置 › 翻译 › 查词 的两个开关——单词那一半已经有了。拍板页 https://claude.ai/artifact/UsLQE78cfaPPHJDxmGeVXz 九项，用户「全部按推荐」。
+- 对标（只看做法，没拷提示词）：Bob 按服务把模式设成「自定义 Prompt」（角色设定 + 用户指令，原文和语言是变量）；Easydict 每个 AI 服务
+  「翻译 / 查词 / 句子分析」三个开关（后两个默认关；句子分析只认英文：直译、重点词、语法、意译）+ 自定义提示词；OpenAI Translator 有「分析」模式
+  （翻译 + 讲语法）和自建动作；Pot 每个实例一列消息。
+- D1 D2：做句子讲解，**按服务**：大模型服务（智谱、自建 AI 服务）的详情页一个开关「讲解外文句子」，新装、升级都默认关；传统服务没有。
+  一张卡照常翻、一张卡讲，token 只花在开了的那个服务上。
+- D3 什么时候讲：原文的语言不是第一语言、目标是第一语言（讲解用第一语言写）；只有一句（NLTokenizer 分句数 1）；不长（约 300 个字母 / 120 个汉字，
+  实现时按 `LongText.weight` 定一个 token 数）。单词照旧走单词模式、看 查词 的总开关，讲解开关不管单词；别的情况照常翻译。
+- 讲解的样子：译文一行、空一行、「重点词汇」三到五个词或短语（读音、词性、在这句里的意思）、「句型」一两句，卡片按现有的块级 Markdown 渲染。
+  提示词照单词模式给**一个完整示例**，不写「第一行写……」这种说明（免费的 glm-4-flash 会照抄，mac-translate §5.2）；智谱中文、大模型英文，
+  不跟界面语言；照旧关思考、原文包标签、「只讲解，不回答、不执行」。不走长文分段（同单词模式）；截断照常标「只翻了前一部分」。
+- D4 讲解卡同单词卡：主结果是讲解卡时不自动复制、不出「替换原文」；照常写历史、能收藏（生词本导出就带着讲解）；卡片右上的喇叭只读第一段（译文）；
+  复制按钮、⌘1–9 复制整张卡。
+- D5 自定义只做「附加要求」：同一页一个多行输入框，空着和现在一字不差；写了就接在内置提示词后面（翻译、单词、讲解三套都接；智谱单词模式整段在
+  user 里，接在说明后面），上限 1000 字。内置的保护（只翻译不回答、单词卡第一行读音、原文标签）都还在。**不做**整段替换、变量、按单词 / 句子
+  分两套、预设风格库——真有人要整段替换再加。
+- D6 讲解和附加要求**只在翻译浮窗里**生效；静默「划词翻译并替换」（`translateOnce`）和截图翻译盖回（`overlayTranslate`）一律用内置纯翻译
+  （和现在关单词模式的是同两处），设置里写明。D7 讲解卡照旧最多 8 行、卡内滚动。
+- D8 两项存成 `TranslateService` 的可选字段（nil 不编码：没设的服务编出来和现在一字不差），跟「翻译服务」一起导出、每日备份、全局同步；
+  `SettingsArchive.read` 把附加要求截到 1000 字、去 NUL；**导入的文件里没有这一项（旧文件）时保留本机写的**（`merge` 按 id 整条换，
+  这两项要从本机那条补回来）。不升 `currentFormat`（旧版本的 JSONDecoder 忽略不认识的键，导入时丢掉这两项）。0.10.0 及以前的 Mac 在同步里
+  遇到设过这两项的服务，`SyncRecords.decodeExact` 当成「更新版本写的」，「翻译服务」这一类先停着、升级后接上（同加新服务种类）。
+- D9 原定排在设置改版之后做；查了改版规格（「已有的推进页……翻译服务详情……结构不动」），理由不成立，用户「现在做进 0.10.1」，2026-11-18 做了（见本节「做法」）。界面文字中英两份，更新日志、`WhatsNew` 挂详情页那一组；Windows 等 mac 发布后照常跟
+  （Windows 已有单词模式和服务详情页）。
+- **联网实测**（2026-11-18，用户同意后把 release 工作树的 `Secrets.xcconfig` 拷进来跑 `liveZhipuExplain`，两档免费模型 × 6 句，跑了 5 轮）：
+  长度都在 1024 以内、没有截断。① 示例写成 system 里的「示例原文：/ 示例输出：」时，glm-4-flash 会在开头写「原文：」、先说一句「这个句子是在说……」、
+  不空行、少写「句型」——**改成前面的一问一答**（user 一句、assistant 一条讲解，智谱和大模型都这样）后开头和空行都对了；② glm-4-flash 仍时常写完
+  重点词汇就停，system 里加一句「译文、重点词汇、句型三部分都要写」（大模型的英文同样）后连着两轮都齐；③ glm-4.7-flash 有一次先写一行「**译文**」
+  标题，喇叭只读第一行时跳过只有标题的行（`Speaker.speechText`）；④ 免费模型的质量上限：glm-4-flash 的日文读音会写错（傘 /さし/、/がさ/），
+  重点词偶尔超过五个；glm-4.7-flash 当天大半请求 429「该模型当前访问量过大」或 30 秒超时（测试里这两种跳过不算失败）。
+- **朗读速度**（同一个 issue 里追加的「练听力时语速快了听不懂」，用户「按推荐做并回复」，2026-11-18 先单独做了；推翻「翻译反馈四条」里的
+  「不做朗读速度」）：设置 › 翻译「朗读」组一行「朗读速度」，横排单选 0.6× / 0.75× / 正常 / 1.25×（`Prefs.translateSpeechSpeed`，默认 1，
+  注册了默认值、跟着导出和同步走），所有喇叭都按它。系统声音的 `AVSpeechUtterance.rate` 和快慢不成正比：屏外用 `AVSpeechSynthesizer.write`
+  合成量时长（en-US / zh-CN / ja-JP 三种声音一致），rate 0.5 是正常，往下放慢得很少（0.3 才 0.82×，rate 0 也只到 0.56×），四档对的 rate 是
+  0.05 / 0.22 / 0.5 / 0.54（`Speaker.utteranceRate`）。回复里答应的 0.5× 系统声音做不到，最慢一档改成 0.6×。真人录音用 `AVAudioPlayer`
+  的 `enableRate` + `rate`（音调不变）。下一版的更新日志要写这一条（中英）；Windows 照常后跟。手测 HANDTEST「朗读速度」1–4。
+- **做法**（2026-11-18，进 0.10.1）：`TranslateService` 加 `explainsSentences` / `extraPrompt`（关着、空着存 nil 不编码；
+  `storedExtraPrompt` 设置页写入时去 NUL、截 1000 字，`cleanedExtraPrompt` 用的时候再去首尾空白），`explains(_:)` / `extraPrompt(for:)`
+  只认 `TranslateRequest.inPanel`（浮窗）的请求。`TranslateCoordinator.plan(for:inPanel:)`（原来的 `wordMode:` 改名，静默替换和截图盖回
+  传 false）算 `explainable`（`SentenceExplain.applies`：源语言不是第一语言、目标是第一语言、NLTokenizer 分出一句、`LongText.weight`
+  ≤ 100；单个词不算）。`Zhipu.messages(_:explain:extra:)`、`AIService.explainPrompt` 各一套讲解提示词，示例在 `SentenceExplain.example`
+  （讲解用中文时一句英文、别的一句中文），写成前面的一问一答；附加要求接在规则后面（单词模式接在说明那一段后面）。讲解不走长文分段。主结果是讲解卡时不自动复制
+  （`settlePrimary`）、不出「替换原文」（`primaryExplains`）；卡片的喇叭只读第一行译文（`Speaker.speechText(explanation:)`，只有标题的行跳过）。设置的服务详情页
+  （大模型服务）加「浮窗里的回答」一组：「讲解外文句子」开关、「附加要求」整行宽的多行框。导入：`SettingsArchive` 读文件时收拾这两项、
+  `mergeServices` 在文件里没有附加要求时留本机的。单测 `SentenceExplainTests`；截图 `translate-explain`、`settings-translate-detail-explain`；
+  联网 `liveZhipuExplain`（KITTY_LIVE_TRANSLATE，两档免费模型 × 6 句）。手测 HANDTEST「句子讲解与附加要求」。
+- 0.10.1 的更新日志要写（中英）：句子讲解、附加要求、朗读速度三条；`WhatsNew` 可以挂详情页那一组和朗读速度那一行。
+
+### 设置改版（2026-11-18，进 0.10.1）
+
+用户 11-18：系统设置停在鼠标 / 触控板设置上有动画演示；设置越来越乱（0.10.0 设置 20 页、约 210 个控件，刘海岛一页 36 项，
+说明文字比控件多）。拍板页 https://claude.ai/artifact/D9c7Nf6kq2vk7TLexR61iU（S1–S11 + 每页附表）用户「两页都按推荐」；规格
+`build/research/settings-redesign-2026-11-18/SPEC.md`（逐行去哪、通用件、说明文字表、悬停预览、6 批）。规格里留的三个问题用户定了：
+英文单词发音合成**四项**（真人 / 系统声音 × 美音 / 英音：原来的美音 / 英音也管系统声音）、启动器「脚本命令」推进子页、恢复默认不碰会删数据的上限。
+
+- **S1 三层**：每页外面只放常用的；一组 4 项以上或本身是一组状态的推进子页（`SettingsSubpage`）；一年改一次的进页底「高级…」表单。
+  子页：通用 › 权限 / 同步 / 备份与导出导入，截图 › 截图历史，翻译 › 查词与朗读 / 翻译历史，启动器 › 脚本命令，便签 › 屏幕边缘，
+  刘海岛 › 快捷动作 / 正在播放 / 日程与月历 / 音量与亮度 / 专注模式 / 系统提示。「高级…」：通用、剪贴板、截图、录制、翻译、启动器、刘海岛。
+- **S2–S4**：通用、截图、便签、刘海岛改成自己的 `NavigationStack`（页头画在栈里）；各页按附表挪行（截图历史、翻译历史这类管数据的子页功能关着也能进）。
+- **S5 说明文字**：行副标题一句、细节进行尾 ⓘ（`InfoButton` / `SettingRow`）、一组的说明进组标题 ⓘ（`InfoHeader`）；页脚只留要授权、
+  会删数据 / 不能撤销、文件不加密（mac-whisker/settings.md「设置页的说明文字」）。
+- **S6 合并三对开关**（「自动清空普通历史」「悬停时识别」「英文单词发音」）：读写原来两个键、只写变了的那个；偏好键一个都没改名。
+- **S7 S8 搜索落到行、面板直达**：`SettingsIndex` 登记每一行；侧栏「设置项」一组；`showSettings(_ item:)` 推子页 / 开表单、滚过去、描边两秒。
+- **S9 恢复默认 + 撤销**：子页、「高级…」各一个；不碰功能开关和保留天数、图片占用、截图历史的两个上限、翻译历史条数。
+- **S10 悬停预览**：`SettingsPreview.swift`，首批三个场景（截完图放哪、挤压弹开、刘海岛五样），只在停着、设置窗在前台时演；
+  ponytail：只认指针，键盘焦点落在那一行的控件上不演（要给每种控件挂 @FocusState，等有人要再加）；停着时的 CPU 没在真机上量。
+- **S11 页头那一句**：`SettingsPage.summary` 每页一句说这页管什么。
+- 抽字的两个坑（这次碰到的）：可选的 `LocalizedStringResource?` 参数里写三元式，第二个分支抽不进目录；`switch` 当表达式用时里面的字面量也抽不进——
+  都先算成不可选的属性 / 写 `return`；`macos/sync-strings.sh` 之后看有没有 stale。
+- 新功能标记（`WhatsNew`）这次没挑：搜索落到行、悬停预览都没有单独的入口（同多语言 0.10.0 的取舍），发版时再定。
+- 分 6 批做，每批一个提交、一名独立评审、全量单测（Dev 偏好 md5 前后一样）、中英浅深截图；第 2 批做完停下来给用户看截图，点头再往下。
+
+### 剪贴板图片行（2026-11-20，下一版）
+
+用户转来的建议：剪贴板面板里的图片只有 24 pt 的小缩略图、太难认，能不能默认展示出来。先只评估（对照、两种尺寸的内存实测、
+可交互示例 https://claude.ai/artifact/2U4gjzompxzB14rQgDdEVM），用户「按推荐做，再加个是否直接预览图片的开关」。
+
+- **图片行**：图片条目 64 高，图标块换成来源 App，标题那一格是 48 高、按比例（宽 0.75–5 倍高）从顶上裁的图 + 宽×高；
+  选中时同一张在原地长到 108 高（同原来透镜里的图），透镜只剩元信息行（146 = 8 + 108 + 22 + 8）。文字条目不变。
+  规格在 mac-whisker/clipboard.md「列表」「透镜」，缓存在 mac-clipboard §1「缩略图缓存」。
+- **开关**：设置 › 剪贴板 › 高级「列表里直接显示图片」（`Prefs.clipboardImageRows`，默认开，注册了默认值、跟着设置导出）；
+  关掉 = 原来的 24 pt 小方块 + 透镜里的图。
+- **内存**（独立探针，100 张常见比例的 PNG 屏外画过一遍，两遍一样）：行图标 +18.4 MB、图片行 +27.5 MB，多约 9 MB；
+  行里的缓存加了 16 MB 的 cost 上限（按张数 300 的话最坏约 34 MB）。生成用时不变（慢的是解码原图）。
+- **不做**：「图片」筛选下的网格（键盘、透镜、多选、拖动都要另一套，收益只在先筛到图片时）、图片显示大小的档位
+  （一个开关够了，有人要再加）。Windows 版同样是 24 的小方块 + 108 的透镜，跟着做进下一版 Windows PLAN。
+
 ## 11½. Whisker 设计语言改造（2026-09-25 起）
 
 已归档到 `docs/archive/PLAN-12.md` §11½（A–E 各阶段的内容、状态和 2026-09-26 的交接）。现状：A 基础与招牌时刻、B 界面重做、C 品牌、E 截图重设计都已完成（待手测）；D 深度只剩「macOS 26 玻璃 + `.icon`」——玻璃分支第 11 批已写好，等 26 测试机按 `HANDTEST.md`「macOS 26 手测」实测，`.icon` 也等 26。规范正文在 `.claude/skills/mac-whisker/rule.md`（核心）和各 `mac-whisker/<界面>.md`。
@@ -1782,6 +2620,107 @@ Alfred 的 Related Apps、BetterTouchTool 按 App 停用，调研和测开销的
 
 > 2026-10-28（第三轮体检第 7 批）：2026-10-22 及更早的进度记录、做完的「已知的小毛病」、旧的「现状」「下一步」原样挪到 `docs/archive/PLAN-batches-2026-10.md` §12；AGENTS.md「项目概述」原来的长段原样挪到本节末尾「各族进度摘要（原 AGENTS 项目概述）」。
 
+**2026-11-20：0.10.2 开头**（用户「放到0.10.2里面去」）：分支 `claude/settings-feedback-120ed5`（工作树 `.claude/worktrees/settings-feedback-120ed5`，
+从 origin/macos `41ef6134` = 0.10.1 + 发布记录）。0.10.1 装上后用户看设置窗口报的两处：`2f28573d` 平滑滚动「滚动」一组页脚的「恢复默认」、
+`05424ea2` 刘海岛页的悬停预览钉在页头下面、正在播放 / 日程与月历 / 音量与亮度三个子页也有一块（mac-whisker settings.md「设置的三层结构」）。
+`MARKETING_VERSION` 升到 0.10.2，更新日志 0.10.2 一条（中英两条，都是 ui）；这两处都不是新入口，`WhatsNew` 没挑。以后进 0.10.2 的改动更新日志加在同一条里。
+没 push、没打 tag、没打测试包。全量 2540 过。待手测：HANDTEST「设置的两处反馈」1–5。
+
+**2026-11-20：0.10.2 收齐**（用户「0.10.1 后面的所有功能都放在 0.10.2，然后打包给我测试准备发布 0.10.2」）：集成分支 `claude/v0102`
+（工作树 `.claude/worktrees/v0102`，从 origin/macos `ffc5a397`；那上面已有 PR #39 识字预热、剪贴板图片行、截图圆角），合并提交收：
+`claude/settings-feedback-120ed5`（上面那条，含升版本）、`claude/vibrant-tesla-52b5b5`（`Subprocess.lines` 退出前读完管道）、
+`claude/clip-space-preview`（空格开关放大预览）、`claude/self-capture`（长截图拍得到自家普通窗口）、`claude/app-shortcuts-panel`
+（App 快捷键面板改版三批）、`claude/secure-input-hotkeys`（安全输入的小锁和录键提醒，issue #27 第二轮）。11-16/17 那几个旧分支查过都已经以改过的样子进了
+0.10.0；`claude/launcher-crash` 的测试提交是 0.10.0 之前的、没收。更新日志 0.10.2 共 12 条（`Subprocess` 那条看不出来，不写）；`WhatsNew` 挑了
+「截图圆角」一个。arm64 + x86_64 测试包在工作树 `macos/build/`。没 push、没 tag；用户测完说「发布」再发。待手测：HANDTEST「空闲时释放识字模型」1–5、
+「剪贴板图片行」1–8、「截图圆角」1–10、「设置的两处反馈」1–5、「剪贴板空格预览」1–10、「截图、录屏、长截图拍到 Kitty 自己的窗口」1–5、
+「App 快捷键手测」37–45、「安全输入挡住快捷键」6–15。
+
+**2026-11-20：0.10.2 已发布**（用户「测过了，发布」）：tag `macos-v0.10.2` = `a67e31c4`（latest），origin/macos 快进 `ffc5a397` → `a67e31c4`。
+附 `Kitty.Tools_0.10.2_arm64.dmg/.zip`、`macos-update.json`、`_x86_64.dmg/.zip`，两条 curl 都 200，UpdaterTests 用这次的 zip 过。
+arm64 包是发布前从同一个提交重打的（第一次打完 x86_64 的归档把 arm64 的 dSYM 顶掉了）；dSYM 在工作树 `macos/build/dsym-0.10.2-arm64` /
+`-x86_64`（UUID 和包里的对得上），发布说明 `macos/build/release-notes-0.10.2.md`（感谢 #39 @DCDYSMRZ）。上面列的手测用户说测过了，没逐条打勾。
+
+**2026-11-19：0.10.1 发布**（用户「测过了，发布」）：tag `macos-v0.10.1` = `b85f0e0b`，latest，origin/macos 快进 `ffe16444` → `b85f0e0b`。
+发布前按用户「先并进来再发」又并了 #36（输入框不弹系统「填充验证码」）、#37（平滑滚动按修饰键缩放时停滑、钉图滚轮缩放幅度）、#32（跨设备同步来的
+剪贴板不看临时标记）三个提交，更新日志补三条（共 34 条）、日期改成 11-19；这三处用户没在测试包里试过。全量 2539 过（第一遍
+`NoteImageThumbnailTests.failedDecodesAreNotRetriedAndDoNotInvalidate` 在 Spotlight 占满 CPU 时超时，单独两遍、再跑全量都过）、
+UpdaterTests 用这次的 zip 过。附 `Kitty.Tools_0.10.1_arm64.dmg/.zip`、`macos-update.json`、`_x86_64.dmg/.zip`，两条 curl 都 200。
+dSYM 在集成工作树 `macos/build/dsym-0.10.1-arm64` / `-x86_64`；发布说明 `macos/build/release-notes-0.10.1.md`（照 0.10.0：从旧版升级、更新内容、
+感谢 #31–#37、安装，中英）。issue #32–#37 还没回复、没关。
+
+**2026-11-19：0.10.1 收齐**（用户「把0.10.0之后的所有功能整合，准备发布0.10.1」）：`claude/v0101-cc84e7` 收齐了下面那一段列的分支、
+第五轮体检九批（最后 `dffe22a4`；第 7 批由体检会话先把集成分支合进去再交 `d5aa8dc2`，拆文件的冲突在那边解）和设置改版六批（最后 `c2f3bc38`，
+每批提交前先合集成分支，所以并进来都是树一致的合并）。更新日志 0.10.1 一条共 31 条（设置改版 6、体检 16、其余 9，中英）。`WhatsNew` 这一版挑了
+三个：延时截图（新动作）、访达右键「在访达里用 ⌘X 剪切、⌘V 移动」、翻译 › 查词与朗读「朗读速度」；设置改版、讲解外文句子（藏在每个服务的详情里）、
+路径模式、搜菜单项、窗口截图阴影不标（理由在 `WhatsNew.entries` 的注释里）。全量单测、lint、偏好 md5 过了以后打 arm64 和 x86_64 测试包给用户；
+**用户测过、说发布才 push、打 tag `macos-v0.10.1`、发 release**。待手测：下面那一段列的几节、「第五轮体检手测」1–115、「设置改版手测」。
+
+**2026-11-18：0.10.1 集成分支**（用户「设置改版放到 0.10.2，然后 0.10.0 之后所有的新功能都放在 0.10.1」）：分支 `claude/v0101-cc84e7`
+（工作树 `.claude/worktrees/v0101-cc84e7`，从 origin/macos `ffe16444` = 0.10.0 + PR #31 的组字单测）用合并提交收进：
+`claude/issue-35-ai-prompt-cb8cbd`（翻译讲解外文句子、附加要求、朗读速度，issue #35）、`claude/smooth-scroll-magic-mouse`（平滑滚动认出妙控鼠标）、
+`claude/issue-34-finder-newfile-3c97b5`（访达新建文件先核对选中的是新文件再改名，issue #34）、`claude/reminder-snooze`（刘海上提醒的两个按钮不挪）、
+`claude/issues-18-29-32-33-a05031`（访达 ⌘X 剪切、⌘V 移动，issue #33），`path-wip`（启动器输入路径列出文件夹里的东西，§10「启动器浏览文件夹」），和第五轮体检 `claude/checkup5-0dbe08`（会话 checkup5-impl 分 9 批做，
+做完一批并一批；第 8 批 N1–N3 要等用户看截图点头；**体检和设置改版全部并完之前 0.10.1 不算收齐**）。`claude/launcher-crash` 的 `f271a9e2`（启动器组字单测）
+已经以 `f5846c9b` 在 0.10.0 里，没再拣。冲突只在文档和字串目录：HANDTEST 两边各加的几节都留，规则和 PLAN 里两边改同一行的按字三方合并，
+字串目录同一处插进的两个 key 都留。`MARKETING_VERSION` 升到 0.10.1，更新日志 0.10.1 一条（中英；体检的条目由体检收尾那批写进同一条），
+`WhatsNew` 发版时再挑。**设置改版也进 0.10.1**（会话 settings-redesign；同日先定 0.10.2，22 点用户改口「都可以一起发布0.10.1，
+设置改版不用放到0.10.2了」）：从这条分支的 `9ef09943`（体检到第 4 批）切出、和体检第 5–9 批同时做，每批提交前先把这条分支最新的 merge 进去、
+体检新加的设置行由它按规格挪到新位置；不升版本，更新日志写进 0.10.1 那一条。**发布条件**：体检和设置改版全部并完 → 打一个测试包 → 用户测过再发。
+没 push、没打 tag。待手测：HANDTEST「朗读速度」「句子讲解与附加要求」「访达右键新建文件后的改名」「访达 ⌘X / ⌘V 手测」、平滑滚动手测 4 和 8b–8d、
+提醒手测 56–57、「第五轮体检手测」。
+
+**2026-11-19：第五轮体检九批做完**（§10「第五轮体检」）：`claude/checkup5-0dbe08` 最后的提交见那一节的表和收尾提交，都已（或将）以合并提交进 0.10.1 集成分支；
+更新日志写在 0.10.1 那一条里（体检 16 条，中英），没改版本号、没打包（0.10.1 全部并完后由集成会话打一个测试包）。待真机手测 HANDTEST「第五轮体检手测」1–115，
+重点：WebDAV 改密码后（1–18）、法语 / 德语 / 俄语键盘（87–90）、改系统时间和暂停（19–34）、读屏（69–86 里的 A1 A4）、窗口截图带阴影（102–107，单窗口截图没在真机跑过）。
+
+**2026-11-18 – 19：设置改版**（§10「设置改版」）：会话 settings-redesign，分支 `claude/settings-redesign-3e749a`（工作树 `.claude/worktrees/settings-redesign-3e749a`，
+从 `claude/v0101-cc84e7` 的 `9ef09943` 切出），六批各一个提交、每批提交前后把集成分支最新的 merge 进来：第 1 批 `f0668a2a`（搜索落到行、面板直达）、
+第 2 批 `a4b161ac`（通用 / 剪贴板 / 截图 / 录制；做完给用户看了中英浅深截图，用户「Looks good, continue」）、第 3 批 `0fd885fe`（翻译 / 启动器 / 便签 / 刘海岛）、
+第 4 批 `e4585d3c`（说明文字）、第 5 批 `a7341059`（悬停预览）、第 6 批收尾（规则、PLAN、HANDTEST、更新日志）。每批由集成会话并进 0.10.1。
+没 push。待手测 HANDTEST「设置改版手测」。体检第 8 批（N1–N3）新加的设置行，说明文字照第 4 批的口径收一遍（它并进来之后）。
+
+**2026-11-18：issue #35 翻译讲解与附加要求**（§10「翻译讲解与附加要求」）：拍板页九项「全部按推荐」；查过设置改版不动服务详情页，用户「现在做进 0.10.1」，当天做了。
+issue 已回复两条（单词模式默认开、截图看起来是关了；句子讲解和附加要求会做；追加的朗读速度先做）。朗读速度当天做了（§10 同一节最后一条），
+讲解和附加要求也做完。都没 push、没并回 macos；0.10.1 的更新日志要写这三条；待手测 HANDTEST「朗读速度」1–4、「句子讲解与附加要求」。
+
+**2026-11-18：启动器浏览文件夹（路径模式）**（§10 同名一节）：检出 `kitty-tools-macos-path`（分支 `path-wip`，从 origin/macos `ffe16444`）
+两个提交（第二个是真机实测后改的匹配：名字中间至少两个字、不带隐藏项）；全量单测过、英文补齐。用户装测试包试过说「没问题，
+放到 0.10.1 里面去」（改了拍板 15A 原定的「0.10.2 之后」），以合并提交并进 `claude/v0101-cc84e7`，0.10.1 更新日志加了两条。
+没 push。待手测 HANDTEST「启动器浏览文件夹」1–18。
+
+**2026-11-17 – 18：搁着的计划**（§10「搁着的计划（第四轮体检新功能）」）：第四轮体检选了「做」的 X1–X20 和 T3、T5，用户「先按照你推荐的全部
+开始执行直至全部完成」。分支 `claude/backlog-0de062`（工作树 `.claude/worktrees/backlog-0de062`，从 `i18n-wip` 的 `161c2925`）按族五批、
+各批评审后一个修改提交，第六批写文档、更新日志（并进 0.10.0 那一条，中英）；`MARKETING_VERSION` 没动。2026-11-18 用户「放到 0.10.0
+里面去」：合并进 `i18n-wip`（合并提交，字串目录按 key 三方合并、两边没有同改的一条）。没并回 macos、没 push、没打 tag。测试包
+`Kitty Tools_0.10.0_搁着的计划_arm64.dmg`（合并前从分支打的，没有访达右键那四个提交）。待手测 HANDTEST「搁着的计划手测」1–26。X21–X24 照拍板留到以后。
+
+**2026-11-17：平滑滚动插件**（§10「平滑滚动」，issue #14）：先在 `smooth-scroll-wip`（检出 `kitty-tools-macos-smoothscroll`，
+从 origin/macos `09e5eced`）做完第 1 批、跑过实机自检；同日用户「修改的功能都放到 0.10.0 里面去」「合并到 i18n-wip」，
+挪到 `smooth-scroll-0.10`（同一个检出，变基到 `i18n-wip` 的 `70f5d90d`，含插件页改版、睡眠关蓝牙、钉图选字）：换成插件页改版的写法
+（`Plugin.swift` 的声明、新建的「键盘与鼠标」组、统一的「权限」和「关于这个插件」两组、添加状态不同步），补英文，0.10.0 更新日志加一条、
+「新」挂上，快进合进 `i18n-wip`。没 push。待手测 HANDTEST「平滑滚动手测」。
+
+**2026-11-15 – 16：多语言（先英文）**（§10「多语言」）：拍板页「全部按推荐」；分支 `i18n-wip`（工作树
+`.claude/worktrees/i18n-english-a53944`，从 macos `894b8b2c`）分十批做完（第 0–9 批），`MARKETING_VERSION` 升到 0.10.0、
+更新日志加 0.10.0（中英，日期 2026-11-16），旧的 15 版补了英文；`WhatsNew` 0.10.0 一个：通用「语言」那一行。没并回 macos、
+没 push、没打包、没发布（用户说发再走 `build-dmg.sh`）。待手测 HANDTEST「多语言」1–23（8 起是英文界面逐族的，录制控制条那条屏外截不到）。
+
+**2026-11-16：保持唤醒回来**（§10「插件与保持唤醒」）：用户要把 0.9.0 发布前拆掉的保持唤醒以插件形式合回来；分支
+`claude/keep-awake-plugin-753640`（从 macos `9acd4306`）`git revert 07da6ad3`，冲突只有更新日志和 §4 的一行。0.9.0 那条日志挪到下一版
+（0.10.0，`MARKETING_VERSION` 没改，等多语言那边定）；自带的 awake 脚本再删掉。没并回 macos、没 push；英文要等多语言并进来再补。
+待手测 HANDTEST「插件与保持唤醒」1–11 和「刘海岛完善第 1 批」10–14。截图自检加了 `island-wings-awake`（-card）两张，看出右耳
+「1:00:00」10 pt 也要 40 pt 宽、36 pt 的耳朵截掉最后一位；用户「照这样改」：耳朵上倒数一小时以上写「4小时」（往下取整，
+`Island.Activity.wingReading`），一小时以内照旧按秒倒数，字号按排出来的宽度挑（「15小时」缩到 10 pt）；卡片、菜单栏、读屏照旧精确。
+录屏超过一小时的正计时「1:02:03」照旧被截一点（录着要看秒在走，没改）。
+
+**2026-11-15：折叠的服务不自动翻译**（有用户问折叠的 AI 服务还耗不耗 token：会，折叠只藏正文、所有启用的服务都请求，
+「闪一下」是折叠着也在画的彗星光和完成闪光）：拍板页 https://claude.ai/artifact/DFEx7K9FX9TXnW7kCuy42c 七项「全部按推荐」
+（对标 Easydict 的点开才查）。分支 `collapse-wip`（检出 `kitty-tools-macos-collapse`，从 macos `58f15ee3`）一个提交：
+折叠 = 不自动翻译、不加开关，点开才翻当前原文，主结果不认没翻的和点开后才翻的，静默替换 / 截图盖回先用没折叠的；规矩在
+mac-translate §2。没并回 macos、没 push；**下一版的更新日志要写一句**（老用户折叠过的服务以后要点开才翻）。待手测 HANDTEST
+「折叠的服务不自动翻译」1–11。Windows 同样改，写进 Windows 的 PLAN（D7）。
+
 **2026-11-13：0.9.0 准备中**（会话工作树 `claude/release-0-9-0-3adad5`，从 macos `632e5c4e`）：发版拍板页
 https://claude.ai/artifact/YTu1NosyLqkNFq9PDPsQZT 和「功能改插件与压缩跳过」https://claude.ai/artifact/DEKeRvQeZR3VxkVA9Bx2Fr
 都「全部按推荐」。island-atoll-wip 快进、plugins-wip 拣在上面（顺手清掉 7806b585 误提交进本文件的冲突标记），再加七样改插件、
@@ -1790,9 +2729,6 @@ WebDAV 同步（issue #18）和刘海岛的正在播放（第 2 期）；「新�
 sync-server。没并回 macos、没 push、没打 tag；待用候选包走
 0.9.0 拍板页 D11 的必走清单，用户说「发」再快进 macos、发布。
 
-**2026-11-13：保持唤醒推出 0.9.0**（§10「插件与保持唤醒」第一条）：分支 `release-0.9.0-noawake`（从 `release-0.9.0`
-`46938cc8`）一个提交拆掉保持唤醒、放回 awake 脚本；保持唤醒留在 `plugins-wip`，等之后的版本。
-
 **2026-11-12：插件与保持唤醒**（§10 同名一节）：拍板页「全部按推荐」；分支 `plugins-wip`（从 macos `632e5c4e`），
 插件页 + 保持唤醒做完，全量单测过；没并回 macos、没 push、没写更新日志（下一版发版时写，`WhatsNew` 也那时挑）。
 待手测 HANDTEST「插件与保持唤醒」。#14 平滑滚动还没开始。
@@ -1800,6 +2736,25 @@ sync-server。没并回 macos、没 push、没打 tag；待用候选包走
 **2026-11-10：按 App 停用快捷键**（§10 同名一节）：检出 `kitty-tools-macos-hotkeyblock`（分支 `hotkey-block-wip`，从 macos
 `80e01660`）一个提交，写了 0.8.1 的更新日志；没并回 macos、没 push。待手测 HANDTEST「按 App 停用快捷键」1–9。Windows 那一半是
 `windows/PLAN-v17.md`（windows 分支）。
+
+**2026-11-18：0.10.0 已发布**（tag `macos-v0.10.0` = `0469a924`，latest；用户「合并完后准备打包 0.10.0，然后准备发布」→ 看过发布步骤后「Release」）：
+从 `focus-wip`（识别专注模式 + 刘海岛照 Alcove 的那一轮，并进了 i18n-wip 691f1566 之后的全部）打包，`origin/macos` 快进 `09e5eced..0469a924`。
+附 arm64 DMG / `_arm64.zip` / `macos-update.json` 和 Intel 的 `_x86_64.dmg` / `.zip`；两条 curl 都 200、`releases/latest` 是它。dSYM 在那个工作树
+（`kitty-tools-macos-focus`）的 `macos/build/dsym-0.10.0-arm64`、`dsym-0.10.0-x86_64`（Intel 那次把 arm64 的归档顶掉了，arm64 重打了一遍才留下对得上的）。
+发布说明照 0.9.0 的格式（中英两份：从旧版升级、更新内容、感谢 #21 #22 #25 #28 和 #3 #14 #27 #30、安装）。打包时修了 build-dmg.sh 在 Intel 那次把
+发布说明里的文件名写成 `_x86_arm64.dmg`。全量 2432 过、UpdaterTests 用这次的 zip 过。**没做**：README / 官网英文版（`site-en-wip`）没推——它还没写
+11-16 之后加的功能；issue #3 #14 #27 #30 的回复和关闭等用户看过回复；各批真机手测照旧没走完（HANDTEST「刘海岛上的专注模式」1–29、「搁着的计划手测」1–26 等）。
+
+**2026-11-14：0.9.0 已发布**（tag `macos-v0.9.0` = `2776aada`，latest；用户「现在发布」——发布前我建议先手测，用户定了直接发）：
+从候选分支 `claude/release-0-9-0-3adad5` 打，快进推到 macos；附 DMG、`_arm64.zip`、`macos-update.json`（两条 curl 核对都是 200，
+下回来的 zip 校验值和清单一致），dSYM 在候选工作树的 `macos/build/dsym-0.9.0/`；全量单测 2247 过，`UpdaterTests` 用这次的 zip 过。
+这一版：插件框架 + 七样改插件 + 刘海岛插件（活动、正在播放、系统提示）、刘海岛完善第 1–17 批（发布当晚并进来）、截图标注、
+访达右键 RAR 和压缩跳过、WebDAV 同步、剪贴板图片 256 MB、主界面重排，外部 PR #1 #17 #20。**保持唤醒发布当晚按用户「拿掉」
+拆出去了**（`07da6ad3`，代码在 `plugins-wip`）。`WhatsNew` 0.9.0 三个：通用「功能」、刘海岛「正在播放」、通用「同步」。发布说明
+照 0.8.1 的格式，「感谢」写了 #17 #20 #1 #16 #18 #19。
+**带着没验的东西发的**：刘海岛完善的手测一条没勾；耳机电量没有真耳机验过；渐进模糊的私有滤镜、免授权读耳机电量只在 macOS 27
+上试过（15 / 26 没验）；拿掉保持唤醒之后的主界面、设置侧栏只过了单测。专注模式的提示没做。没在 GitHub 上留言（#16 #18 #19、
+PR #17 #20 都还开着，要回复 / 关闭等用户说）；README 和官网的功能介绍没改。
 
 **2026-11-10：0.8.1 已发布**（tag `macos-v0.8.1` = `933efb2a`，latest；用户说「我都测试过了，可以发布了」）：直接从 macos 打，
 附 DMG、`_arm64.zip` 和第一次附上的更新清单 `macos-update.json`（两条 curl 核对都是 200），dSYM 在 `build/dsym-0.8.1/`；

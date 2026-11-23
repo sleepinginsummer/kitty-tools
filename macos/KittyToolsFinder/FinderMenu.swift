@@ -1,15 +1,20 @@
 // 访达扩展（第十一族「访达右键」，2026-11-08 拍板，PLAN §10「访达右键」）：在访达的右键菜单第一层加几项。
-// - 选中文件 / 文件夹右键：「拷贝路径」「拷贝名称」、设置里选的每个 App 一项「在“X”中打开」（默认只有终端；叫法照访达
-//   自己的「在“照片”中打开」）、「移动到 ▸」「复制到 ▸」（常用文件夹 + 选择文件夹…）、「剪切」、「压缩为 ▸」（ZIP、7Z）、
+// - 选中文件 / 文件夹右键：「拷贝路径」「拷贝名称」、「拷贝图中文字」（选中的都是图片时）、设置里选的每个 App 一项「在“X”中打开」（默认只有终端；叫法照访达
+//   自己的「在“照片”中打开」）、「移动到 ▸」「复制到 ▸」（常用文件夹 + 选择文件夹…）、「剪切」、「压缩为 ▸」（ZIP、7Z、TAR.GZ）、
 //   「解压到这里」（选中的都是压缩包时）、「修复乱码文件名」（选中的有名字像乱码、还原得出来的时候）、「隐藏」/「取消隐藏」、
 //   「隐藏扩展名」/「显示扩展名」（看选中的现在是什么样；读不到就当没隐藏）、「拷贝哈希 ▸」（选中的都是文件时）、
 //   「发送替身到桌面」、「彻底删除…」（App 那边先问）。
-//   按住 ⌥ 右键时「拷贝路径」「拷贝名称」换成终端写法、不带扩展名；「移动到」「复制到」里这次用不上的文件夹变灰，后面接最近
+//   按住 ⌥ 右键时「拷贝路径」「拷贝名称」换成终端写法、不带扩展名，「解压到这里」换成「解压到…」；「移动到」「复制到」里这次用不上的文件夹变灰，后面接最近
 //   用「选择文件夹…」选过的。侧边栏右键当空白处。点不成的（列表变了、一次超过上限）交给 App 在刘海岛上说原因。
 // - 文件夹空白处右键：最前面「新建文件 ▸」（自带五种、模板文件夹里放的每个文件、「自定义后缀…」、「打开模板文件夹」），
 //   「从剪贴板新建」（剪贴板里的图存成 PNG、文字存成 .txt，App 看剪贴板）；剪切过、剪贴板还没换过时多一项「粘贴 N 项」
 //   （选中的是一个文件夹时右键它也有「粘贴 N 项到这个文件夹」），然后「拷贝路径」「在“X”中打开」「切换隐藏文件」，对着的是这个文件夹。
 // 设置里打开「收进一个子菜单」时，这些都收进第一层的一项「Kitty Tools ▸」里（默认关、平铺）。
+// - 访达工具栏按钮「Kitty Tools」（2026-11-17 拍板 A1；用户在 访达 › 显示 › 自定工具栏… 里拖上去，系统不让替他放）：有选中的
+//   同右键选中的东西，没选中同右键空白处。iCloud 云盘（包括同步的桌面、文稿）、网盘这类文件提供程序管的文件夹里系统不给扩展
+//   右键项，工具栏按钮却在；那里访达不告诉扩展选中了什么、在哪个文件夹（苹果文档：扩展管不到的位置 selectedItemURLs /
+//   targetedURL 是 nil），菜单照全的列（blind：按类型才出的几项也列上，App 那边会说不合适），点了交过去的网址不带文件、带
+//   finder=items / folder / auto，App 自己问访达（要「控制访达」的授权，第一次用时系统问；App 的 FinderLink 文件头）。
 // 每一项在 App 设置里能单独关（App 的 FinderMenuItem；同几家成熟产品），默认开关照 2026-11-08 右键扩充拍板 A2。
 // 扩展只画菜单、不碰文件（拍板 C2）：点了用 App 自己的网址把动作交给常驻菜单栏的 Kitty Tools，
 // <App 的 bundle id>://finder?do=<动作>&key=<凭证>&…&file=/a，App 那边是 FinderLink（网址的写法在那边的文件头）；
@@ -24,6 +29,8 @@
 // 拷贝路径、新建文件的符号是自己画的（icons/finder/，swift icons/build-icons.swift finder 生成到本 target 的 Assets.xcassets）。
 // 看所有位置（directoryURLs 是根目录加上每个挂着的卷，挂上 / 推出时跟着换）；拿不到对着什么、废纸篓的空白处不出菜单；iCloud 云盘、网盘这类文件提供程序管的文件夹里系统不给扩展菜单。
 // 要用户在 系统设置 › 通用 › 登录项与扩展 里打开它（App 设置 › 访达右键 有「去打开…」）。
+// 菜单文字（多语言第 8b 批）：本 target 自己一份 String Catalog（Localizable.xcstrings），跟 App 的界面语言——App 在
+// 设置 › 通用「语言」里选了的就用它（读 App 偏好里的 AppleLanguages，只读），没选跟系统；只有简体中文和英文两份字（text）。
 // ponytail: 这个 target 用 Swift 5 语言模式（Config/Finder.xcconfig），FinderSync 加上并发标注后改回 6。
 
 import AppKit
@@ -155,6 +162,10 @@ final class FinderMenu: FIFinderSync {
   /// 「移动到」「复制到」子菜单里「选择文件夹…」的 tag
   private static let chooseTag = 999
 
+  /// 这份菜单是工具栏按钮在访达不告诉扩展的位置弹的（见文件头）：点了交过去的网址带 finder=…、不带文件。
+  /// 每次搭菜单都重设，点的总是最后搭的那一份（菜单一次只开一个）
+  private static var blind = false
+
   /// 一次最多交这么多个：再多 App 不认，这里先响一声
   private static let maxFiles = 2000
 
@@ -163,10 +174,40 @@ final class FinderMenu: FIFinderSync {
   private static let appURL = Bundle.main.bundleURL.deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent()
 
-  /// 随 App 的五个模板（ponytail: 抄的 App 的 NewFile.builtIn，文件在 App 包里，扩展只列名字）
-  private static let builtIn = [
-    "文本文件.txt", "Markdown.md", "Word 文档.docx", "Excel 表格.xlsx", "PPT 演示文稿.pptx",
-  ]
+  /// 随 App 的五个模板：id 就是扩展名，点了交给 App 的是它（ponytail: 抄的 App 的 NewFile.builtIn，文件在 App 包里，
+  /// 扩展只列名字）
+  private static let builtIn = ["txt", "md", "docx", "xlsx", "pptx"]
+
+  /// 自带模板在菜单里的名字（App 那边建出来的文件名用同样几个字：NewFile.fileName）
+  private static func builtInTitle(_ id: String) -> String {
+    switch id {
+    case "txt": text("文本文件")
+    case "docx": text("Word 文档")
+    case "xlsx": text("Excel 表格")
+    case "pptx": text("PPT 演示文稿")
+    case "md": "Markdown"
+    default: id
+    }
+  }
+
+  /// 这一份菜单用哪种语言（搭菜单时定下，见 build）
+  private static var locale = Locale(identifier: "zh-Hans")
+
+  /// 同 App 的 InterfaceLanguage：App 自己选了语言时，它偏好域里的 AppleLanguages 就是那一种；没选时同一个键读到的是系统的
+  /// 语言列表（读不到就按扩展自己的）。只有简体中文和英文两份字：不是英文的都是中文（繁体也落回简体，同 App）
+  private static var preferredLocale: Locale {
+    let picked = Bundle.preferredLocalizations(
+      from: Bundle.main.localizations,
+      forPreferences: appDefaults?.stringArray(forKey: "AppleLanguages"))
+    return Locale(identifier: picked.first?.hasPrefix("en") == true ? "en" : "zh-Hans")
+  }
+
+  /// 菜单上的一段字：按这一份菜单的语言从本 target 的目录里取
+  private static func text(_ resource: LocalizedStringResource) -> String {
+    var resource = resource
+    resource.locale = locale
+    return String(localized: resource)
+  }
 
   /// 用户的模板文件夹：App 数据目录里的「新建文件模板」（ponytail: 抄的 NewFile.folderName）。沙盒里 FileManager 给的
   /// home 是容器，这里要真的 home
@@ -251,8 +292,70 @@ final class FinderMenu: FIFinderSync {
     _ = grouped(build(container: containerTag, selected: []))
   }
 
+  // 工具栏按钮：名字、悬停时的说明、图（模板图，系统按工具栏的样子上色）
+  override var toolbarItemName: String { "Kitty Tools" }
+
+  override var toolbarItemToolTip: String {
+    Self.locale = Self.preferredLocale
+    return Self.text("Kitty Tools：对选中的东西，或者这个文件夹")
+  }
+
+  /// 同别的交给访达的图：先画成小位图（见文件头），模板图（系统按工具栏的样子上色）
+  override var toolbarItemImage: NSImage {
+    Self.icon("toolbar") {
+      guard
+        let symbol = NSImage(systemSymbolName: "pawprint", accessibilityDescription: "Kitty Tools")?
+          .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+      else { return nil }
+      let size = NSSize(width: 18, height: 18)
+      let art = NSImage(size: size, flipped: false) { rect in
+        let glyph = symbol.size
+        symbol.draw(
+          in: NSRect(
+            x: (rect.width - glyph.width) / 2, y: (rect.height - glyph.height) / 2,
+            width: glyph.width, height: glyph.height))
+        return true
+      }
+      return Self.bitmap(art, size: size, template: true)
+    } ?? NSImage()
+  }
+
+  /// 工具栏按钮的菜单（见文件头）：功能关着时一行灰字说明（不然点了什么都没有）；不收进「Kitty Tools ▸」（本来就在按钮里）
+  private static func toolbarMenu() -> NSMenu {
+    locale = preferredLocale
+    blind = false
+    guard key != nil else {
+      let menu = NSMenu()
+      menu.addItem(withTitle: text("访达右键在 Kitty Tools 里关着"), action: nil, keyEquivalent: "")
+      return menu
+    }
+    let controller = FIFinderSyncController.default()
+    let selected = controller.selectedItemURLs() ?? []
+    let menu: NSMenu
+    if !selected.isEmpty {
+      menu = build(container: 0, selected: selected)
+    } else if let target = controller.targetedURL() {
+      guard !inTrash(target) else {
+        let menu = NSMenu()
+        menu.addItem(withTitle: text("废纸篓里没有这些项"), action: nil, keyEquivalent: "")
+        return menu
+      }
+      menu = build(container: containerTag, selected: [])
+    } else {
+      blind = true
+      menu = build(container: 0, selected: [])
+    }
+    // 设置里把这几项都关了：说一声（不然点开是空的）
+    if menu.items.isEmpty {
+      menu.addItem(withTitle: text("访达右键里的项都关着"), action: nil, keyEquivalent: "")
+    }
+    return menu
+  }
+
   // 访达在主线程上要菜单、点菜单项
   override func menu(for menuKind: FIMenuKind) -> NSMenu? {
+    if menuKind == .toolbarItemMenu { return Self.toolbarMenu() }
+    Self.blind = false
     guard Self.key != nil else { return nil }
     // 空白处右键对着的是这个文件夹：记在每一项的 tag 里（菜单项要跨进程交给访达，只有 tag 带得回来）。
     // 不能点的时候再看「有没有选中的」：窗口里选着文件、却在空白处右键时，选中的那几样还在
@@ -287,6 +390,14 @@ final class FinderMenu: FIFinderSync {
       && UTType(filenameExtension: url.pathExtension).map { $0.conforms(to: .package) } != true
   }
 
+  /// 是图片（只看扩展名，不碰文件）：系统读得了的图片，不算 SVG 这类矢量图（读不成位图）
+  private static func isImage(_ url: URL) -> Bool {
+    guard !url.hasDirectoryPath, let type = UTType(filenameExtension: url.pathExtension) else {
+      return false
+    }
+    return type.conforms(to: .image) && !type.conforms(to: .svg)
+  }
+
   /// 在不在废纸篓里（主目录的 .Trash，别的卷上的 .Trashes）
   private static func inTrash(_ url: URL) -> Bool {
     let path = url.standardizedFileURL.path(percentEncoded: false)
@@ -306,14 +417,17 @@ final class FinderMenu: FIFinderSync {
 
   /// 搭菜单。不加分隔线：macOS 26 上扩展菜单里的分隔线会画成一行空白（2026-09 开发者论坛，没解答）
   private static func build(container: Int, selected: [URL]) -> NSMenu {
+    locale = preferredLocale
     let menu = NSMenu()
     let items = container == 0
-    if !items, Self.shows("finderMenuNewFile", default: true) {
-      let new = menu.addItem(withTitle: "新建文件", action: nil, keyEquivalent: "")
+    // blind（工具栏按钮、访达不告诉扩展的位置）：看不到选中的是什么，空白处的项和按类型才出的项都列上
+    let blind = Self.blind
+    if !items || blind, Self.shows("finderMenuNewFile", default: true) {
+      let new = menu.addItem(withTitle: text("新建文件"), action: nil, keyEquivalent: "")
       new.submenu = Self.newFileMenu()
       new.image = Self.tile("kitty.finder.new.file", custom: true, color: Tint.create)
     }
-    if !items, Self.shows("finderMenuCut", default: true), Self.cutCount > 0 {
+    if !items || blind, Self.shows("finderMenuCut", default: true), Self.cutCount > 0 {
       Self.add(
         "粘贴 \(Self.cutCount) 项", #selector(paste(_:)), symbol: "doc.on.clipboard.fill",
         color: Tint.organize, to: menu)
@@ -323,7 +437,7 @@ final class FinderMenu: FIFinderSync {
     let option = NSEvent.modifierFlags.contains(.option)
     if Self.shows("finderMenuCopyPath", default: true) {
       let copy = menu.addItem(
-        withTitle: option ? "拷贝路径（终端写法）" : "拷贝路径",
+        withTitle: option ? text("拷贝路径（终端写法）") : text("拷贝路径"),
         action: option ? #selector(copyShellPath(_:)) : #selector(copyPath(_:)), keyEquivalent: "")
       copy.tag = container
       copy.image = Self.tile("kitty.finder.copy.path", custom: true, color: Tint.copy)
@@ -334,8 +448,16 @@ final class FinderMenu: FIFinderSync {
         option ? #selector(copyStem(_:)) : #selector(copyName(_:)), symbol: "textformat",
         color: Tint.copy, to: menu)
     }
-    if Self.shows("finderMenuHash", default: false), !selected.isEmpty,
-      !selected.contains(where: \.hasDirectoryPath)
+    // 拷贝图中文字（2026-11-17 拍板 C1）：选中的都是图片时才出现
+    if items, Self.shows("finderMenuCopyText", default: true),
+      blind || (!selected.isEmpty && selected.allSatisfy(Self.isImage))
+    {
+      Self.add(
+        "拷贝图中文字", #selector(copyImageText(_:)), symbol: "text.viewfinder", color: Tint.copy,
+        to: menu)
+    }
+    if Self.shows("finderMenuHash", default: false),
+      blind || (!selected.isEmpty && !selected.contains(where: \.hasDirectoryPath))
     {
       let kinds = NSMenu()
       for (index, kind) in Self.hashes.enumerated() {
@@ -375,15 +497,17 @@ final class FinderMenu: FIFinderSync {
       let formats = NSMenu()
       formats.addItem(withTitle: "ZIP", action: #selector(compressZip(_:)), keyEquivalent: "")
       formats.addItem(withTitle: "7Z", action: #selector(compress7z(_:)), keyEquivalent: "")
+      formats.addItem(withTitle: "TAR.GZ", action: #selector(compressTarGz(_:)), keyEquivalent: "")
       // 「压缩为」：访达自己的「压缩“X”」在同一个菜单里，两项都叫压缩分不开
       Self.add("压缩为", nil, symbol: "doc.zipper", color: Tint.archive, to: menu).submenu = formats
     }
-    if Self.shows("finderMenuExtract", default: true), !selected.isEmpty,
-      selected.allSatisfy({ Self.isArchive($0) })
+    if Self.shows("finderMenuExtract", default: true),
+      blind || (!selected.isEmpty && selected.allSatisfy({ Self.isArchive($0) }))
     {
+      // 按住 ⌥：换成「解压到…」，自己选放在哪（同「拷贝路径（终端写法）」的 ⌥ 习惯；2026-11-17 拍板 B3）
       Self.add(
-        "解压到这里", #selector(extract(_:)), symbol: "archivebox.fill", color: Tint.archive,
-        to: menu)
+        option ? "解压到…" : "解压到这里", option ? #selector(extractTo(_:)) : #selector(extract(_:)),
+        symbol: "archivebox.fill", color: Tint.archive, to: menu)
     }
     if Self.shows("finderMenuFixNames", default: true),
       selected.contains(where: { NameRepair.repair($0.lastPathComponent) != nil })
@@ -398,7 +522,7 @@ final class FinderMenu: FIFinderSync {
     if items, Self.shows("finderMenuDeskAlias", default: false) {
       Self.add("发送替身到桌面", #selector(alias(_:)), symbol: "link", color: Tint.alias, to: menu)
     }
-    if !items, Self.shows("finderMenuShowHidden", default: false) {
+    if !items || blind, Self.shows("finderMenuShowHidden", default: false) {
       let toggle = Self.add(
         "切换隐藏文件", #selector(toggleHidden(_:)), symbol: "eye.fill", color: Tint.hide,
         to: menu)
@@ -438,9 +562,10 @@ final class FinderMenu: FIFinderSync {
 
   /// 加一项，图标是 color 的方块里一个白色的系统符号
   @discardableResult private static func add(
-    _ title: String, _ action: Selector?, symbol: String, color: NSColor, to menu: NSMenu
+    _ title: LocalizedStringResource, _ action: Selector?, symbol: String, color: NSColor,
+    to menu: NSMenu
   ) -> NSMenuItem {
-    let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+    let item = menu.addItem(withTitle: text(title), action: action, keyEquivalent: "")
     item.image = tile(symbol, color: color)
     return item
   }
@@ -616,10 +741,9 @@ final class FinderMenu: FIFinderSync {
       item.tag = tag
       item.image = icon
     }
-    for (index, name) in builtIn.enumerated() {
-      let ext = (name as NSString).pathExtension
+    for (index, ext) in builtIn.enumerated() {
       add(
-        (name as NSString).deletingPathExtension, index,
+        builtInTitle(ext), index,
         icon("type:" + ext) {
           bitmap(
             NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data),
@@ -632,16 +756,18 @@ final class FinderMenu: FIFinderSync {
     }
     // 剪贴板里有什么由 App 看（扩展不读剪贴板的内容）
     menu.addItem(
-      withTitle: "从剪贴板新建", action: #selector(createFromClipboard(_:)), keyEquivalent: ""
+      withTitle: text("从剪贴板新建"), action: #selector(createFromClipboard(_:)), keyEquivalent: ""
     ).image = tile("doc.on.clipboard.fill", color: Tint.create)
-    menu.addItem(withTitle: "自定义后缀…", action: #selector(createCustom(_:)), keyEquivalent: "")
-      .image = tile("character.cursor.ibeam", color: Tint.create)
-    menu.addItem(withTitle: "打开模板文件夹", action: #selector(showTemplates(_:)), keyEquivalent: "")
-      .image = icon("type:folder") {
-        bitmap(
-          NSWorkspace.shared.icon(for: .folder), size: NSSize(width: 16, height: 16),
-          template: false)
-      }
+    menu.addItem(
+      withTitle: text("自定义后缀…"), action: #selector(createCustom(_:)), keyEquivalent: ""
+    ).image = tile("character.cursor.ibeam", color: Tint.create)
+    menu.addItem(
+      withTitle: text("打开模板文件夹"), action: #selector(showTemplates(_:)), keyEquivalent: ""
+    ).image = icon("type:folder") {
+      bitmap(
+        NSWorkspace.shared.icon(for: .folder), size: NSSize(width: 16, height: 16),
+        template: false)
+    }
     return menu
   }
 
@@ -660,7 +786,7 @@ final class FinderMenu: FIFinderSync {
   private static func openTitle(_ app: URL) -> String {
     var name = FileManager.default.displayName(atPath: app.path)
     if name.hasSuffix(".app") { name.removeLast(4) }
-    return "在“\(name)”中打开"
+    return text("在“\(name)”中打开")
   }
 
   /// 空白处那份菜单的 tag 从这里起（App 不会有这么多个）
@@ -700,6 +826,10 @@ final class FinderMenu: FIFinderSync {
 
   @objc private func copyStem(_ sender: AnyObject?) {
     hand("name", extra: [URLQueryItem(name: "style", value: "stem")], container: false)
+  }
+
+  @objc private func copyImageText(_ sender: AnyObject?) {
+    hand("ocr", container: false)
   }
 
   @objc private func moveTo(_ sender: AnyObject?) {
@@ -791,8 +921,17 @@ final class FinderMenu: FIFinderSync {
     hand("7z", container: false)
   }
 
+  @objc private func compressTarGz(_ sender: AnyObject?) {
+    hand("tgz", container: false)
+  }
+
   @objc private func extract(_ sender: AnyObject?) {
     hand("extract", container: false)
+  }
+
+  /// 选放在哪的面板由 App 弹：要激活 App（hand 看 to=choose）
+  @objc private func extractTo(_ sender: AnyObject?) {
+    hand("extract", extra: [URLQueryItem(name: "to", value: "choose")], container: false)
   }
 
   @objc private func fixNames(_ sender: AnyObject?) {
@@ -834,6 +973,12 @@ final class FinderMenu: FIFinderSync {
   private func hand(
     _ action: String, app: String? = nil, extra: [URLQueryItem] = [], container: Bool
   ) {
+    // 工具栏按钮在访达不告诉扩展的位置（blind）：不带文件，让 App 去问访达。切换隐藏文件不看文件，照常交
+    if Self.blind, action != "hiddenfiles" {
+      let scope = ["copy", "open"].contains(action) ? "auto" : container ? "folder" : "items"
+      hand(action, app: app, extra: extra + [URLQueryItem(name: "finder", value: scope)], files: [])
+      return
+    }
     hand(action, app: app, extra: extra, files: Self.targets(container: container))
   }
 
@@ -865,7 +1010,9 @@ final class FinderMenu: FIFinderSync {
 
   private func hand(_ action: String, app: String? = nil, extra: [URLQueryItem] = [], files: [URL])
   {
-    guard let key = Self.key, !files.isEmpty || ["templates", "toomany", "stale"].contains(action)
+    guard let key = Self.key,
+      !files.isEmpty || ["templates", "toomany", "stale", "hiddenfiles"].contains(action)
+        || extra.contains(where: { $0.name == "finder" })
     else {
       return
     }

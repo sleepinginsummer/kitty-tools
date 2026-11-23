@@ -59,6 +59,7 @@ struct HotKeyBlockSection: View {
       }
     } header: {
       NewTitle("在这些 App 里停用", page: .hotkeys, fresh: navigation?.fresh ?? [])
+        .settingsAnchor(.hotkeysBlocked)
     } footer: {
       SectionFootnote("名单里的 App 在前台时，上面的快捷键不响应，按键交给那个 App。也可以在那个 App 里右键点菜单栏图标，从菜单里停用。")
     }
@@ -102,9 +103,9 @@ struct HotKeyBlockSection: View {
 
   /// 弹出菜单上的字
   static func scope(_ block: HotKeyBlock) -> String {
-    guard block.actions != nil else { return "全部快捷键" }
+    guard block.actions != nil else { return String(localized: "全部快捷键") }
     let count = block.knownActions.count
-    return count == 0 ? "没有停用的" : "\(count) 个快捷键"
+    return count == 0 ? String(localized: "没有停用的") : String(localized: "\(count) 个快捷键")
   }
 
   private func add(_ bundleID: String) {

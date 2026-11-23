@@ -1,10 +1,16 @@
 // 设置 › 访达右键（第十一族，2026-11-08 拍板，PLAN §10「访达右键」；页头由 SettingsRoot 画，家族色石板蓝）。几组：
+// （2026-11-17 拍板 A1）第一组另有一行「控制访达」：访达工具栏按钮在 iCloud 云盘、网盘的文件夹里要它问访达选中了什么——
+//   没问过点「授权…」让系统问，拒绝过点「去打开…」到 系统设置 › 自动化；页脚说工具栏按钮怎么放上去，桌面或文稿同步在 iCloud
+//   里时多一行橙字（那里右键没有这些项）。
 // 「访达右键」——启用开关（Feature.finderMenu，默认关）；系统里扩展开没开（FIFinderSyncController.isExtensionEnabled）和
 //   「去打开…」；「收进一个子菜单」（Prefs.finderMenuGrouped，默认关）（拍板 D3：直接到 系统设置 › 通用 › 登录项与扩展）。15.0、15.1 的系统设置里没有扩展的入口，那两版上给一条
 //   终端命令和「拷贝命令」（不替用户跑）。页脚说在哪右键、哪里不出现。
 // 「新建文件」——右键里显示不显示、模板文件夹一行 +「在访达中显示」，页脚说菜单里有什么、建好后怎样。
-// 「压缩和解压」里另有一行「压缩时跳过」（2026-11-13 拍板 Z1，Prefs.finderCompressSkip）。
+// 「压缩和解压」里另有一行「压缩时跳过 ›」（2026-11-13 拍板 Z1，Prefs.finderCompressSkip）：小字写跳哪几个，推进 CompressSkipPage
+//   （2026-11-15 原来的一行文本框改成推进去的一页）。页头画在自己的 NavigationStack 里，推进时一起换掉。
 // 「拷贝」「整理文件」「压缩和解压」「隐藏、哈希、删除」——每一项一个开关（FinderMenuItem，2026-11-08 右键扩充拍板 A2；同几家成熟产品每项能单独关），页脚说做法。
+//   「整理文件」里另有「在访达里用 ⌘X 剪切、⌘V 移动」（Prefs.finderMenuKeys，默认关，FinderKeys，issue #33）：开着又没有辅助功能
+//   授权时下面一行橙字 + 打开辅助功能设置的按钮（同 设置 › 刘海岛「音量和亮度」）。
 // 「「移动到」「复制到」的常用文件夹」——Prefs.finderTransferFolders（~ 开头的写法，默认桌面、文稿、下载）：加、移除。
 // 「在 App 中打开」——访达右键里列哪几个 App（菜单项照访达自己的写法「在“终端”中打开」）（Prefs.finderOpenWithApps，默认只有终端）：加（正在运行的 / 从「应用程序」里选）、移除；
 //   列表的写法同 剪贴板 › 不记录这些 App（从偏好现读再改、写回）。功能关着时这一组变灰。
@@ -16,6 +22,12 @@ import UniformTypeIdentifiers
 struct FinderMenuTab: View {
   /// 系统里扩展开没开（截图自检传固定的：屏外问不到真的状态）
   var extensionEnabled: Bool?
+  /// 截图自检传固定的：控制访达的授权、桌面 / 文稿是不是同步在 iCloud 里
+  var finderAutomation: Permissions.AutomationState?
+  var desktopInICloud: Bool?
+  /// 截图自检传固定的：辅助功能给没给（「⌘X 剪切、⌘V 移动」开着时下面那行橙字）
+  var accessibilityTrusted: Bool?
+  @State private var automation = Permissions.automation(Self.finderID)
   @State private var enabled = FIFinderSyncController.isExtensionEnabled
   @State private var folders = Self.storedFolders
   @State private var folderSelection: String?
@@ -24,10 +36,36 @@ struct FinderMenuTab: View {
   @State private var copied = false
   @AppStorage(Prefs.finderMenuGrouped) private var grouped = false
   @AppStorage(Prefs.finderCompressSkip) private var compressSkip = ""
+  @AppStorage(Prefs.finderTrashAfterExtract) private var trashAfterExtract = false
+  @AppStorage(Prefs.finderMenuKeys) private var keys = false
+  /// 设置窗重新当 key 时 +1：从系统设置给完辅助功能回来，「没有授权」那一行跟着重查
+  @State private var accessChecks = 0
+  /// 推进「压缩时跳过」用（截图自检单独画这一页时没有）
+  @Environment(SettingsNavigation.self) private var navigation: SettingsNavigation?
 
   var body: some View {
-    // 从系统设置打开扩展回来，设置窗重新当 key 时刷新那一行（同程序坞预览页的授权）
-    form.onSettingsBecameKey { enabled = FIFinderSyncController.isExtensionEnabled }
+    // 截图自检单独画这一页时没有导航状态：给一个自己的栈（同通用页）
+    if let navigation {
+      NavigationStack(path: Bindable(navigation).path) { page }
+    } else {
+      NavigationStack { page }
+    }
+  }
+
+  private var page: some View {
+    VStack(spacing: 0) {
+      PageHeader(page: .finderMenu)
+      // 从系统设置打开扩展回来，设置窗重新当 key 时刷新那一行（同程序坞预览页的授权）
+      form.onSettingsBecameKey {
+        enabled = FIFinderSyncController.isExtensionEnabled
+        automation = Permissions.automation(Self.finderID)
+        accessChecks += 1
+      }
+    }
+    .navigationTitle(SettingsPage.finderMenu.title)
+    .navigationDestination(for: String.self) { route in
+      if route == CompressSkipPage.route { CompressSkipPage() }
+    }
   }
 
   private var form: some View {
@@ -39,19 +77,32 @@ struct FinderMenuTab: View {
           granted: extensionEnabled ?? enabled, button: "去打开…"
         ) { Self.openExtensionSettings() }
         .gated(by: .finderMenu)
+        PermissionRow(
+          title: "控制访达", detail: "访达工具栏上的「Kitty Tools」按钮在 iCloud 云盘、网盘的文件夹里要它，才知道你选中了什么",
+          symbol: "gearshape.2.fill", color: Style.Family.finderMenu,
+          granted: (finderAutomation ?? automation) == .granted, button: automationButton
+        ) { requestFinderAutomation() }
+        .gated(by: .finderMenu)
         Toggle(isOn: $grouped) {
           Text("收进一个子菜单")
           Text("右键第一层只多一项「Kitty Tools」，下面开着的这几项都在它里面")
         }
         .gated(by: .finderMenu)
       } header: {
-        Text("访达右键")
+        InfoHeader(
+          "访达右键",
+          info:
+            "在访达里右键文件、文件夹，或者文件夹窗口的空白处，就有下面开着的这几项；也能把「Kitty Tools」按钮放到访达的工具栏上（访达 › 显示 › 自定工具栏…，把它拖上去），点它是同样的几项。iCloud 云盘（包括同步到 iCloud 的桌面、文稿）和网盘的文件夹里，系统不在右键里显示这些项，用工具栏按钮。"
+        )
+        .settingsAnchor(.finderMenu)
       } footer: {
-        VStack(alignment: .leading, spacing: 6) {
-          SectionFootnote(
-            "在访达里右键文件、文件夹，或者文件夹窗口的空白处，就有下面开着的这几项。iCloud 云盘和网盘的文件夹里，系统不显示这些项。"
-          )
-          if !Self.settingsHaveEntry { oldSystemHint }
+        // 橙字是状态（桌面在 iCloud 里、旧系统没有那一项），照旧写在页脚
+        let inICloud = desktopInICloud ?? Self.desktopInICloud
+        if inICloud || !Self.settingsHaveEntry {
+          VStack(alignment: .leading, spacing: 6) {
+            if inICloud { iCloudHint }
+            if !Self.settingsHaveEntry { oldSystemHint }
+          }
         }
       }
       Section {
@@ -63,60 +114,82 @@ struct FinderMenuTab: View {
           Text("放进去的任何文件，右键「新建文件」里就多一项")
         }
       } header: {
-        Text("新建文件")
-      } footer: {
-        SectionFootnote(
-          "「新建文件」里有文本文件、Markdown、Word 文档、Excel 表格、PPT 演示文稿，和模板文件夹里放的文件；「从剪贴板新建」把剪贴板里的图存成 PNG、文字存成文本文件；「自定义后缀…」建一个任意后缀的空文件，可以顺手记进菜单。建好后在访达里选中它、直接改名（要「辅助功能」授权，没有就只选中）；重名的自动加「 2」。"
+        InfoHeader(
+          "新建文件",
+          info:
+            "「新建文件」里有文本文件、Markdown、Word 文档、Excel 表格、PPT 演示文稿，和模板文件夹里放的文件；「从剪贴板新建」把剪贴板里的图存成 PNG、文字存成文本文件；「自定义后缀…」建一个任意后缀的空文件，可以顺手记进菜单。建好后在访达里选中它、直接改名；重名的自动加「 2」。"
         )
+        .settingsAnchor(.finderNewFile)
+      } footer: {
+        SectionFootnote("建好后直接改名要「辅助功能」授权，没有就只选中。")
       }
       .gated(by: .finderMenu)
       Section {
         ItemToggle(.copyPath)
         ItemToggle(.copyName)
+        ItemToggle(.copyText)
       } header: {
-        Text("拷贝")
-      } footer: {
-        SectionFootnote("路径是完整路径、不加引号，选了几个就一行一个，空白处是这个文件夹的路径；拷好后刘海岛说一声，剪贴板历史里也有。")
+        InfoHeader("拷贝", info: "路径是完整路径、不加引号，选了几个就一行一个，空白处是这个文件夹的路径；拷好后刘海岛说一声，剪贴板历史里也有。")
+          .settingsAnchor(.finderCopy)
       }
       .gated(by: .finderMenu)
       Section {
         ItemToggle(.transfer)
         ItemToggle(.cut)
+        // 访达里的 ⌘X / ⌘V（FinderKeys，issue #33，默认关）
+        Toggle(isOn: $keys) {
+          HStack(spacing: 6) {
+            Text("在访达里用 ⌘X 剪切、⌘V 移动")
+            if let navigation,
+              WhatsNew.marks(section: "在访达里用 ⌘X 剪切、⌘V 移动", of: .finderMenu, in: navigation.fresh)
+            {
+              NewTag()
+            }
+          }
+          Text("和右键「剪切」是同一个剪切；剪切之后按 ⌘V 是移动，没剪切时照常粘贴")
+        }
+        .onChange(of: keys) { WhatsNew.touch(section: "在访达里用 ⌘X 剪切、⌘V 移动", of: .finderMenu) }
+        // 开关关着时不去查授权
+        if keys, !(accessibilityTrusted ?? Permissions.isAccessibilityTrusted) {
+          LabeledContent {
+            Button(Permissions.Kind.accessibility.settingsTitle) {
+              Permissions.Kind.accessibility.openSettings()
+            }
+          } label: {
+            Text("没有「辅助功能」授权，接不住这两个键").foregroundStyle(.orange)
+          }
+          .id(accessChecks)
+        }
         ItemToggle(.deskAlias)
       } header: {
-        Text("整理文件")
-      } footer: {
-        SectionFootnote(
-          "不会覆盖：重名的自动加「 2」。搬得久时刘海岛显示进度、能停下，做完带「在访达中显示」。剪切之后又拷了别的东西，剪切就作废。"
+        InfoHeader(
+          "整理文件",
+          info:
+            "不会覆盖：重名的自动加「 2」。搬得久时刘海岛显示进度、能停下，做完带「在访达中显示」。剪切之后又拷了别的东西，剪切就作废。⌘X、⌘V 只管按给访达的：改名、搜索时照常剪切粘贴，别的 App 不受影响；⌘V 的移动是访达自己做的（同 ⌥⌘V），重名时访达会问，撤销按 ⌘Z。要「辅助功能」授权。"
         )
+        .settingsAnchor(.finderOrganize)
       }
       .gated(by: .finderMenu)
       Section {
         ItemToggle(.compress)
-        // 压缩时另外跳过的名字（2026-11-13 拍板 Z1 Z2）：一行字，逗号隔开；带「/」的不认，下面橙字列出来
-        LabeledContent {
-          TextField("压缩时跳过", text: $compressSkip, prompt: Text("node_modules, .git, *.log"))
-            .textFieldStyle(.roundedBorder)
-            .labelsHidden()
-            .frame(maxWidth: 220)
-        } label: {
-          Text("压缩时跳过")
-          Text("名字用逗号隔开，* 代表任意几个字；文件夹里任意一层叫这个名字的都不压进去，选中的那几样自己照压")
-        }
-        let rejected = Archives.rejectedSkipNames(compressSkip)
-        if !rejected.isEmpty {
-          Text("只认名字、不认路径，这几条不算：" + rejected.joined(separator: "、"))
-            .font(.subheadline)
-            .foregroundStyle(.orange)
+        // 压缩时另外跳过的名字（2026-11-13 拍板 Z1 Z2）：开关和列表在推进去的那一页
+        SettingsPushRow(title: "压缩时跳过", detail: "\(CompressSkipPage.summary(compressSkip))") {
+          navigation?.path = [CompressSkipPage.route]
         }
         ItemToggle(.extract)
+        // 解压后把压缩包移到废纸篓（2026-11-17 拍板 B2，默认关）
+        Toggle(isOn: $trashAfterExtract) {
+          Text("解压后把压缩包移到废纸篓")
+          Text("解压成功了才移；在废纸篓里能放回原处")
+        }
         ItemToggle(.fixNames)
       } header: {
-        Text("压缩和解压")
-      } footer: {
-        SectionFootnote(
-          "压缩包放在旁边，重名的自动加「 2」；zip 里的中文名到别的系统上解开也不乱码，也不夹带 Mac 的隐藏文件（.DS_Store、._*、__MACOSX 总会跳过；只压一个 App 这类包时不按「压缩时跳过」跳，跳了签名会坏）。解压时只有一样东西就直接放在包旁边，几样就放进和包同名的文件夹；别的系统打的 zip，中文名也解得对。修复乱码文件名之后，刘海岛上能撤销。包里不带访达的标签、替身和自定义图标，要在 Mac 之间原样传，用访达自带的「压缩」。"
+        InfoHeader(
+          "压缩和解压",
+          info:
+            "压缩包放在旁边，重名的自动加「 2」；zip 里的中文名到别的系统上解开也不乱码，也不夹带 Mac 的隐藏文件（.DS_Store、._*、__MACOSX）。解压时只有一样东西就直接放在包旁边，几样就放进和包同名的文件夹；按住 ⌥ 右键是「解压到…」，自己选放在哪；别的系统打的 zip，中文名也解得对。修复乱码文件名之后，刘海岛上能撤销。包里不带访达的标签、替身和自定义图标，要在 Mac 之间原样传，用访达自带的「压缩」。"
         )
+        .settingsAnchor(.finderArchive)
       }
       .gated(by: .finderMenu)
       Section {
@@ -125,11 +198,14 @@ struct FinderMenuTab: View {
         ItemToggle(.hash)
         ItemToggle(.erase)
       } header: {
-        Text("隐藏、哈希、删除")
-      } footer: {
-        SectionFootnote(
-          "这几项默认关着。点开头的文件本来就是隐藏的，不出现「取消隐藏」；隐藏了的东西，在访达里按 ⇧⌘. 就能看到。拷贝哈希只给文件算，算完也记进剪贴板历史。彻底删除每次都先问，删了不进废纸篓，找不回来。"
+        InfoHeader(
+          "隐藏、哈希、删除",
+          info:
+            "这几项默认关着。点开头的文件本来就是隐藏的，不出现「取消隐藏」；隐藏了的东西，在访达里按 ⇧⌘. 就能看到。拷贝哈希只给文件算，算完也记进剪贴板历史。"
         )
+        .settingsAnchor(.finderHidden)
+      } footer: {
+        SectionFootnote("彻底删除每次都先问，删了不进废纸篓，找不回来。")
       }
       .gated(by: .finderMenu)
       Section {
@@ -146,10 +222,8 @@ struct FinderMenuTab: View {
           .help("添加文件夹")
         }
       } header: {
-        Text("「移动到」「复制到」的常用文件夹")
-      } footer: {
-        SectionFootnote(
-          "子菜单里按这个顺序列（拖动调整），后面接最近用「选择文件夹…」选过的 3 个；这次用不上的会变灰。")
+        InfoHeader("「移动到」「复制到」的常用文件夹", info: "子菜单里按这个顺序列（拖动调整），后面接最近用「选择文件夹…」选过的 3 个；这次用不上的会变灰。")
+          .settingsAnchor(.finderFolders)
       }
       .gated(by: .finderMenu)
       Section {
@@ -179,16 +253,18 @@ struct FinderMenuTab: View {
           .help("添加 App")
         }
       } header: {
-        Text("在 App 中打开")
-      } footer: {
-        SectionFootnote(
-          "文件夹原样交给 App；文件交给认得它的 App，不认得的改成打开它所在的文件夹。脚本和可执行文件只交给编辑器，交给终端的是它所在的文件夹，不会运行它。选了几样时编辑器全打开，终端只开第一个。"
+        InfoHeader(
+          "在 App 中打开",
+          info:
+            "文件夹原样交给 App；文件交给认得它的 App，不认得的改成打开它所在的文件夹。脚本和可执行文件只交给编辑器，交给终端的是它所在的文件夹，不会运行它。选了几样时编辑器全打开，终端只开第一个。"
         )
+        .settingsAnchor(.finderOpenWith)
       }
       .gated(by: .finderMenu)
-      PluginRemoveSection(plugin: .finderMenu)
+      PluginAboutSection(plugin: .finderMenu)
     }
     .formStyle(.grouped)
+    .settingsScrollTarget()
     // 同步、导入落下了新的列表：页面跟上（同剪贴板页的排除列表）
     .task {
       for await _ in NotificationCenter.default.notifications(
@@ -243,8 +319,8 @@ struct FinderMenuTab: View {
     panel.canChooseFiles = false
     panel.canChooseDirectories = true
     panel.allowsMultipleSelection = true
-    panel.prompt = "添加"
-    panel.message = "选择的文件夹会出现在访达右键的「移动到」「复制到」里"
+    panel.prompt = String(localized: "添加")
+    panel.message = String(localized: "选择的文件夹会出现在访达右键的「移动到」「复制到」里")
     guard panel.runModal() == .OK else { return }
     changeFolders { list in
       for url in panel.urls {
@@ -269,6 +345,51 @@ struct FinderMenuTab: View {
 
   static func openExtensionSettings() {
     FIFinderSyncController.showExtensionManagementInterface()
+  }
+
+  /// 访达的 bundle id（控制访达的授权按它查）
+  static let finderID = "com.apple.finder"
+
+  /// 桌面或文稿同步在 iCloud 里（系统设置 › Apple 账户 › iCloud 云盘「桌面与文稿文件夹」）：那里右键没有我们的项。
+  /// 两路都看：访达自己记的那两个开关（FXICloudDriveDesktop / Documents，只读），文件夹本身是不是 iCloud 的。
+  /// ponytail: 开发机没开这项同步，两路都没在开着的机器上验过；有人说橙字该出没出再查
+  static var desktopInICloud: Bool {
+    let finder = UserDefaults(suiteName: "com.apple.finder")
+    if finder?.bool(forKey: "FXICloudDriveDesktop") == true
+      || finder?.bool(forKey: "FXICloudDriveDocuments") == true
+    {
+      return true
+    }
+    return [FileManager.SearchPathDirectory.desktopDirectory, .documentDirectory].contains { kind in
+      FileManager.default.urls(for: kind, in: .userDomainMask).first.map {
+        FileManager.default.isUbiquitousItem(at: $0)
+      } == true
+    }
+  }
+
+  private var automationButton: LocalizedStringResource {
+    (finderAutomation ?? automation) == .denied ? "去打开…" : "授权…"
+  }
+
+  /// 没问过：跑一句真要访达回答的 AppleScript（数访达窗口；「return name」AppleScript 自己就答了、不发事件，系统不问，评审），
+  /// 让系统弹「想控制“访达”」的框（进程外，要等用户点）；拒绝过：系统设置里手动打开
+  private func requestFinderAutomation() {
+    guard automation != .denied else { return Permissions.Kind.automation.openSettings() }
+    Task {
+      _ = try? await Subprocess.run(
+        "/usr/bin/osascript", ["-e", "tell application \"Finder\" to count Finder windows"],
+        captures: true,
+        timeout: .seconds(150))
+      automation = Permissions.automation(Self.finderID)
+    }
+  }
+
+  private var iCloudHint: some View {
+    Text("你的桌面、文稿同步在 iCloud 里：那里右键没有这些项，把「Kitty Tools」按钮放到访达工具栏上用。")
+      .font(.caption)
+      .foregroundStyle(Color(nsColor: .systemOrange))
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 10)
   }
 
   private var oldSystemHint: some View {
@@ -375,7 +496,7 @@ private struct FolderRow: View {
       Text(FileManager.default.displayName(atPath: full))
         .lineLimit(1)
         .truncationMode(.tail)
-      Text(exists ? path : "这台 Mac 上没有")
+      (exists ? Text(verbatim: path) : Text("这台 Mac 上没有"))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)

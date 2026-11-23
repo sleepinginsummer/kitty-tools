@@ -146,6 +146,69 @@ struct ScreenshotTests {
     #expect(ElementFinder.layers([], at: point, in: window).isEmpty)
   }
 
+  // 第三轮（2026-11-15）：短边到 16 点、长边到 20 点才算一层——文件名框（122×18）、开关（36×16）算，16×16 的图标、
+  // 再窄的不算
+  @Test func elementLayersKeepSixteenPointControls() {
+    typealias Layer = ElementFinder.Layer
+    let window = CGRect(x: 0, y: 0, width: 800, height: 600)
+    let point = CGPoint(x: 100, y: 400)
+    let chain = [
+      Layer(frame: CGRect(x: 95, y: 392, width: 15, height: 15), name: "小图"),
+      Layer(frame: CGRect(x: 92, y: 392, width: 16, height: 16), name: "图标"),
+      Layer(frame: CGRect(x: 85, y: 392, width: 36, height: 16), name: "开关"),
+      Layer(frame: CGRect(x: 60, y: 391, width: 122, height: 18), name: "文本框"),
+      Layer(frame: CGRect(x: 20, y: 390, width: 347, height: 20), name: "单元格"),
+    ]
+    #expect(
+      ElementFinder.layers(chain, at: point, in: window).map(\.name) == ["开关", "文本框", "单元格"])
+  }
+
+  // 第三轮：缓存什么时候还能用——指针还在钻到的那块里、没进它的子元素、没进工具栏（children）
+  @Test func elementCacheEntryHolds() {
+    let hit = AXUIElementCreateApplication(getpid())
+    let row = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let text = CGRect(x: 10, y: 10, width: 20, height: 20)
+    let drilled = ElementFinder.Cache.Entry(
+      hit: hit, answer: .chain([]), within: row, children: [text])
+    #expect(drilled.holds(CGPoint(x: 50, y: 50)))
+    // 进了里面那行字：要钻得更深
+    #expect(!drilled.holds(CGPoint(x: 15, y: 15)))
+    // 出了钻到的那块
+    #expect(!drilled.holds(CGPoint(x: 150, y: 50)))
+    // 没钻下去（命中的元素自己）：只看子元素；工具栏（内容铺在它底下，命中测试还给同一个元素）同样记在 children
+    let toolbar = CGRect(x: 0, y: 500, width: 800, height: 52)
+    let flat = ElementFinder.Cache.Entry(
+      hit: hit, answer: .chain([]), within: nil, children: [text, toolbar])
+    #expect(flat.holds(CGPoint(x: 50, y: 50)))
+    #expect(!flat.holds(CGPoint(x: 15, y: 15)))
+    #expect(!flat.holds(CGPoint(x: 100, y: 520)))
+  }
+
+  // 第三轮：指针在工具栏那一条里，命中的是铺在玻璃工具栏底下的内容（伸出工具栏的滚动区、侧栏）或窗口本身时换成工具栏；
+  // 整个在那一条里的（窗口标题那行字）不换
+  @Test func elementToolbarUnderneath() {
+    let toolbar = CGRect(x: 0, y: 548, width: 800, height: 52)
+    #expect(ElementFinder.underneath(CGRect(x: 0, y: 0, width: 763, height: 590), toolbar))
+    #expect(ElementFinder.underneath(nil, toolbar))
+    #expect(ElementFinder.underneath(.null, toolbar))
+    #expect(!ElementFinder.underneath(CGRect(x: 300, y: 548, width: 411, height: 52), toolbar))
+    // 差不到 4 点的不算伸出
+    #expect(!ElementFinder.underneath(CGRect(x: 0, y: 546, width: 802, height: 56), toolbar))
+  }
+
+  // 第三轮 B1：叫醒浏览器内核后，指针停着不动时到 0.4 s、1.2 s 各再问一次；都过了就不再排
+  @Test func elementRecheckAfterWaking() {
+    let woken = ContinuousClock.now
+    #expect(
+      ElementFinder.recheckDelay(wokenAt: woken, now: woken + .milliseconds(100))
+        == .milliseconds(300))
+    #expect(
+      ElementFinder.recheckDelay(wokenAt: woken, now: woken + .milliseconds(400))
+        == .milliseconds(800))
+    #expect(ElementFinder.recheckDelay(wokenAt: woken, now: woken + .milliseconds(1200)) == nil)
+    #expect(ElementFinder.recheckDelay(wokenAt: woken, now: woken + .seconds(2)) == nil)
+  }
+
   @Test func elementLayerPositionAndScrollSteps() {
     let frames = [
       CGRect(x: 10, y: 10, width: 50, height: 30), CGRect(x: 0, y: 0, width: 200, height: 100),
@@ -254,6 +317,36 @@ struct ScreenshotTests {
       window(33, "NSMenuWindowManagerWindow", level: .normal, parent: 5),
     ])
     #expect(recorded == [1, 2, 3, 4, 5, 6, 20, 21, 22, 23, 24, 25, 26])
+  }
+
+  /// 长截图照拍的自家窗口（2026-11-20：以前整个本 App 都滤掉，长截图拍不到设置窗）：设置窗、全部便签、截图历史这类普通窗口、
+  /// 它们的 sheet、选文件 / 另存为框，和挂在上面的确认框、弹出框照拍；浮层（连同挂在它上面的）、钉图、浮动便签、那叠、
+  /// 长截图自己的面板和边框、状态栏层级的都不拍
+  @Test func scrolledOwnWindowsAreOrdinaryWindows() {
+    func window(
+      _ id: CGWindowID, _ className: String, level: NSWindow.Level = .normal,
+      parent: CGWindowID? = nil
+    ) -> ScreenCapture.OwnWindow {
+      ScreenCapture.OwnWindow(
+        id: id, className: className, level: level.rawValue, isVisible: true, alpha: 1,
+        parent: parent)
+    }
+    let kept = ScreenCapture.scrolledOwnWindows([
+      window(1, "NSWindow"),  // 设置窗 / 全部便签 / 截图历史
+      window(2, "SheetPresentationWindow"),  // 设置窗上的引导、速查表
+      window(3, "_NSAlertPanel", parent: 1),  // 设置窗里的确认框
+      window(4, "_NSPopoverWindow", parent: 2),
+      window(5, "NSSavePanel", level: .modalPanel),
+      window(10, "OverlayPanel", level: .floating),  // 固定着的剪贴板面板
+      window(11, "_NSAlertPanel", level: .floating, parent: 10),
+      window(12, "PinPanel", level: .floating),  // 压在选区上时淡到 0.3 让开
+      window(13, "NoteFloatPanel", level: .floating),
+      window(14, "NoteDeckPanel", level: .floating),
+      window(15, "ScrollCapturePanel", level: .floating),
+      window(16, "NSPanel", level: .statusBar),  // 选区边框
+      window(17, "NSStatusBarWindow", level: .statusBar),
+    ])
+    #expect(kept == [1, 2, 3, 4, 5])
   }
 
   /// 截图遮罩开着时浮层不因失焦 / 点击收起；遮罩收起（orderOut）后照常。
@@ -451,6 +544,8 @@ struct ScreenshotTests {
     #expect(Prefs.defaults[Prefs.screenshotKeepsColors] as? Bool == false)
     // 悬停时识别窗口里的元素：同样默认关（2026-11-08 用户：两个都默认不打开）
     #expect(Prefs.defaults[Prefs.screenshotFindsElements] as? Bool == false)
+    // 也认网页里的元素（2026-11-15 第三轮 B1）：会让别的 App 打开辅助功能，子开关默认关
+    #expect(Prefs.defaults[Prefs.screenshotFindsWebElements] as? Bool == false)
   }
 
   @Test func annotationHitTesting() {
@@ -892,11 +987,13 @@ struct ScreenshotTests {
     #expect(OCR.text(again, joined: false).contains("Release"))
   }
 
-  /// 子进程识字（第二轮体检 M2）的命令行和输出约定：第一个参数是 --ocr 才是识字模式（参数不对报用法，不当成正常启动），
+  /// 两个子进程入口和输出约定：--prepare-ocr 不接路径，--ocr 只接一个图片路径；参数不对报用法，不当成正常启动。
   /// 路径带空格、中文原样；输出是一行头 + 文字，头或字节数对不上就不认；给子进程的环境变量不带测试注入那些
   @Test func helperProtocol() {
     #expect(OCR.launch(["/Applications/Kitty Tools.app/Contents/MacOS/Kitty Tools"]) == nil)
     #expect(OCR.launch(["app", "-NSDocumentRevisionsDebugMode", "YES"]) == nil)
+    #expect(OCR.launch(["app", "--prepare-ocr"]) == .prepare)
+    #expect(OCR.launch(["app", "--prepare-ocr", "/tmp/image.png"]) == .usage)
     #expect(
       OCR.launch(["app", "--ocr", "/tmp/a b/图 1.png"])
         == .recognize(URL(filePath: "/tmp/a b/图 1.png")))
@@ -921,19 +1018,157 @@ struct ScreenshotTests {
     #expect(environment == ["HOME": "/Users/x", "TMPDIR": "/tmp/"])
   }
 
-  /// 准备识字模型（OCR.prepare）：没记过就起子进程拿那张小图识一次、记下系统版本，记过了 isPrepared 直接是真。
-  /// 那张小图得真识得出字（空白图子进程也成功退出，编不到识字的模型）。宿主的缓存早编好了，这里几秒钟。
-  /// 记在临时偏好域里：宿主是 Dev 版，碰 standard 就是写用户的真实偏好（连「先写再恢复」也不行，并行时还会抢）
-  @Test func preparesModelOnce() async throws {
-    let suite = "kitty-test-ocr-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
-    #expect(!OCR.isPrepared(defaults, domainName: suite))
-    await OCR.prepare(defaults, domainName: suite)
-    #expect(OCR.isPrepared(defaults, domainName: suite))
-    let sample = try #require(OCR.writeSample())
-    defer { try? FileManager.default.removeItem(at: sample) }
-    #expect(await OCR.recognizeText(in: sample) == "Kitty")
+  /// 模拟 App 自己的缓存根目录；测试可以整棵删掉，不碰宿主的缓存或偏好。
+  private func modelCacheRoot() -> URL {
+    FileManager.default.temporaryDirectory.appending(path: "kitty-ocr-cache-\(UUID())")
+  }
+
+  @MainActor @Test func preparesModelOnce() async throws {
+    let root = modelCacheRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let marker = root.appending(path: "ocr-prepared")
+    var attempts = 0
+    let compile: @MainActor () async -> Bool = {
+      attempts += 1
+      return true
+    }
+
+    let version = try #require(OCR.systemVersion)
+    #expect(!OCR.isPrepared(marker: marker))
+    #expect(await OCR.prepare(marker: marker, compile: compile))
+    #expect(try Data(contentsOf: marker) == Data(version.utf8))
+    #expect(OCR.isPrepared(marker: marker))
+    #expect(await OCR.prepare(marker: marker, compile: compile))
+    #expect(attempts == 1)
+
+    // 没开监听，模拟退出期间整棵缓存被清理。下次准备不应记着刚才那次成功。
+    try FileManager.default.removeItem(at: root)
+    #expect(!OCR.isPrepared(marker: marker))
+    #expect(await OCR.prepare(marker: marker, compile: compile))
+    #expect(try Data(contentsOf: marker) == Data(version.utf8))
+    #expect(attempts == 2)
+  }
+
+  @MainActor @Test func replacesOldModelMarkerOnlyAfterSuccess() async throws {
+    let root = modelCacheRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let marker = root.appending(path: "ocr-prepared")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("14.0.0 (23A344)".utf8).write(to: marker)
+    #expect(!OCR.isPrepared(marker: marker))
+    let failed = await OCR.prepare(marker: marker) { false }
+    #expect(!failed)
+    #expect(!OCR.isPrepared(marker: marker))
+    let retried = await OCR.prepare(marker: marker) { true }
+    #expect(retried)
+    let version = try #require(OCR.systemVersion)
+    #expect(try Data(contentsOf: marker) == Data(version.utf8))
+  }
+
+  @MainActor @Test func doesNotStampDirectoryReplacedDuringPreparation() async throws {
+    let fm = FileManager.default
+    let root = modelCacheRoot()
+    let retired = root.appendingPathExtension("old")
+    defer {
+      try? fm.removeItem(at: root)
+      try? fm.removeItem(at: retired)
+    }
+    let marker = root.appending(path: "ocr-prepared")
+    try fm.createDirectory(at: root, withIntermediateDirectories: true)
+    let ready = await OCR.prepare(marker: marker) {
+      do {
+        // 模型编在旧目录里；返回时同一路径已经是个空目录，不能给它写「准备好了」。
+        try fm.moveItem(at: root, to: retired)
+        try fm.createDirectory(at: root, withIntermediateDirectories: false)
+        return true
+      } catch {
+        Issue.record(error)
+        return false
+      }
+    }
+    #expect(!ready)
+    #expect(!OCR.isPrepared(marker: marker))
+  }
+
+  @MainActor @Test func concurrentPreparesShareOneCompilation() async throws {
+    let root = modelCacheRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let marker = root.appending(path: "ocr-prepared")
+    var second: Task<Bool, Never>?
+    let first = await OCR.prepare(marker: marker) {
+      // 第一份还没有标记时，让第二个调用者进来；都在 MainActor，先等它挂起再放行。
+      await withCheckedContinuation { (entered: CheckedContinuation<Void, Never>) in
+        second = Task { @MainActor in
+          entered.resume()
+          let ready = await OCR.prepare(marker: marker) {
+            Issue.record("同一份准备不应再起一次子进程")
+            return false
+          }
+          return ready && OCR.isPrepared(marker: marker)
+        }
+      }
+      #expect(!OCR.isPrepared(marker: marker))
+      return true
+    }
+    #expect(first)
+    let joined = try #require(second)
+    #expect(await joined.value)
+  }
+
+  /// 时限给 3 分钟，同别的主线程测试：全量并行跑时主线程排着别的测试，这一条开头那次 prepare 就要等一分多钟（2026-11-22 实测，
+  /// 给 1 分钟时三次全量都超时被杀；单跑 1 s）
+  @MainActor @Test(.timeLimit(.minutes(3))) func rearmedWatcherRepairsRepeatedCacheDeletion()
+    async throws
+  {
+    let root = modelCacheRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let marker = root.appending(path: "ocr-prepared")
+    let prepared = await OCR.prepare(marker: marker) { true }
+    try #require(prepared)
+    var repairs = 0
+    let (completions, signal) = AsyncStream<Bool>.makeStream()
+    defer { signal.finish() }
+    let watcher = OCRPreparationMarkerWatcher(marker: marker) {
+      let ready = await OCR.prepare(marker: marker) {
+        repairs += 1
+        return true
+      }
+      signal.yield(ready)
+      return ready
+    }
+    watcher.start()
+    defer { watcher.stop() }
+    var completion = completions.makeAsyncIterator()
+    for pass in 1...2 {
+      // 不重启监听，也不从测试里主动 prepare。第二次删除的是新建目录里的新标记。
+      try FileManager.default.removeItem(at: root)
+      let restored = await completion.next()
+      try #require(restored == true, "第 \(pass) 次删除后没有修复")
+      #expect(OCR.isPrepared(marker: marker))
+      #expect(repairs == pass)
+    }
+  }
+
+  /// 预热的合成图走真正的两条识别路径；不靠真实偏好或另一个测试留下的全局会话。
+  @MainActor @Test func warmsForegroundSessionOnce() async throws {
+    let session = OCR.ForegroundSession()
+    var attempts = 0
+    session.warmIfUnused {
+      attempts += 1
+      #expect(await OCR.warmForegroundModels())
+    }
+    session.warmIfUnused { attempts += 1 }
+    let pending = try #require(session.beginUse())
+    await pending.value
+    #expect(session.beginUse() == nil)
+    session.warmIfUnused { attempts += 1 }
+    #expect(session.beginUse() == nil)
+    #expect(attempts == 1)
+
+    let userFirst = OCR.ForegroundSession()
+    #expect(userFirst.beginUse() == nil)
+    userFirst.warmIfUnused { Issue.record("真实请求先到，不应补跑合成图") }
+    #expect(userFirst.beginUse() == nil)
   }
 
   /// 真的起子进程识字（单测宿主的可执行文件带 --ocr；图在临时目录，子进程只读图、写标准输出，不碰用户数据）。

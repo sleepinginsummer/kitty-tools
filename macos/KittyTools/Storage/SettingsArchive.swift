@@ -13,7 +13,8 @@
 // - hotkeys：存过的全局快捷键（动作 → 组合，null = 清除了）；没存过的不写，跟默认。截图时能改的键（2026-11-06，ShotKeys）
 //   也在这里，键名是「shot.<名字>」（旧版本只认动作名，原样忽略它们；不升 format）；
 // - translateServices / searchEngines：两张列表现在的样子；
-// - clips + clipGroups：片段和文字类的收藏（正文、备注、所在收藏夹的名字、复制时间），收藏夹的名字按顺序；
+// - clips + clipGroups：片段和文字类的收藏（正文、备注、所在收藏夹的名字、复制时间；片段的关键词（2026-11-22 片段展开，
+//   旧版本不认识它、原样忽略，不升 format）），收藏夹的名字按顺序；
 // - vocabulary：生词本（收藏的翻译）；
 // - notes：便签（没删的，含归档；每条带编号、标题、正文、颜色、建于、改于、修订号、归档、固定、顺序）；这三类是明文；
 // - secrets：翻译服务的密钥，默认不带；要带就用密码加密（PBKDF2-HMAC-SHA256 → AES-256-GCM），文件里没有明文密钥。
@@ -38,7 +39,9 @@ struct SettingsArchive: Codable, Equatable {
 
     var id: String { rawValue }
 
-    var title: String {
+    var title: String { String(localized: titleResource) }
+
+    var titleResource: LocalizedStringResource {
       switch self {
       case .preferences: "设置"
       case .hotkeys: "快捷键"
@@ -60,6 +63,8 @@ struct SettingsArchive: Codable, Equatable {
     /// 所在收藏夹的名字
     var group: String?
     var copiedAt: Date
+    /// 片段的关键词（片段展开，2026-11-22）：没有时不写这一项；旧版本不认识它、照常读文件（同便签的 tint，不升格式号）
+    var keyword: String? = nil
   }
 
   /// 生词本的一条（收藏的翻译）
@@ -242,11 +247,11 @@ struct SettingsArchive: Codable, Equatable {
 
     var message: String {
       switch self {
-      case .backupFailed(let reason): "没能先备份现在的设置和数据（\(reason)），所以没有导入"
-      case .notArchive: "这不是 Kitty Tools 导出的设置文件"
-      case .newer: "这个文件来自更新版本的 Kitty Tools，先更新再导入"
-      case .unreadable: "文件读不出来：可能被改动过，或者来自更新版本的 Kitty Tools"
-      case .wrongPassword: "密码不对（也可能是文件里的翻译服务被改动过）"
+      case .backupFailed(let reason): String(localized: "没能先备份现在的设置和数据（\(reason)），所以没有导入")
+      case .notArchive: String(localized: "这不是 Kitty Tools 导出的设置文件")
+      case .newer: String(localized: "这个文件来自更新版本的 Kitty Tools，先更新再导入")
+      case .unreadable: String(localized: "文件读不出来：可能被改动过，或者来自更新版本的 Kitty Tools")
+      case .wrongPassword: String(localized: "密码不对（也可能是文件里的翻译服务被改动过）")
       }
     }
   }
@@ -421,22 +426,23 @@ struct SettingsArchive: Codable, Equatable {
   /// 没问题是 nil，有问题给一句说给用户的话
   func exportProblem(encodedSize: Int) -> String? {
     if (clips?.count ?? 0) > Self.maxClips {
-      return "片段和文字收藏超过 \(Self.maxClips) 条，先取消勾选「片段与收藏」"
+      return String(localized: "片段和文字收藏超过 \(Self.maxClips) 条，先取消勾选「片段与收藏」")
     }
     if (clipGroups?.count ?? 0) > Self.maxGroups {
-      return "收藏夹超过 \(Self.maxGroups) 个，先取消勾选「片段与收藏」"
+      return String(localized: "收藏夹超过 \(Self.maxGroups) 个，先取消勾选「片段与收藏」")
     }
     if (vocabulary?.count ?? 0) > Self.maxWords {
-      return "生词本超过 \(Self.maxWords) 条，先取消勾选「生词本」"
+      return String(localized: "生词本超过 \(Self.maxWords) 条，先取消勾选「生词本」")
     }
     if (notes?.count ?? 0) > Self.maxNotes {
-      return "便签超过 \(Self.maxNotes) 条，先取消勾选「便签」"
+      return String(localized: "便签超过 \(Self.maxNotes) 条，先取消勾选「便签」")
     }
     if !notesFit {
-      return "有便签的正文超过 \(Note.maxBodyBytes >> 20) MB，先取消勾选「便签」"
+      return String(localized: "有便签的正文超过 \(Note.maxBodyBytes >> 20) MB，先取消勾选「便签」")
     }
     if encodedSize > Self.maxFileSize {
-      return "内容太多，先取消勾选「片段与收藏」" + ((notes ?? []).isEmpty ? "" : "或「便签」")
+      return (notes ?? []).isEmpty
+        ? String(localized: "内容太多，先取消勾选「片段与收藏」") : String(localized: "内容太多，先取消勾选「片段与收藏」或「便签」")
     }
     return nil
   }
@@ -452,7 +458,7 @@ struct SettingsArchive: Codable, Equatable {
   static func fileName(now: Date = .now) -> String {
     // 按本地时区取日期（ISO 8601 样式默认是格林尼治时间，半夜导出会差一天）
     let day = now.formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
-    return "Kitty Tools 设置 \(day).json"
+    return String(localized: "Kitty Tools 设置 \(day).json", comment: "导出设置的默认文件名，中间是日期")
   }
 
   // MARK: 密钥
@@ -570,7 +576,7 @@ struct SettingsArchive: Codable, Equatable {
   }
 
   /// 丢掉不该进偏好的：不认识的键和动作、类型或范围不对的值、过不了录制框规则的快捷键（重复的组合留给靠前的动作）、
-  /// id 不合规或重复、字段长得离谱的服务和搜索（整条不要，不截断：截了地址就不是原来那个地址）。译文字号夹进滑块的范围，
+  /// id 不合规或重复、字段长得离谱的服务和搜索（整条不要，不截断：截了地址就不是原来那个地址）。译文字号、截图圆角夹进滑块的范围，
   /// 状态屏的状态列表换成收拾过的（StatusPreset.sanitized）
   private func sanitized() -> SettingsArchive {
     var clean = self
@@ -589,6 +595,11 @@ struct SettingsArchive: Codable, Equatable {
         let range = TranslateCoordinator.fontScales
         kept[Prefs.translateFontScale] = .double(
           min(max(scale, range.lowerBound), range.upperBound))
+      }
+      if let radius = kept[Prefs.screenshotCornerRadius].flatMap(Kind.double.plist) as? Double {
+        let range = Prefs.screenshotCornerRadii
+        kept[Prefs.screenshotCornerRadius] = .double(
+          min(max(radius, range.lowerBound), range.upperBound))
       }
       if case .statuses(let list)? = kept[Prefs.statusScreenPresets] {
         kept[Prefs.statusScreenPresets] = .statuses(StatusPreset.sanitized(list))
@@ -633,6 +644,13 @@ struct SettingsArchive: Codable, Equatable {
           && (service.region ?? "").wholeMatch(of: /[A-Za-z0-9-]{0,64}/) != nil
         return valid && fits && ids.insert(service.id).inserted
       }
+      // 讲解开关只认 true、附加要求去 NUL 截到上限（issue #35；关着、空着都存 nil，同本机）
+      .map { service in
+        var service = service
+        service.explainsSentences = service.explainsSentences == true ? true : nil
+        service.extraPrompt = TranslateService.cleanedExtraPrompt(service.extraPrompt)
+        return service
+      }
     }
     clean.searchEngines = searchEngines.map { engines in
       var ids: Set<String> = []
@@ -652,6 +670,8 @@ struct SettingsArchive: Codable, Equatable {
     if clips == nil { clean.clipGroups = nil }
     // 片段 / 收藏：要有正文、不超过剪贴板单条文字的上限、确实是留下的；收藏夹的名字不合规、收藏夹已经够多的只是不归进去，
     // 备注长得离谱的只是不带备注
+    // 关键词：一个文件里两条片段用了同一个的，只留第一条的
+    var keywords = Set<String>()
     clean.clips = clips.map { clips in
       clips.prefix(Self.maxClips).compactMap { clip in
         guard !clip.text.isEmpty, clip.text.utf8.count <= ClipboardWatcher.maxTextBytes,
@@ -664,6 +684,11 @@ struct SettingsArchive: Codable, Equatable {
             ? name : nil
         }
         if let note = clip.note, note.isEmpty || note.count > 10_000 { clip.note = nil }
+        // 关键词只给片段、只收合规的（SnippetKeyword）；不合规的只是不带关键词
+        clip.keyword = clip.keyword.flatMap { keyword in
+          clip.snippet && SnippetKeyword.isValid(keyword) && keywords.insert(keyword).inserted
+            ? keyword : nil
+        }
         return clip
       }
     }
@@ -792,7 +817,7 @@ struct SettingsArchive: Codable, Equatable {
     try beforeWriting()
     apply(sections, to: defaults, domainName: domainName)
     if importsServices, let translateServices {
-      services.services = Self.merge(translateServices, into: services.services)
+      services.services = Self.mergeServices(translateServices, into: services.services)
       for (account, value) in unsealed { store(account, value) }
     }
     var outcome = Outcome(secrets: unsealed.count)
@@ -818,6 +843,20 @@ struct SettingsArchive: Codable, Equatable {
   static func merge<Item: Identifiable>(_ incoming: [Item], into current: [Item]) -> [Item] {
     let ids = Set(incoming.map(\.id))
     return incoming + current.filter { !ids.contains($0.id) }
+  }
+
+  /// 翻译服务照 merge 合并，只多一条（issue #35）：文件里那条没有附加要求（旧版本导出的文件）时，留着本机写的——
+  /// 那是用户自己写的字，不能导一个旧文件就无声没了
+  static func mergeServices(_ incoming: [TranslateService], into current: [TranslateService])
+    -> [TranslateService]
+  {
+    let local = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    let incoming = incoming.map { service in
+      var service = service
+      if service.extraPrompt == nil { service.extraPrompt = local[service.id]?.extraPrompt }
+      return service
+    }
+    return merge(incoming, into: current)
   }
 
   /// 文件里的翻译服务会把文字和密钥发到哪些自己填的地址（主机名，带端口的连端口）：AI 服务的地址、DeepL 的 DeepLX 地址；
@@ -864,6 +903,17 @@ struct SettingsArchive: Codable, Equatable {
       || clears.contains { incoming($0) as? Bool == true && !defaults.bool(forKey: $0) }
   }
 
+  /// 导入「设置」后会添加的插件（插件页改版 F1，导入前列出来，要授权的另说）：文件里是添加着（文件里没有的按默认值算——导入后
+  /// 它回到默认）、这台现在没添加、这台用得了的
+  func addedPlugins(comparedTo defaults: UserDefaults = .standard) -> [Feature] {
+    guard preferences != nil else { return [] }
+    return Feature.allCases.filter { plugin in
+      plugin.isPlugin && plugin.isAvailable
+        && (incoming(plugin.prefsKey) as? Bool ?? plugin.defaultOn)
+        && !(defaults.object(forKey: plugin.prefsKey) as? Bool ?? plugin.defaultOn)
+    }
+  }
+
   /// 导入「设置」后哪些隐私保护会比现在弱（导入前橙字逐条说；没有就是空的）：不再过滤疑似密钥、剪贴板不记录的 App 变少、
   /// 新打开复制即译。文件里没有的键按默认值算
   func privacyLosses(comparedTo defaults: UserDefaults = .standard) -> [String] {
@@ -872,16 +922,16 @@ struct SettingsArchive: Codable, Equatable {
     if incoming(Prefs.clipboardBlockSensitive) as? Bool == false,
       defaults.bool(forKey: Prefs.clipboardBlockSensitive)
     {
-      losses.append("不再过滤疑似密钥和银行卡号")
+      losses.append(String(localized: "不再过滤疑似密钥和银行卡号"))
     }
     let excluded = Set(incoming(Prefs.clipboardExcludedBundleIDs) as? [String] ?? [])
     let current = Set(defaults.stringArray(forKey: Prefs.clipboardExcludedBundleIDs) ?? [])
-    if !current.isSubset(of: excluded) { losses.append("剪贴板「不记录」的 App 会变少") }
+    if !current.isSubset(of: excluded) { losses.append(String(localized: "剪贴板「不记录」的 App 会变少")) }
     // 功能开关（Feature）：没存过 = 开。剪贴板从关变开 = 又开始记复制的东西
     let local = { (key: String) in defaults.object(forKey: key) as? Bool ?? true }
     let clipboard = Feature.clipboard.prefsKey
     if incoming(clipboard) as? Bool != false, !local(clipboard) {
-      losses.append("会开始记录剪贴板")
+      losses.append(String(localized: "会开始记录剪贴板"))
     }
     // 复制即译实际跑不跑看两样：翻译这个功能开着、复制即译开着（只比其中一样会漏掉「翻译从关变开」）
     let translate = Feature.translate.prefsKey
@@ -890,12 +940,12 @@ struct SettingsArchive: Codable, Equatable {
       incoming(translate) as? Bool != false
       && incoming(Prefs.translateCopyToTranslate) as? Bool == true
     if copiesAfter, !copiesNow {
-      losses.append("会打开复制即译（复制的外语文字自动发给翻译服务）")
+      losses.append(String(localized: "会打开复制即译（复制的外语文字自动发给翻译服务）"))
     }
     // 动画表情包（EmojiPack）：从关变开 = 挑到有动画版的表情时会联网下载
     let emoji = Prefs.emojiPackDownloads
     if incoming(emoji) as? Bool != false, !local(emoji) {
-      losses.append("会自动下载挑的表情的动画")
+      losses.append(String(localized: "会自动下载挑的表情的动画"))
     }
     return losses
   }
@@ -919,7 +969,8 @@ extension SettingsArchive.Clip {
     }
     self.init(
       text: text, note: item.note, favorite: item.favorite, snippet: item.isSnippet,
-      group: groups.first { $0.id == item.groupID }?.name, copiedAt: item.copiedAt)
+      group: groups.first { $0.id == item.groupID }?.name, copiedAt: item.copiedAt,
+      keyword: item.isSnippet ? item.keyword : nil)
   }
 }
 

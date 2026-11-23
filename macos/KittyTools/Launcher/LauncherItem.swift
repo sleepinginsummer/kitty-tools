@@ -35,6 +35,8 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
     /// 列表脚本给出的一条结果（目标是「脚本路径⏎第几条」）：↩ 粘贴 payload、⌘↩ / ⌘C 只复制；payload 是 nil 的（脚本标了不能选、
     /// 出错的那一行）按了只响提示音。写了 url / path 的（opens）↩ 打开，文件另有 ⌘↩ 在访达中显示、⌘Y 快速查看
     case scriptResult
+    /// 前台 App 的一个菜单项（第五轮体检 N3，MenuSearch；目标是「pid⏎位置」，菜单项本身在 menuItem 里）：↩ 执行它（不记使用）
+    case menuItem
 
     /// 只有这些记使用、能出现在「常用」里、能收藏
     var isRecorded: Bool { [.app, .action, .url, .path, .system, .script].contains(self) }
@@ -83,6 +85,8 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
   /// App：系统记的最近使用（Spotlight 的 kMDItemUsedDates 按天衰减求和，AppCatalog.systemUse）。只在启动器 / 启动台的
   /// 分数相同时用来排先后：刚装上本 App、还没在这里用过时，常用的 App 也排在前面（同 Alfred 没记录时看系统的使用日期）
   var systemUse = 0.0
+  /// 菜单项（.menuItem）：哪个 App 的哪一项、路径的搜索名；别的结果是 nil
+  var menuItem: MenuSearch.Entry?
 
   var id: String { kind.rawValue + "\n" + target }
 
@@ -96,12 +100,16 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
     var pinsHidden: Bool?
     var checksUpdates = false
     var recording: HotKeyAction?
+    /// 保持唤醒手动开着一段（那一项叫「停止保持唤醒」）
+    var awake = false
     var statusPresets: [StatusPreset] = []
     var statusEntersFirst = false
     var features = Set(Feature.allCases.filter(\.isAvailable))
 
-    /// 这一项正在进行（标题换成「停止…」）：录屏 / 录音在录
-    func isRunning(_ action: HotKeyAction) -> Bool { recording == action }
+    /// 这一项正在进行（标题换成「停止…」）：录屏 / 录音在录、保持唤醒手动开着
+    func isRunning(_ action: HotKeyAction) -> Bool {
+      recording == action || (action == .keepAwake && awake)
+    }
   }
 
   /// 内置动作（体检 A26）：和菜单栏同名同序——按 HotKeyAction.sections（只列开着的功能，启动器自己除外），每节末尾接上那一节的
@@ -124,7 +132,7 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
         }
         items.append(
           action(
-            actionID(hotKey), hotKey.title(recording: state.isRunning(hotKey)),
+            actionID(hotKey), hotKey.titleResource(recording: state.isRunning(hotKey)),
             aliases[hotKey] ?? "")
         )
       }
@@ -141,13 +149,13 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
   private static func action(_ extra: MenuExtra, _ state: ActionState) -> LauncherItem {
     let subtitle =
       switch (extra, extra.isOn(state)) {
-      case (.pauseClipboard, let on?): on ? "已暂停" : "正在记录"
-      case (_, let on?): on ? "已开启" : "已关闭"
+      case (.pauseClipboard, let on?): on ? String(localized: "已暂停") : String(localized: "正在记录")
+      case (_, let on?): on ? String(localized: "已开启") : String(localized: "已关闭")
       default: "Kitty Tools"
       }
     return action(
-      extra.rawValue, extra.title(pinsHidden: state.pinsHidden == true).replacing("…", with: ""),
-      extra.alias, subtitle: subtitle)
+      extra.rawValue, extra.titleResource(pinsHidden: state.pinsHidden == true), extra.alias,
+      subtitle: subtitle, trimsEllipsis: true)
   }
 
   private static var actionCache: (state: ActionState, items: [LauncherItem])?
@@ -163,11 +171,11 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
   /// 状态屏的一个状态：标题是状态的标题，副标题同别的内置动作，右侧类型写「状态屏」；输状态的标题、「状态屏」、
   /// 拼音都搜得到。↩ 直接进入、不确认，所以同分时排在别的结果后面、也不记使用（LauncherMatch.priority、LauncherModel）
   private static func statusPreset(_ preset: StatusPreset) -> LauncherItem {
-    let family = HotKeyAction.statusScreen
-    var item = action(statusPresetPrefix + preset.id, preset.title, "Status Screen")
-    let pinyin = AppCatalog.pinyin(family.title)
-    item.names += [family.title, pinyin?.full].compactMap { $0.map(LauncherMatch.fold) }
-    item.initials += [pinyin?.initials].compactMap { $0 }
+    var item = action(statusPresetPrefix + preset.id, preset.titleResource, "Status Screen")
+    let family = searchTerms(
+      HotKeyAction.statusScreen.title, HotKeyAction.statusScreen.titleResource)
+    item.names += family.names.filter { !item.names.contains($0) }
+    item.initials += family.initials.filter { !item.initials.contains($0) }
     item.presetEmoji = preset.symbol
     return item
   }
@@ -198,7 +206,9 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
     .clipboard: "Clipboard History", .selectionTranslate: "Selection Translate",
     .inputTranslate: "Translate Input", .translateReplace: "Translate Replace",
     .screenshotTranslate: "Screenshot Translate", .screenshot: "Screenshot Capture",
-    .screenshotLastRegion: "Capture Last Region", .recognizeText: "OCR Recognize Text QR",
+    .screenshotLastRegion: "Capture Last Region",
+    .delayedScreenshot: "Delayed Screenshot Timer Self-timer 延时 定时 倒计时",
+    .recognizeText: "OCR Recognize Text QR",
     .screenRecord: "Screen Recording Record Video",
     .audioRecord: "Audio Recording Record Voice Microphone",
     // 「钉图」：标题是「钉住剪贴板内容」，不放进来搜「钉图」找不到它（菜单里的另两项都叫「…钉图」）；剪贴板里的文字也能钉（issue #4），
@@ -206,20 +216,57 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
     .pinClipboard: "Pin Clipboard Image Text 钉图 贴图",
     // 「便签」：标题是「快速记一条」，不放进来搜「便签」找不到它（另两项标题里就有）
     .noteCapture: "Quick Note Capture 便签", .noteNew: "New Note", .noteAll: "All Notes",
+    .noteDeck: "Notes on Screen Edge 便签 侧边",
     // 第八族：搜「启动台」「launchpad」「应用」都找得到它（和现有的「启动器」是两个东西，名字分开）
     .launchpad: "Launchpad 启动台 应用",
     // 主界面（2026-10-29）：搜「全部功能」「功能」也找得到
     .home: "Home Main Window 全部功能",
+    // 保持唤醒（插件）：搜「awake」「防息屏」「不睡眠」都找得到这一项（按一下开无限期，开着时叫「停止保持唤醒」）
+    .keepAwake: "Keep Awake Caffeinate Caffeine Prevent Sleep 防息屏 防止睡眠 不睡眠 屏幕常亮",
   ]
 
+  /// trimsEllipsis：菜单栏那一项的标题去掉菜单的「…」（中文原文、英文同样去掉再进搜索名）
   private static func action(
-    _ id: String, _ title: String, _ alias: String, subtitle: String = "Kitty Tools"
+    _ id: String, _ resource: LocalizedStringResource, _ alias: String,
+    subtitle: String = "Kitty Tools", trimsEllipsis: Bool = false
   ) -> LauncherItem {
-    let pinyin = AppCatalog.pinyin(title)
+    let trim = { (text: String) in trimsEllipsis ? text.replacing("…", with: "") : text }
+    let title = trim(String(localized: resource))
+    let terms = searchTerms(
+      title, chinese: trim(resource.chinese), english: trim(resource.english), aliases: [alias])
     return LauncherItem(
-      kind: .action, target: id, title: title, subtitle: subtitle,
-      names: [title, alias, pinyin?.full].compactMap { $0.map(LauncherMatch.fold) },
-      initials: [LauncherMatch.initials(alias), pinyin?.initials].compactMap { $0 })
+      kind: .action, target: id, title: title, subtitle: subtitle, names: terms.names,
+      initials: terms.initials)
+  }
+
+  /// 搜索中英都认（拍板 D7，TRANSLATION.md「搜索中英都认」）：显示的标题、中文原文和它的全拼、英文、另给的英文别名都进 names
+  /// （折叠过、不重复），首字母取别名、英文的缩写和中文的拼音首字母。title 是显示的那个（英文界面里是英文）；resource 是 nil 的
+  /// （用户自己起的名字）只按 title 和它的拼音。中文界面里的名字和以前一样，只多出英文（多半已经在别名里）
+  nonisolated static func searchTerms(
+    _ title: String, _ resource: LocalizedStringResource?, aliases: [String] = []
+  ) -> (names: [String], initials: [String]) {
+    searchTerms(title, chinese: resource?.chinese, english: resource?.english, aliases: aliases)
+  }
+
+  /// 同上，中文原文、英文另给（标题去掉了「…」的、脚本头部两种语言各写一份的）；chinese 是 nil 时按 title 转拼音
+  nonisolated static func searchTerms(
+    _ title: String, chinese: String?, english: String?, aliases: [String] = []
+  ) -> (names: [String], initials: [String]) {
+    let pinyin = AppCatalog.pinyin(chinese ?? title)
+    var names: [String] = []
+    for name in [title, chinese] + aliases + [english, pinyin?.full] {
+      guard let name = name.map(LauncherMatch.fold), !name.isEmpty, !names.contains(name) else {
+        continue
+      }
+      names.append(name)
+    }
+    var initials: [String] = []
+    let latin = (aliases + [english]).compactMap { $0 }.filter { !$0.isEmpty }
+    for initial in latin.map(LauncherMatch.initials) + [pinyin?.initials].compactMap({ $0 })
+    where !initial.isEmpty && !initials.contains(initial) {
+      initials.append(initial)
+    }
+    return (names, initials)
   }
 
   var symbol: String {
@@ -232,6 +279,8 @@ struct LauncherItem: Identifiable, Hashable, Sendable {
     case (.action, Self.scriptGuideID): "doc.on.clipboard.fill"
     case (.action, _): MenuExtra(rawValue: target)?.symbol ?? "gearshape"
     case (.translate, _): SettingsPage.translate.symbol
+    case (.system, let target) where target.hasPrefix(SystemShortcuts.prefix):
+      "square.stack.3d.up.fill"
     case (.system, _): SystemCommand(rawValue: target)?.symbol ?? "power"
     case (.process, _), (.script, _), (.scriptResult, _): "terminal.fill"
     case (.ip, let target):

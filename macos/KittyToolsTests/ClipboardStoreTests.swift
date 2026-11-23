@@ -117,6 +117,50 @@ struct ClipboardStoreTests {
     #expect(reloaded.pasteboardItems(for: reloaded.items[1]).count == 2)
   }
 
+  /// X3：图文混排存的是 RTFD，粘回去 RTFD 原样 + 转出来的 RTF（只认 RTF 的 App 也带格式、图丢）；
+  /// 采集时只要真带图的 RTFD，没图的照旧存 RTF
+  @Test func rtfdPastesBackWithRTF() throws {
+    let (store, _) = try makeStore()
+    let attachment = NSTextAttachment()
+    attachment.image = NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+      NSColor.red.setFill()
+      rect.fill()
+      return true
+    }
+    let styled = NSMutableAttributedString(
+      string: "图文", attributes: [.font: NSFont.boldSystemFont(ofSize: 20)])
+    styled.append(NSAttributedString(attachment: attachment))
+    let plain = NSAttributedString(string: "只有字")
+    let plainRTFD = try #require(
+      plain.rtfd(from: NSRange(location: 0, length: plain.length), documentAttributes: [:]))
+    let rtfd = try #require(
+      styled.rtfd(from: NSRange(location: 0, length: styled.length), documentAttributes: [:]))
+    var item = text("图文")
+    item.richType = .rtfd
+    store.record(item, rich: rtfd)
+    let written = try #require(store.pasteboardItems(for: store.items[0]).first)
+    #expect(written.data(forType: .rtfd) == rtfd)
+    let rtf = try #require(written.data(forType: .rtf))
+    #expect(
+      NSAttributedString(rtf: rtf, documentAttributes: nil)?.string.hasPrefix("图文") == true)
+    // 采集：带图的 RTFD 才要；没图的照旧 RTF
+    #expect(
+      ClipboardWatcher.hasAttachments(rtfd: rtfd)
+        && !ClipboardWatcher.hasAttachments(rtfd: plainRTFD))
+    let board = NSPasteboard(name: .init("kitty-test-\(UUID().uuidString)"))
+    defer { board.releaseGlobally() }
+    let plainRTF = try #require(
+      plain.rtf(from: NSRange(location: 0, length: plain.length), documentAttributes: [:]))
+    board.clearContents()
+    board.setData(plainRTFD, forType: .rtfd)
+    board.setData(plainRTF, forType: .rtf)
+    #expect(ClipboardWatcher.richFormat(of: board).type == .rtf)
+    board.clearContents()
+    board.setData(rtfd, forType: .rtfd)
+    board.setData(plainRTF, forType: .rtf)
+    #expect(ClipboardWatcher.richFormat(of: board).type == .rtfd)
+  }
+
   @Test func imageStoreEncodesTIFFAndHashesPNG() async throws {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let images = ImageStore(directory: directory)
@@ -178,6 +222,35 @@ struct ClipboardStoreTests {
     #expect(!store.canUndo)
     #expect(store.enforceLimits(week, now: later) == 2)
     #expect(store.items.map(\.text) == ["新收藏"])
+  }
+
+  /// 第五轮体检 P4：一批取消收藏的 ⌘Z 一起改回去（一个事务），收藏、片段、收藏夹都回来，落进库里
+  @Test func undoingABatchOfUnfavoritesRestoresEveryItem() throws {
+    let (store, db) = try makeStore()
+    let later = Date.now.addingTimeInterval(10 * 86_400)
+    let week = ClipboardStore.Limits(maxAge: 7 * 86_400)
+    let work = try #require(store.createGroup(named: "工作"))
+    var items: [ClipItem] = []
+    for index in 0..<50 {
+      var item = text("第 \(index) 条")
+      item.favorite = true
+      item.isSnippet = index % 2 == 0
+      item.groupID = index % 5 == 0 ? nil : work.id
+      store.record(item)
+      items.append(item)
+    }
+    #expect(
+      store.changeRetention(Set(items.map(\.id)), limits: week, now: later) {
+        $0.favorite = false
+        $0.isSnippet = false
+        $0.groupID = nil
+      } == 50)
+    store.undo()
+    let (reloaded, _) = try makeStore(db)
+    for item in items {
+      let back = try #require(reloaded.items.first { $0.id == item.id })
+      #expect(back.favorite && back.isSnippet == item.isSnippet && back.groupID == item.groupID)
+    }
   }
 
   @Test func editDropsRichFormat() throws {
@@ -504,15 +577,21 @@ struct ClipboardStoreTests {
   // MARK: 面板（Lens Bar）
 
   @Test func panelHeightReservesLensAndCaps() throws {
-    #expect(ClipboardPanelView.listHeight(rows: 0, sections: 0, reservesLens: true) == 140)
+    #expect(ClipboardPanelView.listHeight(rowsHeight: 0, sections: 0, reservesLens: true) == 140)
     // 上下内缩 12 + 分组标题 24 + 两行 80（+ 透镜预留 158）
-    #expect(ClipboardPanelView.listHeight(rows: 2, sections: 1, reservesLens: true) == 274)
-    #expect(ClipboardPanelView.listHeight(rows: 2, sections: 1, reservesLens: false) == 116)
-    #expect(ClipboardPanelView.listHeight(rows: 50, sections: 3, reservesLens: true) == 427.5)
+    #expect(ClipboardPanelView.listHeight(rowsHeight: 80, sections: 1, reservesLens: true) == 274)
+    #expect(ClipboardPanelView.listHeight(rowsHeight: 80, sections: 1, reservesLens: false) == 116)
+    #expect(
+      ClipboardPanelView.listHeight(rowsHeight: 2000, sections: 3, reservesLens: true) == 427.5)
+    // 各行的高：图片行开着时图片 64，其余 40；「新建片段」40
+    let rows = [text("a"), ClipItem(kind: .image), text("b")]
+    #expect(ClipboardPanelView.rowsHeight(rows, newSnippet: false, imageRows: true) == 144)
+    #expect(ClipboardPanelView.rowsHeight(rows, newSnippet: true, imageRows: false) == 160)
     let (store, _) = try makeStore()
     for index in 0..<3 { store.record(text("条目 \(index)", ago: Double(10 - index))) }
     let model = ClipboardPanelModel(store: store)
-    let height = ClipboardPanelView.height(for: model, showsLens: true, banner: false)
+    let height = ClipboardPanelView.height(
+      for: model, showsLens: true, banner: false, imageRows: true)
     #expect(height == 406.5)  // 56 + 0.5 + (12 + 24 + 120 + 158) + 36
     // ↑↓ 换选中不改窗口高度（透镜预留是常数）
     model.select(store.items[2])
@@ -548,6 +627,17 @@ struct ClipboardStoreTests {
     let leading = ListLayout(leading: 40, sections: sections, lens: nil)
     #expect(leading.offset(of: c.id) == 168)  // 40 + 24 + 80 + 24
     #expect(leading.sectionTops == [40, 144])
+    // 图片行（列表里直接显示图片）：图片 64，展开 146；关掉时和别的行一样 40
+    let picture = ClipItem(kind: .image)
+    let mixed: [ClipboardPanelView.DaySection] = [(.now, "今天", [(0, a), (1, picture), (2, b)])]
+    let rows = ListLayout(sections: mixed, lens: (a.id, 70), imageRows: true)
+    #expect(rows.offset(of: picture.id) == 94 && rows.height(of: picture.id) == 64)
+    #expect(rows.offset(of: b.id) == 158)  // 24 + 70 + 64
+    #expect(Lens.height(for: picture, form: nil, imageRows: true) == 146)
+    let open = ListLayout(sections: mixed, lens: (picture.id, 146), imageRows: true)
+    #expect(open.offset(of: b.id) == 210 && open.height(of: picture.id) == 146)  // 24 + 40 + 146
+    let off = ListLayout(sections: mixed, lens: nil)
+    #expect(off.height(of: picture.id) == 40 && off.offset(of: b.id) == 104)
   }
 
   /// 剪贴板面板挂进屏外窗口（不弹面板、不抢键盘）；「显示透镜」等用临时偏好域，不读 Dev 版里手测时改过的设置
@@ -780,8 +870,9 @@ struct ClipboardStoreTests {
     let model = ClipboardPanelModel(store: store)
     let (texts, files) = (store.items.filter { $0.kind == .text }, [fileB, fileA])
     typealias Mode = ClipboardPanelModel.PasteMode
-    #expect(Mode([texts[0]]).verb == "粘贴" && Mode(texts).verb == "合并粘贴")
-    #expect(Mode(files).verb == "一起粘贴" && Mode([texts[0], fileA]).verb == "依次粘贴")
+    let verb = { (items: [ClipItem]) in String(localized: Mode(items).verb) }
+    #expect(verb([texts[0]]) == "粘贴" && verb(texts) == "合并粘贴")
+    #expect(verb(files) == "一起粘贴" && verb([texts[0], fileA]) == "依次粘贴")
     let today = Date.now.formatted(
       Date.ISO8601FormatStyle(timeZone: .current).year().month().day().dateSeparator(.dash))
     let merged = model.payload(for: texts, plainText: false)

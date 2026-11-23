@@ -1,4 +1,5 @@
-// 剪贴板面板内的对话框：备注、编辑正文、新建片段、新建 / 管理收藏夹（mac-whisker §6 剪贴板）。
+// 剪贴板面板内的对话框：备注、编辑正文、新建片段、片段的关键词（片段展开插件添加着时）、新建 / 管理收藏夹、片段填空（X20）
+// （mac-whisker §6 剪贴板）。
 // 直接画在面板里、不开 sheet 窗口：非激活浮层的 sheet 拿不稳键盘焦点。一张宽 708、圆角 card 的卡从搜索栏下沿落下
 // （settle，y −8→0 + 淡入；关掉淡出），只压暗列表区；输入框焦点环品牌粉，保存是品牌粉主按钮。
 // 输入框用 isDialogField：出现时抢焦点，关闭后焦点回到它之前的输入框（搜索框，或管理收藏夹下面的新建框）；Esc 关对话框。
@@ -54,24 +55,40 @@ struct DialogOverlay: View {
     case .edit(let id):
       if let item = item(id) {
         // 说明只说和这条有关的（体检 C2）：片段说占位符（片段本来就按纯文本粘，带格式也不提丢格式），
-        // 其余带格式的才说保存后丢格式
-        let note: String? =
-          item.isSnippet
-          ? "占位符：" + Snippet.placeholderHelp
-          : item.richType != nil ? "保存后不再保留原来的格式" : nil
+        // 其余带格式的才说保存后丢格式。那句先给不是可选的 let：直接写在赋给可选值的 if 里抽不进目录（TRANSLATION.md 二）
+        let richNote: LocalizedStringResource = "保存后不再保留原来的格式"
+        let note: LocalizedStringResource? =
+          if item.isSnippet {
+            Snippet.placeholderHelp
+          } else if item.richType != nil {
+            richNote
+          } else {
+            nil
+          }
         TextDialog(title: "编辑内容", note: note, initial: item.text ?? "", onCancel: close) {
-          text, _ in
+          text, _, _ in
           model.edit(id, text: text)
           close()
         }
       }
     case .newSnippet:
       TextDialog(
-        title: "新建片段", note: "占位符：" + Snippet.placeholderHelp, initial: "",
-        asksName: true, onCancel: close
-      ) { text, name in
-        model.saveSnippet(text, name: name)
-        close()
+        title: "新建片段", note: Snippet.placeholderHelp, initial: "",
+        asksName: true, asksKeyword: model.keywordsOn(),
+        checkKeyword: { model.keywordCheck($0, editing: nil) }, onCancel: close,
+        onSave: { text, name, keyword in
+          model.saveSnippet(text, name: name, keyword: keyword)
+          close()
+        })
+    case .keyword(let id):
+      if let item = item(id) {
+        KeywordDialog(
+          initial: item.keyword ?? "", check: { model.keywordCheck($0, editing: id) },
+          onCancel: close,
+          onSave: { keyword in
+            model.setKeyword(keyword, of: id)
+            close()
+          })
       }
     case .newGroup(let ids):
       NewGroupDialog(model: model, onCancel: close) { group in
@@ -80,6 +97,10 @@ struct DialogOverlay: View {
       }
     case .manageGroups:
       ManageGroupsDialog(model: model, onClose: close)
+    case .fill(let fill):
+      FillDialog(labels: fill.labels, copies: fill.copies, onCancel: close) { values in
+        model.finishFill(fill, values: values)
+      }
     }
   }
 
@@ -94,43 +115,73 @@ struct DialogOverlay: View {
 
 /// 多行文本对话框（编辑 / 新建片段）：⌘↩ 保存。正文去掉空白后为空、或和原文一样时「保存」置灰、⌘↩ 不生效（体检 C2）。
 /// asksName（新建片段）：顶上一行可选的名称（存成备注，搜索时能搜到），焦点先在这里，Tab 切到正文。
+/// asksKeyword（新建片段、片段展开插件添加着）：名称下面一行可选的关键词（只收英文类输入法），Tab 依次是名称 → 关键词 → 正文；
+/// 关键词存不了（太短、有打不出来的字、和别的片段一样）时红字、「保存」置灰，要提醒的（撞前缀、全是字母）橙字。
 /// 输入框下面一行：「保存 ⌘↩」的键位提示，后面接和这条有关的说明（note，没有就只有键位）
 private struct TextDialog: View {
-  let title: String
-  let note: String?
+  let title: LocalizedStringResource
+  let note: LocalizedStringResource?
   let initial: String
   var asksName = false
+  var asksKeyword = false
+  var checkKeyword: (String) -> SnippetKeyword.Check = { _ in .init() }
   let onCancel: () -> Void
-  /// 正文、名称
-  let onSave: (String, String) -> Void
+  /// 正文、名称、关键词
+  let onSave: (String, String, String) -> Void
   @State private var text: String
   @State private var name = ""
+  @State private var keyword = ""
   /// 名称框里按 Tab 加一：正文框拿焦点
   @State private var bodyFocus = 0
+  /// 名称框里按 Tab 加一：关键词框拿焦点
+  @State private var keywordFocus = 0
+  @State private var keywordFocused = false
   /// 有名称框时两个框轮流拿焦点：焦点环只画在拿着焦点的那个上（名称框出现时就抢焦点）
   @State private var nameFocused = true
   @State private var bodyFocused = false
 
   init(
-    title: String, note: String?, initial: String, asksName: Bool = false,
-    onCancel: @escaping () -> Void, onSave: @escaping (String, String) -> Void
+    title: LocalizedStringResource, note: LocalizedStringResource?, initial: String,
+    asksName: Bool = false, asksKeyword: Bool = false,
+    checkKeyword: @escaping (String) -> SnippetKeyword.Check = { _ in .init() },
+    onCancel: @escaping () -> Void, onSave: @escaping (String, String, String) -> Void
   ) {
     self.title = title
     self.note = note
     self.initial = initial
     self.asksName = asksName
+    self.asksKeyword = asksKeyword
+    self.checkKeyword = checkKeyword
     self.onCancel = onCancel
     self.onSave = onSave
     _text = State(initialValue: initial)
   }
 
   var body: some View {
-    let canSave = ClipboardPanelModel.canSave(text, initial: initial)
+    let check = asksKeyword ? checkKeyword(keyword) : SnippetKeyword.Check()
+    let canSave = ClipboardPanelModel.canSave(text, initial: initial) && check.problem == nil
     VStack(alignment: .leading, spacing: 10) {
-      Text(title).dialogTitle()
+      Text(plain: title).dialogTitle()
       if asksName {
         CommandTextField(
-          text: $name, placeholder: "名称（可选，用于搜索）", isDialogField: true,
+          text: $name, placeholder: String(localized: "名称（可选，用于搜索）"), isDialogField: true,
+          onCommand: { selector in
+            switch selector {
+            case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertNewline(_:)):
+              if asksKeyword { keywordFocus += 1 } else { bodyFocus += 1 }
+            case #selector(NSResponder.cancelOperation(_:)): onCancel()
+            default: return false
+            }
+            return true
+          }, onFocusChange: { nameFocused = $0 }
+        )
+        .dialogField(focused: nameFocused)
+      }
+      if asksKeyword {
+        CommandTextField(
+          text: $keyword, placeholder: String(localized: "关键词（可选，如 ;mail：在任何 App 里打出它就换成这段）"),
+          isDialogField: true, romanOnly: true, maxLength: SnippetKeyword.maxLength,
+          focusRequest: keywordFocus,
           onCommand: { selector in
             switch selector {
             case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertNewline(_:)):
@@ -139,9 +190,10 @@ private struct TextDialog: View {
             default: return false
             }
             return true
-          }, onFocusChange: { nameFocused = $0 }
+          }, onFocusChange: { keywordFocused = $0 }
         )
-        .dialogField(focused: nameFocused)
+        .dialogField(focused: keywordFocused)
+        KeywordCheckLines(check: check)
       }
       // 框的左右内边距改在文字上（6 + 2）：滚动条贴框的右边。有名称框时焦点先给名称框，Tab 过来
       SourceTextView(
@@ -155,18 +207,88 @@ private struct TextDialog: View {
         KeyHint("保存", "⌘↩")
         if let note {
           Text("·").foregroundStyle(.tertiary)
-          Text(note)
+          Text(plain: note)
         }
       }
       .dialogHint()
       HStack {
         Spacer()
         Button("取消", action: onCancel)
-        Button("保存") { onSave(text, name) }
+        Button("保存") { onSave(text, name, keyword) }
           .keyboardShortcut(.return, modifiers: .command)
           .buttonStyle(BrandButtonStyle())
           .disabled(!canSave)
       }
+    }
+  }
+}
+
+/// 片段的关键词（片段展开插件添加着时，⌘K / 右键「关键词…」）：单行，只收英文类输入法，↩ 保存、Esc 取消，空着保存就是清除。
+/// 存不了的红字、「保存」置灰；要提醒的橙字
+private struct KeywordDialog: View {
+  let check: (String) -> SnippetKeyword.Check
+  let onCancel: () -> Void
+  let onSave: (String) -> Void
+  @State private var text: String
+
+  init(
+    initial: String, check: @escaping (String) -> SnippetKeyword.Check,
+    onCancel: @escaping () -> Void, onSave: @escaping (String) -> Void
+  ) {
+    self.check = check
+    self.onCancel = onCancel
+    self.onSave = onSave
+    _text = State(initialValue: initial)
+  }
+
+  var body: some View {
+    let result = check(text)
+    VStack(alignment: .leading, spacing: 10) {
+      Text("关键词").dialogTitle()
+      CommandTextField(
+        text: $text, placeholder: String(localized: "如 ;mail：在任何 App 里打出它就换成这段"),
+        isDialogField: true, romanOnly: true, maxLength: SnippetKeyword.maxLength
+      ) { selector in
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)): if result.problem == nil { onSave(text) }
+        case #selector(NSResponder.cancelOperation(_:)): onCancel()
+        default: return false
+        }
+        return true
+      }
+      .dialogField()
+      KeywordCheckLines(check: result)
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        KeyHint("保存", "↩")
+        Text("·").foregroundStyle(.tertiary)
+        Text("打完最后一个字就展开；空着保存就是不要关键词")
+      }
+      .dialogHint()
+      HStack {
+        Spacer()
+        Button("取消", action: onCancel)
+        Button("保存") { onSave(text) }
+          .buttonStyle(BrandButtonStyle())
+          .disabled(result.problem != nil)
+      }
+    }
+  }
+}
+
+/// 关键词框下面的一两行：存不了的红字，要提醒的橙字（没有就不占地方）
+private struct KeywordCheckLines: View {
+  let check: SnippetKeyword.Check
+
+  var body: some View {
+    if let problem = check.problem {
+      Text(verbatim: SnippetKeyword.message(problem))
+        .font(.system(size: 11))
+        .foregroundStyle(Color(nsColor: .systemRed))
+    }
+    ForEach(check.warnings, id: \.self) { warning in
+      Text(verbatim: SnippetKeyword.message(warning))
+        .font(.system(size: 11))
+        .foregroundStyle(Color(nsColor: .systemOrange))
     }
   }
 }
@@ -187,8 +309,9 @@ private struct NoteDialog: View {
     VStack(alignment: .leading, spacing: 10) {
       Text("备注").dialogTitle()
       // 搜索只过滤、不排序（体检 A6），备注命中不会排到前面：照实写「能搜到」
-      CommandTextField(text: $text, placeholder: "给这条起个名字，搜索时能搜到", isDialogField: true) {
-        selector in
+      CommandTextField(
+        text: $text, placeholder: String(localized: "给这条起个名字，搜索时能搜到"), isDialogField: true
+      ) { selector in
         switch selector {
         case #selector(NSResponder.insertNewline(_:)): onSave(text)
         case #selector(NSResponder.cancelOperation(_:)): onCancel()
@@ -203,6 +326,85 @@ private struct NoteDialog: View {
         Button("保存") { onSave(text) }.buttonStyle(BrandButtonStyle())
       }
     }
+  }
+}
+
+/// 片段填空（X20）：{input:名字} 一个一个问，↩ / Tab 下一个、最后一个 ↩ 就粘贴（复制），Esc 不粘。
+/// 一直是同一个输入框（换掉它焦点会回到搜索框），换一个空只换字和标题
+private struct FillDialog: View {
+  let labels: [String]
+  let copies: Bool
+  let onCancel: () -> Void
+  let onDone: ([String: String]) -> Void
+  @State private var step = 0
+  @State private var values: [String: String] = [:]
+  @State private var text = ""
+
+  private var isLast: Bool { step + 1 >= labels.count }
+  private var label: String { labels[step] }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        if label.isEmpty {
+          Text("填写片段里的空").dialogTitle()
+        } else {
+          Text("填写「\(label)」").dialogTitle()
+        }
+        Spacer()
+        if labels.count > 1 {
+          Text(verbatim: "\(step + 1)/\(labels.count)")
+            .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+        }
+      }
+      CommandTextField(
+        text: $text, placeholder: label.isEmpty ? String(localized: "要填进去的字") : label,
+        isDialogField: true
+      ) { selector in
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)): advance()
+        // Tab 只往下一个空走（最后一个空上不粘贴：粘贴只认 ↩）；⇧Tab 回上一个，第一个空上什么都不做（不让焦点跑出对话框）
+        case #selector(NSResponder.insertTab(_:)): if !isLast { advance() }
+        case #selector(NSResponder.insertBacktab(_:)): if step > 0 { back() }
+        case #selector(NSResponder.cancelOperation(_:)): onCancel()
+        default: return false
+        }
+        return true
+      }
+      .dialogField()
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        KeyHint(verb, "↩")
+        if step > 0 {
+          Text("·").foregroundStyle(.tertiary)
+          KeyHint("上一个", "⇧⇥")
+        }
+      }
+      .dialogHint()
+      HStack {
+        Spacer()
+        Button("取消", action: onCancel)
+        Button(action: advance) { Text(plain: verb) }.buttonStyle(BrandButtonStyle())
+      }
+    }
+  }
+
+  /// 主按钮、键位提示的动词：不是最后一个空是「下一个」，最后一个是粘贴 / 复制
+  private var verb: LocalizedStringResource {
+    if !isLast { return "下一个" }
+    return copies ? "复制" : "粘贴"
+  }
+
+  private func advance() {
+    values[label] = text
+    guard !isLast else { return onDone(values) }
+    step += 1
+    text = values[label] ?? ""
+  }
+
+  private func back() {
+    values[label] = text
+    step -= 1
+    text = values[label] ?? ""
   }
 }
 
@@ -238,7 +440,7 @@ private struct NewGroupDialog: View {
     if let group = model.store.createGroup(named: name) {
       onCreate(group)
     } else {
-      error = "名称为空或已有同名收藏夹"
+      error = String(localized: "名称为空或已有同名收藏夹")
     }
   }
 }
@@ -344,7 +546,7 @@ private struct ManageGroupsDialog: View {
       HStack(spacing: 8) {
         folderIcon
         GroupNameField(
-          text: $renameText, placeholder: group.name, compact: true, onCommand: renameCommand)
+          text: $renameText, placeholder: "\(group.name)", compact: true, onCommand: renameCommand)
       }
     } else {
       Button {
@@ -485,7 +687,7 @@ private struct ManageGroupsDialog: View {
       renaming = nil
       error = nil
     } else {
-      error = "名称为空或已有同名收藏夹"
+      error = String(localized: "名称为空或已有同名收藏夹")
     }
   }
 
@@ -495,7 +697,7 @@ private struct ManageGroupsDialog: View {
       selection = group.id
       error = nil
     } else {
-      error = "名称为空或已有同名收藏夹"
+      error = String(localized: "名称为空或已有同名收藏夹")
     }
   }
 
@@ -520,13 +722,14 @@ private struct ManageGroupsDialog: View {
 /// compact：在管理列表的行里就地改名（28 pt 行里放得下，不画焦点外发光）
 private struct GroupNameField: View {
   @Binding var text: String
-  let placeholder: String
+  let placeholder: LocalizedStringResource
   var compact = false
   let onCommand: (Selector) -> Bool
 
   var body: some View {
     let field = CommandTextField(
-      text: $text, placeholder: placeholder, isDialogField: true, fontSize: compact ? 13 : 14,
+      text: $text, placeholder: String(localized: placeholder), isDialogField: true,
+      fontSize: compact ? 13 : 14,
       maxLength: ClipGroup.maxName, onCommand: onCommand)
     HStack(spacing: 6) {
       if compact {
@@ -556,21 +759,21 @@ private struct GroupNameField: View {
 /// 对话框底下的键位提示：和面板底栏一个写法（mac-whisker §3「面板里共用的几件」）——动词 + 键帽；只提示键位、不能点，
 /// 字跟外面的 dialogHint（11 pt secondary）
 private struct KeyHint: View {
-  let verb: String
+  let verb: LocalizedStringResource
   let key: String
 
-  init(_ verb: String, _ key: String) {
+  init(_ verb: LocalizedStringResource, _ key: String) {
     self.verb = verb
     self.key = key
   }
 
   var body: some View {
     HStack(spacing: 6) {
-      Text(verb)
+      Text(plain: verb)
       KeyCap(key)
     }
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(verb)：\(key)")
+    .accessibilityLabel(String(localized: "\(String(localized: verb))：\(key)"))
   }
 }
 

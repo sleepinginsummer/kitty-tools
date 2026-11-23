@@ -2,7 +2,7 @@
 // 右键 / ⌘Y「复制」只复制被点的那条、菜单开着时过滤框的编辑键、⌘K 与右键同一份动作表（分节、子列表、按类型的动作）、
 // 共用的菜单过滤（拼音前缀）、钉到屏幕的位置、复制路径、拖出去的剪贴板条目、对话框能否保存、⌘Y 里的纯文本复制、
 // 判定「行标题已显示全」的条目在行里真的没被截断（把行画在屏外窗口里比像素）、行右侧的字停在行的右边线上、
-// 缩略图缓存的记账和大卡档的丢弃。
+// 缩略图缓存的记账和大卡档的丢弃、搜索框空着时空格开关放大预览。
 // 用内存库 + 临时目录，不碰真实数据；不跑会真的打开网址 / 文件、弹面板的动作。
 
 import AppKit
@@ -145,6 +145,26 @@ struct ClipboardPanelTests {
     #expect(model.multiSelection.isEmpty)
   }
 
+  /// X20：片段里有 {input}：复制先开填空对话框，填完才写剪贴板、用填的字；那条这期间删了就说没能复制
+  @Test func fillInputsBeforeCopying() throws {
+    let (model, store) = try makeModel(["一"])
+    var snippet = ClipItem(kind: .text)
+    snippet.text = "你好 {input:称呼}，{input:称呼}"
+    snippet.isSnippet = true
+    store.record(snippet)
+    var written: [String] = []
+    model.writeClipboard = { written.append($0.first?.string(forType: .string) ?? "") }
+    let item = try #require(store.items.first { $0.isSnippet })
+    model.copy([item])
+    guard case .fill(let fill)? = model.dialog else {
+      Issue.record("没开填空对话框")
+      return
+    }
+    #expect(written.isEmpty && fill.labels == ["称呼"] && fill.copies)
+    model.finishFill(fill, values: ["称呼": "张三"])
+    #expect(model.dialog == nil && written == ["你好 张三，张三"])
+  }
+
   /// 右键 / ⌘Y 页脚「复制」只复制被点的那一条，不管勾选了什么（体检 B9）
   @Test func copyTargetsTheClickedItem() throws {
     let (model, store) = try makeModel(["一", "二", "三"])
@@ -232,7 +252,7 @@ struct ClipboardPanelTests {
     let rich = try item(model, "看 https://example.com/a 这篇")
     #expect(
       model.actions(for: rich, targets: [rich]).prefix(4).map(\.title) == [
-        "粘贴", model.alternatePasteTitle, "仅复制", "复制为纯文本",
+        "粘贴", String(localized: model.alternatePasteTitle), "仅复制", "复制为纯文本",
       ])
     // 编辑正文后「打开链接」跟着变（链接按条目缓存，编辑时清掉，体检 B18）
     model.edit(link.id, text: "没有网址了")
@@ -600,11 +620,102 @@ struct ClipboardPanelTests {
     }
   }
 
-  /// 速查表跟着按键走：剪贴板组里有 ⌘T ⌘O ⌘R ⌥⌘C
+  /// 速查表跟着按键走：剪贴板组里有 ⌘T ⌘O ⌘R ⌥⌘C，放大预览是空格和 ⌘Y
   @Test func cheatSheetListsNewKeys() throws {
-    let clipboard = try #require(ShortcutsSheet.groups.first { $0.title == "剪贴板" })
+    let clipboard = try #require(ShortcutsSheet.groups.first { $0.title.key == "剪贴板" })
     let keys = Set(clipboard.entries.flatMap(\.keys))
     #expect(keys.isSuperset(of: ["⌘T", "⌘O", "⌘R", "⌥⌘C"]))
+    #expect(clipboard.entries.contains { $0.keys == [String(localized: "空格"), "⌘Y"] })
+  }
+
+  /// 空格开预览（2026-11-20）：只认往空着的框里打的一个空格——半角、全角（中文 / 日文输入法没在组字时上屏的）都算；
+  /// 在组字（选字的空格由输入法用掉，这里只会看到确认的字）、带 ⌘⌃⌥⇧（⌘V 粘进来的、⇧空格）、不止一个字的都不算；
+  /// 当前事件不是按键（输入法晚一拍上屏）也算
+  @Test func loneSpaceOnly() {
+    typealias Field = CommandTextField
+    #expect(Field.isLoneSpace(" ", composing: false, modifiers: []))
+    #expect(Field.isLoneSpace("\u{3000}", composing: false, modifiers: []))
+    #expect(Field.isLoneSpace(" ", composing: false, modifiers: [.capsLock, .function]))
+    #expect(Field.isLoneSpace(" ", composing: false, modifiers: nil))
+    #expect(!Field.isLoneSpace(" ", composing: true, modifiers: []))
+    #expect(!Field.isLoneSpace(" ", composing: false, modifiers: .command))
+    #expect(!Field.isLoneSpace(" ", composing: false, modifiers: .shift))
+    #expect(!Field.isLoneSpace("你", composing: false, modifiers: []))
+    #expect(!Field.isLoneSpace("  ", composing: false, modifiers: []))
+    #expect(!Field.isLoneSpace("a", composing: false, modifiers: []))
+  }
+
+  /// 搜索框的空格接到 onSpace：框原来空着、打了一个空格 → 交给它，它接了框退回空的、绑定不变；它不接、或框里原来有字，
+  /// 空格照常进框
+  @Test func spaceReachesHandlerOnlyFromEmptyField() {
+    final class Box { var text = "" }
+    let box = Box()
+    var handled = true
+    var calls = 0
+    let field = NSTextField()
+    let coordinator = CommandTextField(
+      text: Binding(get: { box.text }, set: { box.text = $0 }), placeholder: "",
+      onSpace: {
+        calls += 1
+        return handled
+      }
+    ).makeCoordinator()
+    func type(_ text: String) {
+      field.stringValue = text
+      coordinator.controlTextDidChange(
+        Notification(name: NSControl.textDidChangeNotification, object: field))
+    }
+    type(" ")
+    #expect(calls == 1 && field.stringValue.isEmpty && box.text.isEmpty)
+    handled = false
+    type(" ")
+    #expect(calls == 2 && box.text == " ")
+    box.text = "ab"
+    type("ab ")
+    #expect(calls == 2 && box.text == "ab ")
+  }
+
+  /// 空格同 ⌘Y 开关放大预览；筛选 / 操作面板开着（框里是过滤词）、对话框开着时交还输入框。
+  /// ⌘K 里「放大预览」写这时按得动的键：搜索框空着是空格，有字时是 ⌘Y
+  @Test func spaceTogglesQuickLook() throws {
+    let (model, _) = try makeModel(["一", "二"])
+    var opened = 0
+    var closed = 0
+    model.openQuickLook = { opened += 1 }
+    model.closeQuickLook = { _ in closed += 1 }
+    let first = try item(model, "一")
+    model.select(first)
+    #expect(model.handleSpace() && model.isQuickLooking && opened == 1)
+    #expect(model.handleSpace() && !model.isQuickLooking && closed == 1)
+    model.palette = .actions
+    #expect(!model.handleSpace() && !model.isQuickLooking)
+    model.palette = nil
+    model.dialog = .newSnippet
+    #expect(!model.handleSpace() && !model.isQuickLooking)
+    model.dialog = nil
+    let preview = { model.actions(for: first, targets: [first]).first { $0.title == "放大预览" } }
+    #expect(preview()?.shortcut == String(localized: "空格"))
+    model.query = "一"
+    #expect(preview()?.shortcut == "⌘Y")
+  }
+
+  /// 点进大卡里选字后（焦点在只读正文里）空格收回大卡；带修饰键的、按住不放的连发不算
+  @Test func spaceInCardText() throws {
+    let textView = CopyPlainTextView(frame: .zero)
+    var spaces = 0
+    textView.onSpace = { spaces += 1 }
+    func press(_ flags: NSEvent.ModifierFlags = [], repeated: Bool = false) throws {
+      textView.keyDown(
+        with: try #require(
+          NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+            context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: repeated,
+            keyCode: UInt16(kVK_Space))))
+    }
+    try press()
+    try press(repeated: true)
+    try press(.option)
+    #expect(spaces == 1)
   }
 
   /// ClipRowView.showsWholeText 认可的标题，行里真的没被截断（它的宽度预算照着行的布局写，行的布局改了这里先失败）：
@@ -730,10 +841,40 @@ struct ClipboardPanelTests {
     #expect(ThumbnailView.cache(for: ThumbnailView.lensPixel) === ThumbnailView.previews)
     #expect(ThumbnailView.cache(for: ThumbnailView.cardPixel) === ThumbnailView.previews)
     #expect(ThumbnailView.icons.countLimit == ThumbnailView.iconCount)
+    #expect(ThumbnailView.icons.totalCostLimit == ThumbnailView.iconBytes)
     #expect(ThumbnailView.previews.totalCostLimit == ThumbnailView.previewBytes)
+    // 图片行的图（按框算的那一档）都进行里的缓存：最大的一档也比透镜小
+    #expect(ThumbnailView.rowPixelCap < ThumbnailView.lensPixel)
+    #expect(ThumbnailView.cache(for: ThumbnailView.rowPixelCap) === ThumbnailView.icons)
+    // 300 张画过的图片行的图（整屏截图 148 × 96，两份）放不下：按字节先封顶
+    #expect(
+      ThumbnailView.cost(width: 148, height: 96) * ThumbnailView.iconCount > ThumbnailView.iconBytes
+    )
     let card = ThumbnailView.cost(width: ThumbnailView.cardPixel, height: ThumbnailView.cardPixel)
     let lens = ThumbnailView.cost(width: ThumbnailView.lensPixel, height: ThumbnailView.lensPixel)
     #expect(card + lens <= ThumbnailView.previewBytes)
+  }
+
+  /// 图片行的图要多大（rowPixel）：按 2x 正好盖住框（高 48、宽按比例夹在 36–240，填满裁切），比例极端的封顶
+  @Test func rowPicturePixels() {
+    func pixel(_ width: Int, _ height: Int) -> Int {
+      ThumbnailView.rowPixel(for: .init(width: width, height: height, byteCount: 0, sha256: ""))
+    }
+    // 整屏截图 2940 × 1912：框 73.8 × 48，缩成 148 × 96
+    #expect(pixel(2940, 1912) == 148)
+    // 手机截图 1179 × 2556：框夹到最窄 36，宽要 72 → 长边 157
+    #expect(pixel(1179, 2556) == 157)
+    // 横幅 2400 × 480：框夹到最宽 240，宽要 480
+    #expect(pixel(2400, 480) == 480)
+    // 长截图 1179 × 6000 还在上限内；1:30 的封顶 640
+    #expect(pixel(1179, 6000) == 367)
+    #expect(pixel(1000, 30000) == ThumbnailView.rowPixelCap)
+    // 不知道尺寸：按行图标那一档
+    #expect(ThumbnailView.rowPixel(for: nil) == ThumbnailView.iconPixel)
+    // 展开的框同原来透镜里的图：高 108、宽 60–360
+    let wide = ClipItem.ImageInfo(width: 2400, height: 480, byteCount: 0, sha256: "")
+    #expect(ClipRowView.pictureSize(wide, expanded: true) == CGSize(width: 360, height: 108))
+    #expect(ClipRowView.pictureSize(wide, expanded: false) == CGSize(width: 240, height: 48))
   }
 
   /// ⌘Y 大卡放掉时只丢大卡那一档（dropCards）：透镜、行图标还在缓存里（再取是同一个对象），大卡档要重新生成
@@ -776,5 +917,22 @@ struct ClipboardPanelTests {
     #expect(ThumbnailView.cardKeys.contains(cardKey))
     ThumbnailView.dropCards()
     #expect(!ThumbnailView.cardKeys.contains(cardKey))
+  }
+
+  /// 第五轮体检 U8：只按一个收藏夹筛、里面一条都没有时是「这个收藏夹还是空的」，有搜索词、别的筛选或收藏夹里有东西时不是
+  @Test func emptyCollection() throws {
+    let (model, store) = try makeModel(["一", "二"])
+    let group = try #require(store.createGroup(named: "空的"))
+    #expect(!model.isEmptyGroup)
+    model.groupFilter = .group(group.id)
+    #expect(model.visibleItems.isEmpty && model.isEmptyGroup && model.isFiltered)
+    model.query = "一"
+    #expect(!model.isEmptyGroup)
+    model.query = ""
+    model.scope = .snippets
+    #expect(!model.isEmptyGroup)
+    model.scope = .all
+    store.assign([try item(model, "一").id], to: group.id)
+    #expect(!model.isEmptyGroup && model.visibleItems.map(\.text) == ["一"])
   }
 }

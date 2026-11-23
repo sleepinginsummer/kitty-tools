@@ -50,16 +50,64 @@ enum ScreenshotOutput {
     return data as Data
   }
 
+  /// ponytail: 在主线程上看选的文件夹在不在（directory 的 fileExists）——开录时（AppDelegate.beginRecording / audioRecord
+  /// 交给录制会话）、另存为面板起建议文件名时都在主线程上碰保存目录，网络盘卡住时会卡一下（第五轮体检 P2 只挪了收尾和
+  /// 剩余空间）。升级路径：开录前 / 开面板前 await 一个 @concurrent 的 directory(saved:)，开录本来就是异步的
   static var saveDirectory: URL {
     directory(saved: UserDefaults.standard.string(forKey: Prefs.screenshotSaveDirectory))
   }
 
   /// 快速保存那一项的叫法（截图家族同一个，体检 B41；截图历史窗口也是，第四轮体检 U13）：存储到「桌面」——访达里的名字，
   /// 不写 Desktop
-  static var saveTitle: String { "存储到「\(saveFolderName)」" }
+  static var saveTitle: String { String(localized: "存储到「\(saveFolderName)」") }
 
-  /// 快速保存的文件夹在访达里的名字（「桌面」）：多选时「存储 3 项到「桌面」」也用它
-  static var saveFolderName: String { FileManager.default.displayName(atPath: saveDirectory.path) }
+  /// 快速保存的文件夹在访达里的名字（「桌面」）：多选时「存储 3 项到「桌面」」也用它。**选过的不去问那个文件夹**
+  /// （第五轮体检 P2：它可能在卡住的网络盘上，工具栏、钉图菜单、截图历史窗口每次重画都要这个名字）：读选的那一刻存下的
+  /// 名字（0.10.0 及以前选的没存，启动时在主线程外补上，rememberSaveFolderName；补好之前先写路径最后一段）。
+  /// 没选过的是系统截屏的存储位置（多半是桌面），现问。
+  /// ponytail: 选的文件夹不在了（拔了移动硬盘）快速保存会退到系统的位置，这里照旧写选的那个名字；要准得在主线程外看它在不在。
+  /// 没选过时系统截屏的位置（⌘⇧5 的选项里也能设成网络盘）照旧在主线程上现问（在不在 + 名字），设置页那一行同样；
+  /// 升级路径：启动时 / 系统截屏位置变了时在主线程外问好记下（同 rememberSaveFolderName）
+  static var saveFolderName: String {
+    let defaults = UserDefaults.standard
+    guard let path = defaults.string(forKey: Prefs.screenshotSaveDirectory) else {
+      return FileManager.default.displayName(atPath: directory(saved: nil).path)
+    }
+    return defaults.string(forKey: Prefs.screenshotSaveDirectoryName)
+      ?? (path as NSString).lastPathComponent
+  }
+
+  /// 一个文件夹在访达里的名字（「已保存到「桌面」」这类）：是选的快速保存文件夹就读存下的名字（P2），别的现问
+  static func folderName(of folder: URL) -> String {
+    let defaults = UserDefaults.standard
+    if let saved = defaults.string(forKey: Prefs.screenshotSaveDirectory),
+      let name = defaults.string(forKey: Prefs.screenshotSaveDirectoryName),
+      URL(filePath: saved, directoryHint: .isDirectory).standardizedFileURL.path
+        == folder.standardizedFileURL.path
+    {
+      return name
+    }
+    return FileManager.default.displayName(atPath: folder.path)
+  }
+
+  /// 选过快速保存的文件夹、却没存它的名字（0.10.0 及以前选的）：在主线程外问一次补上（启动时，AppDelegate）
+  static func rememberSaveFolderName() {
+    let defaults = UserDefaults.standard
+    guard let path = defaults.string(forKey: Prefs.screenshotSaveDirectory),
+      defaults.string(forKey: Prefs.screenshotSaveDirectoryName) == nil
+    else { return }
+    Task {
+      let name = await displayName(of: path)
+      // 问的时候换过文件夹（在设置里选了别的）就不写
+      guard defaults.string(forKey: Prefs.screenshotSaveDirectory) == path else { return }
+      defaults.set(name, forKey: Prefs.screenshotSaveDirectoryName)
+    }
+  }
+
+  /// 文件夹在访达里的名字（保存目录可能在卡住的网络盘上，不在主线程问，P2）
+  @concurrent nonisolated static func displayName(of path: String) async -> String {
+    FileManager.default.displayName(atPath: path)
+  }
 
   /// saved：设置里选的文件夹（没选过 = nil）。已不存在的目录（拔掉的移动硬盘等）跳过，往下退。
   /// 要查文件夹在不在（可能在卡住的网络盘上）：快速保存在主线程外调它（quickSave）
@@ -82,9 +130,10 @@ enum ScreenshotOutput {
   }
 
   /// 「截图 2026-09-24 22.46.10.png」；已有同名文件就追加「 2」「 3」…。录屏传「录屏」「mp4」（同一个快速保存目录）。
+  /// 前缀跟起名那一刻的界面语言（英文「Screenshot 2026-09-24 22.46.10.png」；起好的名字之后不再比对，旧文件照样认）。
   /// 纯函数（只查文件是否存在），配单测
   nonisolated static func availableURL(
-    in directory: URL, date: Date = .now, prefix: String = "截图", ext: String = "png"
+    in directory: URL, date: Date = .now, prefix: String = fileNoun, ext: String = "png"
   ) -> URL {
     let stamp = date.formatted(
       Date.VerbatimFormatStyle(
@@ -99,6 +148,13 @@ enum ScreenshotOutput {
       index += 1
     }
     return url
+  }
+
+  /// 截图文件名的前缀（「截图 日期 时间.png」）：和页名「截图」分开，英文写法不一样
+  nonisolated static var fileNoun: String {
+    String(
+      localized: "shot.fileName", defaultValue: "截图",
+      comment: "截图的默认文件名前缀：「截图 2026-09-24 22.46.10.png」")
   }
 
   /// ⌘S：存进快速保存目录（首次写桌面 / 下载等目录时系统会问一次文件夹访问授权）。
@@ -151,6 +207,8 @@ enum ScreenshotOutput {
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.png]
     panel.canCreateDirectories = true
+    // ponytail: 建议文件名在主线程上起（saveDirectory 看在不在 + availableURL 查重名），保存目录在卡住的网络盘上时会卡一下
+    // 才出面板；升级路径：在主线程外起好名字再开面板
     panel.nameFieldStringValue = availableURL(in: saveDirectory).lastPathComponent
     // 本 App 不在前台（截图遮罩、钉图都不激活）：激活、提到最前、关掉后还回去都在 FilePanel 里
     let response = await FilePanel.begin(panel)

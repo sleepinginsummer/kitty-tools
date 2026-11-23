@@ -176,6 +176,9 @@ struct IslandMediaCard: View {
   @State private var output: String?
   /// 进度那一行换成了音量滑杆（值 = 打开那一刻读到的音量：滑杆第一帧就在对的位置）；nil = 没开
   @State private var volume: Double?
+  /// 「音乐」放着的这首收藏了没有（2026-11-18 照 Alcove；只在已经允许过控制「音乐」时读，读不到是 nil = 空心）
+  @State private var favorited: Bool?
+  @AppStorage(Prefs.islandMusicFavorite) private var showsFavorite = true
 
   var body: some View {
     let snapshot = media.snapshot
@@ -206,6 +209,29 @@ struct IslandMediaCard: View {
         }
         Spacer(minLength: 12)
         HStack(spacing: 10) {
+          if showsFavorite, snapshot.bundleID == NowPlayingFallback.musicID {
+            // 收藏这首（「音乐」的收藏，AppleScript）：第一次点会问一次能不能控制「音乐」
+            Button {
+              Task {
+                favorited =
+                  await NowPlayingFallback.toggleMusicFavorite(island: island) ?? favorited
+              }
+            } label: {
+              Image(systemName: favorited == true ? "heart.fill" : "heart")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(
+                  favorited == true ? Color(nsColor: .systemPink) : .white.opacity(0.5)
+                )
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(IslandButtonStyle())
+            .accessibilityLabel(favorited == true ? "取消收藏" : "收藏")
+            .task(id: snapshot.title) {
+              if !island.isStaged { favorited = await NowPlayingFallback.musicFavorited() }
+            }
+          }
           if let output = stagedVolume == nil ? output : "speaker.wave.2.fill" {
             // 输出设备的图标（扬声器、耳机、显示器……）：点了进度那一行换成输出音量的滑杆，再点换回来
             Button {
@@ -305,6 +331,18 @@ struct IslandLevelSymbol: View {
 
   var body: some View {
     let muted = level.kind == .volume && (level.muted || level.fraction <= 0)
+    if level.kind == .toggle {
+      // 开 / 关那一类（专注模式、低电量模式）：它自己的图标和颜色（关掉时暗白），开 / 关之间原地换颜色
+      Image(systemName: level.symbol)
+        .font(.system(size: size, weight: .semibold))
+        .foregroundStyle(level.toggleColor)
+        .animation(Style.Motion.snap.animation(), value: level.fraction > 0)
+    } else {
+      symbol(muted: muted)
+    }
+  }
+
+  private func symbol(muted: Bool) -> some View {
     Image(
       systemName: level.kind == .volume
         ? (muted ? "speaker.slash.fill" : "speaker.wave.3.fill") : level.symbol,
@@ -317,21 +355,60 @@ struct IslandLevelSymbol: View {
   }
 }
 
-/// 音量 / 亮度提示的细条：4 pt 高的胶囊，白色填充（静音时整条暗着）；条跟着键走得很快（一秒十几格），用 0.08 秒的线性跟上
+/// 音量 / 亮度提示的细条：4 pt 高的胶囊，白色填充（静音时整条暗着）；条跟着键走得很快（一秒十几格），用 0.08 秒的线性跟上。
+/// 到头了还在按（100% 再按 +、0 再按 −；Island.levelBumps 每变一次）：整条往那一头多顶出 bumpReach、用 snap 的弹簧弹回，
+/// 连按每一下都弹（第五轮体检 U13，同类刘海工具和 iPhone 的「到头了」）；减弱动态效果时不动。
+/// 播放的触发是自己的计数 pushes：keyframeAnimator 在视图第一次出现时不播，岛上原本没有这一条（空刘海、从耳朵过来、
+/// 音量换亮度换了视图）时那一下「到头」在细条插进来之前就记了——出现时 level.pushed 就等入场走完补播一次（评审 2）
 struct IslandLevelBar: View {
   let level: Island.Level
+  /// 用强调色填（设置 › 刘海岛「音量和亮度」，默认白）
+  var accent = false
+  var bumps = 0
+  @State private var pushes = 0
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  /// 到头再按时多顶出去多少（pt）
+  static let bumpReach: CGFloat = 6
+
   var body: some View {
+    // 顶向哪一头：在高的那一头（100%）往右，在 0 往左
+    let up = level.shown > 0.5
     Capsule().fill(.white.opacity(0.22))
       .overlay(alignment: .leading) {
         GeometryReader { proxy in
-          Capsule().fill(.white)
+          Capsule().fill(accent ? Style.brand : .white)
             .frame(width: max(proxy.size.width * level.shown, level.shown > 0 ? 4 : 0))
             .animation(reduceMotion ? nil : .linear(duration: 0.08), value: level.shown)
         }
       }
       .frame(height: 4)
+      .onChange(of: bumps) { pushes += 1 }
+      .task {
+        // 入场（形体长开约 0.4 秒、细条糊着进来）走得差不多了再弹，不然被入场盖住看不出
+        guard level.pushed else { return }
+        try? await Task.sleep(for: .milliseconds(300))
+        if !Task.isCancelled { pushes += 1 }
+      }
+      .keyframeAnimator(initialValue: CGFloat(0), trigger: pushes) { bar, push in
+        // 只是渲染变换（横着拉长、钉住另一头），不重排；push 是多出来的点数，按条的宽度换成倍数
+        bar.visualEffect { bar, proxy in
+          bar.scaleEffect(
+            x: proxy.size.width > 0 ? 1 + push / proxy.size.width : 1, y: 1,
+            anchor: up ? .leading : .trailing)
+        }
+      } keyframes: { _ in
+        KeyframeTrack {
+          CubicKeyframe(reduceMotion ? 0 : Self.bumpReach, duration: 0.07)
+          SpringKeyframe(0, spring: Self.bounceBack)
+        }
+      }
+  }
+
+  /// 弹回的弹簧：Whisker 的 snap（键盘驱动的反馈）
+  private static var bounceBack: Spring {
+    let (duration, bounce) = Style.Motion.snap.parameters ?? (0.16, 0.15)
+    return Spring(duration: duration, bounce: bounce)
   }
 }
 
@@ -343,6 +420,11 @@ struct IslandLevelWings: View {
   let level: Island.Level
   let notchWidth: CGFloat
   let notchHeight: CGFloat
+  /// 音量 / 亮度的细条用强调色、细条旁边写百分比（设置 › 刘海岛「音量和亮度」，2026-11-17 照 Alcove）
+  var accent = false
+  var percent = false
+  /// 到头再按了几次（Island.levelBumps，U13）
+  var bumps = 0
   @Environment(\.islandLevelRide) private var ride
 
   var body: some View {
@@ -350,16 +432,25 @@ struct IslandLevelWings: View {
       HStack(spacing: 6) {
         // 电源的提示左边只有一句话，没有图标（同 Alcove 的「Charging」）
         if level.kind != .device || level.glyph != nil {
-          IslandLevelSymbol(level: level, size: 14).frame(width: 22)
+          IslandLevelSymbol(level: level, size: 14).frame(width: level.kind == .toggle ? 16 : 22)
         }
-        Text(level.title)
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(.white.opacity(0.95))
-          .lineLimit(1)
-          .fixedSize()
+        if level.kind == .toggle {
+          // 专注模式的名字长短不一：每侧伸出多宽已经照名字量过（SystemFocus.wing），再长的截掉尾巴
+          Text(verbatim: level.title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.95))
+            .lineLimit(1)
+            .truncationMode(.tail)
+        } else {
+          Text(level.title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.95))
+            .lineLimit(1)
+            .fixedSize()
+        }
       }
       .padding(.leading, level.kind == .device && level.glyph == nil ? 13 : 11)
-      .frame(width: Island.levelWing, alignment: .leading)
+      .frame(width: level.wing, alignment: .leading)
       // 不再套动画：见 IslandWings
       .animation(nil) { $0.offset(x: ride) }
       Color.clear.frame(width: notchWidth)
@@ -367,12 +458,30 @@ struct IslandLevelWings: View {
         if level.kind == .device {
           // 耳机连上、电源：电量（还没读到时空着，读到了原地出来）
           IslandBattery(fraction: level.battery, tone: level.tone)
+        } else if level.kind == .toggle {
+          Text(verbatim: Island.Level.toggleState(on: level.fraction > 0))
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(level.toggleColor)
+            .lineLimit(1)
+            .fixedSize()
+            .contentTransition(.opacity)
+            .animation(Style.Motion.snap.animation(), value: level.fraction > 0)
         } else {
-          IslandLevelBar(level: level).frame(width: 68)
+          HStack(spacing: 6) {
+            IslandLevelBar(level: level, accent: accent, bumps: bumps).frame(
+              width: percent ? 40 : 68)
+            if percent {
+              Text(verbatim: "\(Int((level.shown * 100).rounded()))%")
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
+                .frame(width: 30, alignment: .trailing)
+            }
+          }
         }
       }
       .padding(.trailing, 12)
-      .frame(width: Island.levelWing, alignment: .trailing)
+      .frame(width: level.wing, alignment: .trailing)
       .animation(nil) { $0.offset(x: -ride) }
     }
     .frame(height: notchHeight)
@@ -424,13 +533,33 @@ struct IslandBattery: View {
   }
 }
 
+extension Island {
+  /// 正在播放的跳动条、进度条用什么颜色（设置 › 刘海岛「正在播放的颜色」）
+  enum MediaColor: String, CaseIterable {
+    case artwork, accent, white
+  }
+}
+
 extension Island.Level {
+  /// 开 / 关那一类（专注模式、低电量模式）右边的字：「开」/「关」
+  static func toggleState(on: Bool) -> String {
+    on
+      ? String(localized: "island.focusOn", defaultValue: "开", comment: "刘海岛：专注模式打开了")
+      : String(localized: "island.focusOff", defaultValue: "关", comment: "刘海岛：专注模式关掉了")
+  }
+
+  /// 开 / 关那一类的颜色：开着是它自己的颜色（专注模式的颜色、低电量模式的黄），关掉是暗白
+  var toggleColor: Color {
+    fraction > 0 ? Color(nsColor: SystemFocus.color(named: tint)) : .white.opacity(0.55)
+  }
+
   /// 读屏里念什么：音量 / 亮度是名字 + 百分比；耳机是「已连接，名字」+ 电量（没读到就没有）
   var reading: (label: String, value: String) {
+    if kind == .toggle { return (title, Self.toggleState(on: fraction > 0)) }
     guard kind == .device else { return (title, "\(Int((shown * 100).rounded()))%") }
     return (
-      [title, label].compactMap { $0 }.joined(separator: "，"),
-      battery.map { "电量 \(Int(($0 * 100).rounded()))%" } ?? ""
+      [title, label].compactMap { $0 }.joined(separator: Island.comma),
+      battery.map { String(localized: "电量 \(Int(($0 * 100).rounded()))%") } ?? ""
     )
   }
 }
@@ -439,15 +568,31 @@ extension Island.Level {
 /// 同提示那一行的高度
 struct IslandLevelRow: View {
   let level: Island.Level
+  /// 细条用强调色（设置 › 刘海岛「音量和亮度」）
+  var accent = false
+  /// 到头再按了几次（Island.levelBumps，U13）
+  var bumps = 0
 
   var body: some View {
     HStack(spacing: 10) {
       if level.kind != .device || level.glyph != nil {
         IslandLevelSymbol(level: level, size: 13).frame(width: 24)
       }
-      if level.kind == .device {
+      if level.kind == .toggle {
+        // 专注模式：名字 + 「开 / 关」
+        Text(verbatim: level.title)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.95))
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .frame(maxWidth: 200, alignment: .leading)
+          .fixedSize(horizontal: true, vertical: false)
+        Text(verbatim: Island.Level.toggleState(on: level.fraction > 0))
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(level.toggleColor)
+      } else if level.kind == .device {
         // 耳机连上：「已连上 名字」+ 电量；电源：那句话 + 电量
-        Text(level.label.map { "已连上\($0)" } ?? level.title)
+        Text(level.label.map { String(localized: "已连上\($0)") } ?? level.title)
           .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(.white.opacity(0.95))
           .lineLimit(1)
@@ -456,7 +601,7 @@ struct IslandLevelRow: View {
           .fixedSize(horizontal: true, vertical: false)
         IslandBattery(fraction: level.battery, tone: level.tone)
       } else {
-        IslandLevelBar(level: level).frame(width: 160)
+        IslandLevelBar(level: level, accent: accent, bumps: bumps).frame(width: 160)
         Text("\(Int((level.shown * 100).rounded()))%")
           .font(.system(size: 12, weight: .semibold).monospacedDigit())
           .foregroundStyle(.white.opacity(0.92))
@@ -753,7 +898,8 @@ struct IslandTransport: View {
   /// 随机 / 循环：14 pt 的符号，符号贴着卡片内容的边（alignment）；开着染封面的主色（没有就强调色）、底下一个小圆点，
   /// 关着 white 0.45。点了不自己变：等播放器报回来
   private func mode(
-    _ symbol: String, label: String, value: String, on: Bool, alignment: Alignment,
+    _ symbol: String, label: LocalizedStringResource, value: LocalizedStringResource, on: Bool,
+    alignment: Alignment,
     run: @escaping () -> Void
   ) -> some View {
     let tint = media.tint.map { Color(nsColor: $0) } ?? IslandLeading.tint(.info)
@@ -770,8 +916,8 @@ struct IslandTransport: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(IslandButtonStyle())
-    .accessibilityLabel(label)
-    .accessibilityValue(value)
+    .accessibilityLabel(Text(plain: label))
+    .accessibilityValue(Text(plain: value))
   }
 
   private var modeSpace: some View {
@@ -791,7 +937,8 @@ struct IslandTransport: View {
 
   /// 播放 ↔ 暂停换符号时原地替换（系统的符号过渡），不是硬切
   private func button(
-    _ symbol: String, label: String, size: CGFloat, enabled: Bool, run: @escaping () -> Void
+    _ symbol: String, label: LocalizedStringResource, size: CGFloat, enabled: Bool,
+    run: @escaping () -> Void
   ) -> some View {
     Button(action: run) {
       Image(systemName: symbol)
@@ -805,7 +952,7 @@ struct IslandTransport: View {
     }
     .buttonStyle(IslandButtonStyle())
     .disabled(!enabled)
-    .accessibilityLabel(label)
+    .accessibilityLabel(Text(plain: label))
   }
 }
 

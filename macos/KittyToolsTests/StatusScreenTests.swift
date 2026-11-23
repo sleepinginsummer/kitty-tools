@@ -60,6 +60,44 @@ struct StatusScreenTests {
     #expect(plain != nil && StatusPreset.plainSymbol == "text.alignleft")
   }
 
+  /// 自带的三个存的是中文原文（0.9.0 存下来的照样认），显示时翻；标题是自带标题的中文或英文写法都算没改过（拍板 D6）
+  @Test func builtInShownInInterfaceLanguage() throws {
+    let english = StatusPreset.builtIn.map { StatusPreset.builtInTitle($0.id)?.english }
+    #expect(english == ["Clean Screen", "Do Not Touch", "Be Right Back"])
+    #expect(StatusPreset.builtInTitle("clean")?.chinese == StatusPreset.builtIn[0].title)
+    #expect(StatusPreset.builtInDetail("busy")?.chinese == StatusPreset.builtIn[1].detail)
+    // 中文界面（单测宿主）照存的显示；启动器的标题带中英两种写法
+    #expect(StatusPreset.builtIn.map(\.displayTitle) == ["清洁屏幕", "请勿触碰", "马上回来"])
+    #expect(StatusPreset.builtIn[1].displayDetail == "电脑正在跑任务，别动键盘和鼠标")
+    #expect(StatusPreset.builtIn[0].titleResource.english == "Clean Screen")
+    // 0.9.0 存下来的列表：中文原文，认得出、算没改过、恢复自带的不重复加
+    let stored =
+      #"[{"id":"back","title":"马上回来","symbol":"alarm-clock","style":"sign","power":"awake","autoEndMinutes":0},{"id":"x","title":"清洁屏幕","symbol":"","style":"sign","power":"awake","autoEndMinutes":0}]"#
+    let old = StatusPreset.decode(Data(stored.utf8))
+    #expect(old[0].isPristine && old[0].builtInTitle != nil)
+    // 自己加的状态起了和自带一样的名字：不是自带的，不翻
+    #expect(!old[1].isPristine && old[1].builtInTitle == nil && old[1].displayTitle == "清洁屏幕")
+    #expect(StatusPreset.restoringBuiltIns(in: old).map(\.id) == ["back", "x", "clean", "busy"])
+    // 英文界面里把标题、说明改成英文写法：还是原样；改了别的字就是用户的
+    var busy = StatusPreset.builtIn[1]
+    busy.title = "Do Not Touch"
+    busy.detail = try #require(StatusPreset.builtInDetail("busy")?.english)
+    #expect(
+      busy.isPristine && busy.displayTitle == "请勿触碰" && busy.displayDetail == "电脑正在跑任务，别动键盘和鼠标")
+    busy.title = "Do not touch!"
+    #expect(!busy.isPristine && busy.displayTitle == "Do not touch!")
+    var clean = StatusPreset.builtIn[0]
+    clean.autoEndMinutes = 15
+    #expect(!clean.isPristine && clean.displayTitle == "清洁屏幕")
+    // 恢复自带的补回来的还是中文原文
+    #expect(
+      StatusPreset.restoringBuiltIns(in: [busy]).map(\.title) == ["Do not touch!", "清洁屏幕", "马上回来"])
+    // 表情的名字：自带的 28 个都有英文；动画表情包的英文名从编号推，对照表不改
+    #expect(StatusEmoji.ids.allSatisfy { StatusEmoji.nameResource($0)?.english.isEmpty == false })
+    #expect(StatusEmoji.nameResource("busts")?.english == "Meeting")
+    #expect(EmojiPack.englishName("grinning-face") == "Grinning face")
+  }
+
   /// 没存过、解不出、空列表、收拾完一个不剩：都用自带的
   @Test func presetsFallBackToBuiltIn() throws {
     #expect(StatusPreset.decode(nil) == StatusPreset.builtIn)
@@ -257,10 +295,14 @@ struct StatusScreenTests {
     #expect(
       AnimatedEmojiPicker.recent(after: "x", in: (0..<30).map(String.init)).count
         == AnimatedEmojiPicker.recentLimit)
-    #expect(EmojiPack.bundledID(for: "rocket") == "rocket")
-    #expect(EmojiPack.bundledID(for: "telephone-receiver") == "telephone")
-    #expect(EmojiPack.bundledID(for: "dog") == nil)
-    #expect(EmojiPack.bundledAliases.values.allSatisfy(StatusEmoji.ids.contains))
+    #expect(EmojiPack.choiceID(for: "rocket") == "rocket")
+    #expect(EmojiPack.choiceID(for: "telephone-receiver") == "telephone")
+    #expect(EmojiPack.choiceID(for: "dog") == nil)
+    #expect(EmojiPack.choiceAliases.values.allSatisfy(StatusEmoji.ids.contains))
+    #expect(EmojiPack.packID(forChoice: "telephone") == "telephone-receiver")
+    #expect(EmojiPack.packID(forChoice: "rocket") == "rocket")
+    #expect(
+      StatusEmoji.ids.allSatisfy { EmojiPack.choiceID(for: EmojiPack.packID(forChoice: $0)) == $0 })
     #expect(
       EmojiPack.remoteURL("dog", tag: "emoji-pack-1")?.absoluteString
         == "https://github.com/YyAdnBug/kitty-tools/releases/download/emoji-pack-1/dog.heics")
@@ -286,15 +328,21 @@ struct StatusScreenTests {
     #expect(EmojiPack.overflow(files, limit: 60) == ["b.heics"])
     #expect(EmojiPack.overflow(files, limit: 10) == ["b.heics", "c.heics", "a.heics"])
 
-    let rocket = try Data(contentsOf: try #require(StatusEmoji.url("rocket")))
+    // 包里带着的一个（格子里别的 2026-11-17 起要下载，单测宿主里不下）
+    let rocket = try Data(contentsOf: try #require(StatusEmoji.url("glowing-star")))
+    // 没联网这一类不记失败时间（联网后下次用到就再下），别的错误照旧等 10 分钟
+    #expect(EmojiPack.isOffline(URLError(.notConnectedToInternet)))
+    #expect(EmojiPack.isOffline(URLError(.networkConnectionLost)))
+    #expect(!EmojiPack.isOffline(URLError(.badServerResponse)))
+    #expect(!EmojiPack.isOffline(CocoaError(.fileNoSuchFile)))
     #expect(EmojiPack.isPlayable(rocket))
     #expect(!EmojiPack.isPlayable(Data("not an image".utf8)))
     #expect(!EmojiPack.isPlayable(rocket + Data(count: EmojiPack.maxFileBytes)))
 
-    // 打进包里的对照表：自带的 28 个和眼睛都对得上一个表情字（挑系统表情挑到它们时直接用自带的文件）
+    // 打进包里的对照表：图标格子的 28 个都对得上动画包里的一个（挑到它们时存格子里的 id；自带三个之外的从动画包下载）
     let bundled = try #require(EmojiPack.catalog)
     #expect(bundled.tag.hasPrefix("emoji-pack-") && bundled.emoji.count > 700)
-    let reachable = Set(bundled.emoji.map(\.id).compactMap(EmojiPack.bundledID(for:)))
+    let reachable = Set(bundled.emoji.map(\.id).compactMap(EmojiPack.choiceID(for:)))
     #expect(reachable == Set(StatusEmoji.ids))
     #expect(
       bundled.emoji.allSatisfy {
@@ -318,6 +366,9 @@ struct StatusScreenTests {
       StatusEmoji.canonical("pack:dog") == "pack:dog" && StatusEmoji.canonical("rocket") == "rocket"
     )
     #expect(StatusEmoji.url("pack:rocket") == StatusEmoji.url("rocket"))
+    #expect(
+      StatusEmoji.url("pack:glowing-star") != nil
+        && StatusEmoji.url("pack:glowing-star") == StatusEmoji.url("glowing-star"))
     #expect(StatusEmoji.packID("pack:dog") == "dog" && StatusEmoji.packID("pack:nope") == nil)
     #expect(StatusEmoji.packID("dog") == nil && StatusEmoji.packID("🐶") == nil)
     #expect(StatusEmoji.symbol(forPack: "dog") == "pack:dog")
@@ -326,9 +377,30 @@ struct StatusScreenTests {
     #expect(
       StatusEmoji.isValid("pack:from-a-newer-pack")
         && StatusEmoji.packID("pack:from-a-newer-pack") == nil)
-    // 眼睛包里带着：不下载，用包里的
-    #expect(
-      EmojiPack.bundledFile(for: "eyes") == "eyes" && EmojiPack.bundledFile(for: "dog") == nil)
+    // 包里带着的（自带三个、眼睛）不下载、用包里的；格子里别的换成动画包的编号下载（2026-11-17 起）
+    for id in [
+      "eyes", "pack:eyes", "raised-hand", "pack:raised-hand", "glowing-star", "sleeping-face",
+    ] {
+      #expect(StatusEmoji.downloadID(id) == nil && StatusEmoji.thumbnail(id) == nil, "\(id)")
+    }
+    for id in ["", "🐶", "pack:nope", "Rocket", "../status-emoji-rocket"] {
+      #expect(StatusEmoji.downloadID(id) == nil, "\(id)")
+    }
+    #expect(StatusEmoji.downloadID("rocket") == "rocket")
+    #expect(StatusEmoji.downloadID("telephone") == "telephone-receiver")
+    #expect(StatusEmoji.downloadID("pack:busts-in-silhouette") == "busts-in-silhouette")
+    #expect(StatusEmoji.downloadID("pack:dog") == "dog")
+    let downloaded = StatusEmoji.ids.filter { !StatusEmoji.bundled.contains($0) }
+    #expect(downloaded.count == 22 && StatusEmoji.bundled.isSubset(of: StatusEmoji.ids))
+    for id in downloaded {
+      // 动画包的对照表（= release 上的文件）里有它、缩略图垫得上
+      let pack = try #require(StatusEmoji.downloadID(id), "\(id)")
+      #expect(EmojiPack.contains(pack), "\(id)")
+      #expect(StatusEmoji.thumbnail(id)?.width == 96, "\(id)")
+    }
+    // 自带的默认项（三个状态、三条示例提醒）用的都打进包里：第一次用、没联网也会动
+    #expect(StatusPreset.builtIn.allSatisfy { StatusEmoji.bundled.contains($0.symbol) })
+    #expect(Reminder.examples.allSatisfy { StatusEmoji.bundled.contains($0.symbol) })
     #expect(StatusEmoji.url("pack:eyes") == StatusEmoji.url("eyes"))
     #expect(
       StatusPreset.emoji(for: "👥") == "👥" && StatusPreset.emoji(for: "pack:rocket") == "rocket")
@@ -980,6 +1052,10 @@ struct StatusScreenTests {
     #expect(StatusScreen.keyIndex(mouse: CGPoint(x: 100, y: 100), screens: [main, side]) == 0)
     #expect(StatusScreen.keyIndex(mouse: CGPoint(x: 2000, y: -100), screens: [main, side]) == 1)
     #expect(StatusScreen.keyIndex(mouse: CGPoint(x: -500, y: 5000), screens: [main, side]) == 0)
+    // 鼠标在屏幕最上一行（y 正好是 frame.maxY）也算那块屏（第五轮体检 H4：共用的 NSScreen.index，frame.contains 不算这一行）
+    #expect(NSScreen.index(containing: CGPoint(x: 100, y: 982), in: [main, side]) == 0)
+    #expect(NSScreen.index(containing: CGPoint(x: 2000, y: 1240), in: [main, side]) == 1)
+    #expect(NSScreen.index(containing: CGPoint(x: 100, y: 0), in: [main, side]) == nil)
     // 电源：照常不拦，不睡眠只防系统闲置睡眠，屏幕常亮连显示器一起防
     #expect(StatusScreen.activityOptions(.normal) == nil)
     #expect(StatusScreen.activityOptions(.awake)?.contains(.idleDisplaySleepDisabled) == false)
@@ -1065,10 +1141,14 @@ struct StatusScreenTests {
     #expect(HotKeyAction.allCases.firstIndex(of: .statusScreen) == 12)
     #expect(HotKeyAction.statusScreen.defaultHotKey == nil)
     // 前面是「提醒」（2026-11-04），后面是「启动台」和不归功能的「刘海岛」（2026-10-26）、「主界面」（2026-10-29）两节
-    // （功能管理拍板 M3：便签、提醒、状态屏、启动台，和设置侧栏同序）
+    // （功能管理拍板 M3：便签、提醒、状态屏、启动台，和设置侧栏同序；插件「保持唤醒」2026-11-12 排在功能后面）
     let sections = HotKeyAction.visibleSections(enabled: Set(Feature.allCases))
-    #expect(sections.suffix(5).map(\.title) == ["提醒", "状态屏", "启动台", "刘海岛", "主界面"])
-    #expect(sections.dropLast(3).last?.actions == [.statusScreen])
+    // 2026-11-17 保持唤醒后面加了「App 快捷键」一节
+    #expect(
+      sections.suffix(7).map(\.title) == [
+        "提醒", "状态屏", "启动台", "保持唤醒", "App 快捷键", "刘海岛", "主界面",
+      ])
+    #expect(sections.dropLast(5).last?.actions == [.statusScreen])
     #expect(LauncherItem.actions().allSatisfy { !$0.isStatusPreset })
     var presets = StatusPreset.builtIn
     presets[2].symbol = ""
@@ -1079,7 +1159,7 @@ struct StatusScreenTests {
     #expect(
       Array(targets[(first - 1)...(first + 4)]) == [
         "reminderNew", "statusScreen:clean", "statusScreen:busy", "statusScreen:back", "launchpad",
-        "island",
+        "keepAwake",
       ])
     let statuses = items.filter(\.isStatusPreset)
     #expect(statuses.map(\.title) == ["清洁屏幕", "请勿触碰", "马上回来"])
@@ -1140,11 +1220,15 @@ struct StatusScreenTests {
     }
   }
 
-  /// 29 个资源都在包里（测试宿主就是 App）而且解得出：每个都取得到文件，帧数大于 1、每帧 256 × 256、带透明通道
+  /// 包里带着的 7 个（自带的状态和示例提醒用的、眼睛；测试宿主就是 App）都在而且解得出、格子里别的不在包里：每个都取得到文件，帧数大于 1、每帧 256 × 256、带透明通道
   /// （四角是透明的）、每帧时长大于 0；静止画面就是第一帧那么大，取第二次还是那张画面（比内容、不比对象：全量并行跑时
   /// 系统内存压力会把 NSCache 整个清掉，「再要一次是缓存里那一个」就偶发落空，第三轮体检 D1）
   @Test func emojiResourcesDecode() async throws {
-    for id in StatusEmoji.ids + [StatusEmoji.eyes] {
+    for id in StatusEmoji.ids where !StatusEmoji.bundled.contains(id) {
+      #expect(
+        Bundle.main.url(forResource: "status-emoji-" + id, withExtension: "heics") == nil, "\(id)")
+    }
+    for id in StatusEmoji.ids.filter(StatusEmoji.bundled.contains) + [StatusEmoji.eyes] {
       let url = try #require(StatusEmoji.url(id), "\(id)")
       #expect(url.lastPathComponent == "status-emoji-\(id).heics")
       let frames = try #require(await StatusEmoji.decode(id), "\(id)")
@@ -1171,7 +1255,8 @@ struct StatusScreenTests {
     let license = try #require(
       Bundle.main.url(forResource: "status-emoji-LICENSE", withExtension: "txt"))
     #expect(try String(contentsOf: license, encoding: .utf8).contains("MIT License"))
-    #expect(AboutTab.emojiCredit == "状态屏的动画表情来自 Microsoft Fluent Emoji（MIT 许可）")
+    #expect(
+      String(localized: AboutTab.emojiCredit) == "状态屏的动画表情来自 Microsoft Fluent Emoji（MIT 许可）")
   }
 
   /// 解好的帧是预乘透明度的 BGRA（小端）：一个像素 4 字节，透明度在最后一个

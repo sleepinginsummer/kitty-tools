@@ -4,7 +4,8 @@
 // 空查询时带「收藏」「常用」、文件搜索只输关键词时带「最近打开和下载的文件」分组标题；计算结果是 64 pt 的大数字卡；
 // 一块中性高亮在行间滑动（键盘 snap、连发不动画、点选 glide）；没选中的行悬停铺 fill.hover（HoverTracker，体检 B37）；
 // 选中的内置动作右侧多一组全局快捷键键帽（N10）；按住修饰键时选中行的副标题换成替代动作，按住 ⌘ 150 ms 后类型依次
-// 换成 ⌘1–9 键帽；系统命令上了膛（清倒废纸篓、全部退出、强制退出的第一下）时选中行副标题换成 systemRed 的「再按 ↩ …」。
+// 换成 ⌘1–9 键帽（从第一条看得见的行起编，第五轮体检 U9）；系统命令上了膛（清倒废纸篓、全部退出、强制退出的第一下）时
+// 选中行副标题换成 systemRed 的「再按 ↩ …」。
 // 行上右键是和 ⌘K 同一份动作（ActionContextMenu，体检 C8），VoiceOver 另有主动作、⌘↩、复制、收藏、移除几个动作。
 // 底栏 36（N8，对标 Raycast）：左边选中项的种类（16 pt 家族色块 + 种类名；收藏、移除常用时换成就地提示，移除带
 // 「撤销 ⌘Z」），右边「主动作 ↩」（品牌粉实心键帽）·「操作 ⌘K」，都能点；⌘K 动作菜单（共用 ActionMenu）锚在右下，
@@ -31,6 +32,9 @@ struct LauncherPanelView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   /// 按住 ⌘ 超过 150 ms：类型标签换成键帽
   @State private var showsShortcuts = false
+  /// 最近一次显示键帽时从第几行起编（U9）：只在键帽显示着时跟上 model.shortcutBase，松开 ⌘ 时不清——键帽照这个编号
+  /// 淡出，不先跳回 ⌘(index+1)、淡出的错开也按它算
+  @State private var shortcutBase = 0
   /// 列表的滚动位置：选中跟随滚动按前缀和算目标 y（RevealsSelection），不按行 id 滚
   @State private var position = ScrollPosition()
 
@@ -63,23 +67,27 @@ struct LauncherPanelView: View {
         ScriptPageView(
           title: review.script.title,
           subtitle: (review.script.path as NSString).abbreviatingWithTildeInPath,
-          note: "这个脚本是从网上下载的，第一次运行前先看一眼。它会以你的身份运行，能用 Kitty Tools 已有的辅助功能、屏幕录制、完全磁盘访问授权。",
-          noteColor: Color(nsColor: .systemOrange), text: review.text, placeholder: "正在读取…",
-          warning: review.reading?.problem.map { $0 + "不能在这里运行，用编辑器打开看完再说。" },
-          label: "脚本全文", scroll: model.pageScroll
+          note: String(
+            localized: "这个脚本是从网上下载的，第一次运行前先看一眼。它会以你的身份运行，能用 Kitty Tools 已有的辅助功能、屏幕录制、完全磁盘访问授权。"),
+          noteColor: Color(nsColor: .systemOrange), text: review.text,
+          placeholder: String(localized: "正在读取…"),
+          warning: review.reading?.problem.map { String(localized: "\($0)不能在这里运行，用编辑器打开看完再说。") },
+          label: String(localized: "脚本全文"), scroll: model.pageScroll
         )
         .frame(height: Self.reviewHeight)
       } else if let output = model.output {
         ScriptPageView(
           title: output.script.title,
-          subtitle: output.isRunning ? "正在运行…" : output.failure == nil ? "运行完了" : "没有跑成",
+          subtitle: output.isRunning
+            ? String(localized: "正在运行…")
+            : output.failure == nil ? String(localized: "运行完了") : String(localized: "没有跑成"),
           since: output.isRunning ? output.startedAt : nil,
           note: output.failure, noteColor: Color(nsColor: .systemRed),
           text: nil, styled: output.styled.characters.isEmpty ? nil : output.styled,
-          placeholder: output.isRunning ? "正在运行…" : "（没有输出）",
-          warning: output.isCut
-            ? "只显示了前 \(LauncherModel.outputDisplayLimit / 10_000) 万字；粘贴、复制的是全部。" : nil,
-          label: "脚本输出", scroll: model.pageScroll, follows: true
+          placeholder: output.isRunning ? String(localized: "正在运行…") : String(localized: "（没有输出）"),
+          // 10 万字 = LauncherModel.outputDisplayLimit（改了它这句一起改）
+          warning: output.isCut ? String(localized: "只显示了前 10 万字；粘贴、复制的是全部。") : nil,
+          label: String(localized: "脚本输出"), scroll: model.pageScroll, follows: true
         )
         .frame(height: Self.reviewHeight)
       } else if showsNoResults {
@@ -109,7 +117,14 @@ struct LauncherPanelView: View {
         return
       }
       try? await Task.sleep(for: .milliseconds(150))
-      if !Task.isCancelled { showsShortcuts = true }
+      if !Task.isCancelled {
+        shortcutBase = model.shortcutBase
+        showsShortcuts = true
+      }
+    }
+    // 按住 ⌘ 时滚了列表：编号跟着第一条看得见的行走（没按住时不读，滚动不重画）
+    .onChange(of: showsShortcuts ? model.shortcutBase : nil) { _, base in
+      if let base { shortcutBase = base }
     }
   }
 
@@ -135,6 +150,20 @@ struct LauncherPanelView: View {
   static func offset(ofRow row: Int, in model: LauncherModel) -> CGFloat {
     CGFloat(model.groups.filter { $0.row <= row }.count) * groupHeight
       + model.results.prefix(row).map(rowHeight).reduce(0, +)
+  }
+
+  /// 第一条看得见的行（露出一半以上才算；纯函数，配单测）：top 是滚动区可见部分的顶在内容里的位置。
+  /// ⌘1 对的就是它（第五轮体检 U9）
+  static func firstVisibleRow(top: CGFloat, in model: LauncherModel) -> Int {
+    var y = inset
+    let headers = Set(model.groups.map(\.row))
+    for (row, item) in model.results.enumerated() {
+      if headers.contains(row) { y += groupHeight }
+      let height = rowHeight(item)
+      if y + height / 2 > top { return row }
+      y += height
+    }
+    return 0
   }
 
   /// 选中跟随滚动要露出来的区间（滚动内容坐标，含四周内缩）：第 row 行；它是一组的第一行时连分组标题一起
@@ -199,7 +228,8 @@ struct LauncherPanelView: View {
       // ⌘K 菜单开着时，搜索框改成过滤动作
       CommandTextField(
         text: model.showsActions ? $model.actionQuery : $model.query,
-        placeholder: model.showsActions ? "搜索操作" : "搜索 App、网址、命令或文件", fontSize: 20,
+        placeholder: model.showsActions
+          ? String(localized: "搜索操作") : String(localized: "搜索 App、网址、命令或文件"), fontSize: 20,
         romanOnly: romanInput, onCommand: model.handleCommand)
     }
   }
@@ -208,6 +238,7 @@ struct LauncherPanelView: View {
     ScrollView {
       LazyVStack(spacing: 0) {
         let groups = model.groups
+        let base = shortcutBase
         ForEach(Array(model.results.enumerated()), id: \.element.rowID) { index, item in
           if let group = groups.first(where: { $0.row == index }) {
             groupHeader(group)
@@ -217,7 +248,8 @@ struct LauncherPanelView: View {
           } label: {
             let isSelected = index == model.selection
             LauncherRow(
-              item: item, index: index, showsShortcut: showsShortcuts && index < 9,
+              item: item, number: index - base,
+              showsShortcut: showsShortcuts && (0..<9).contains(index - base),
               isSelected: isSelected, isArmed: model.isArmed(item),
               alternate: isSelected ? model.alternateSubtitle(for: item) : nil,
               hotKey: isSelected ? item.hotKeyAction.flatMap(model.boundHotKey)?.display : nil
@@ -235,6 +267,13 @@ struct LauncherPanelView: View {
       .padding(Self.inset)
     }
     .scrollIndicators(.automatic)
+    // ⌘1–9 从第一条看得见的行起编（U9）：记下滚到哪了；列表被空状态换掉时回顶（新建的列表从顶上开始）
+    .onScrollGeometryChange(for: CGFloat.self) {
+      $0.visibleRect.minY
+    } action: { _, top in
+      model.listTop = top
+    }
+    .onDisappear { model.listTop = 0 }
     // 选中跟随滚动（共用 ListReveal，第 10 批）：选中换了、或结果换了都重新露出选中行。新结果时选中回到第 0 行，
     // 露出第 0 行（连分组标题）就是回到顶部；文件结果后续批次保留了用户选的那行时露出那行。上下都留一格内缩
     .modifier(
@@ -262,12 +301,12 @@ struct LauncherPanelView: View {
 
   /// VoiceOver 的动作（体检 B37）：按一下行只是选中，这里给直接执行的；和 ⌘K 调的是同一批方法
   @ViewBuilder private func accessibilityActions(for item: LauncherItem) -> some View {
-    Button(model.primaryAction(for: item).title) { model.execute(item) }
+    Button(String(localized: model.primaryAction(for: item).title)) { model.execute(item) }
     if let secondary = model.commandReturnAction(for: item) {
-      Button(secondary.title) { model.commandReturn(item) }
+      Button(String(localized: secondary.title)) { model.commandReturn(item) }
     }
     if let copy = model.copyTitle(for: item) {
-      Button(copy) { model.copy(item) }
+      Button(String(localized: copy)) { model.copy(item) }
     }
     if model.canFavorite(item) {
       Button(model.isFavorite(item) ? "取消收藏" : "加入收藏") { model.toggleFavorite(item) }
@@ -449,7 +488,7 @@ struct LauncherPanelView: View {
     if model.notice == nil { UpdateBarHint { model.hidePanel() } }
     Spacer(minLength: 8)
     if let selected = model.selectedItem {
-      let primary = model.primaryAction(for: selected).title
+      let primary = String(localized: model.primaryAction(for: selected).title)
       // 等着再按一次确认、强制退出：字和 ↩ 键帽换危险色（mac-whisker §3「危险色」）
       let danger = model.isDangerous(selected, commandKey: false)
       // 参数没填够：↩ 只响提示音，不画成该按的主按钮（只提示键位，同 secondary 的那种）
@@ -570,7 +609,9 @@ private struct ScriptPageView: View {
   /// 「已 12 秒」「已 2 分 5 秒」
   static func elapsed(_ interval: TimeInterval) -> String {
     let seconds = max(Int(interval), 0)
-    return seconds < 60 ? "已 \(seconds) 秒" : "已 \(seconds / 60) 分 \(seconds % 60) 秒"
+    return seconds < 60
+      ? String(localized: "已 \(seconds) 秒")
+      : String(localized: "已 \(seconds / 60) 分 \(seconds % 60) 秒")
   }
 
   /// ±1 一小段（三行），±2 一屏（留一行接上）
@@ -605,7 +646,8 @@ struct LauncherQuickLookView: View {
 
 private struct LauncherRow: View {
   let item: LauncherItem
-  let index: Int
+  /// ⌘N 的 N − 1：从第一条看得见的行起编（U9）；看不见数字的行可能是负的
+  let number: Int
   let showsShortcut: Bool
   let isSelected: Bool
   /// 不可撤销的系统命令等着再按一次：副标题（确认提示）用危险色（Style.danger，和 macOS 的破坏性按钮同色）
@@ -657,13 +699,16 @@ private struct LauncherRow: View {
             )
             .lineLimit(1)
             .truncationMode(.middle)
+            // 长标题把它挤到只剩半个字时至少留出「历…」那么宽（U9）
+            .frame(minWidth: 44, alignment: .leading)
         }
       }
       Spacer(minLength: 8)
+      // 行尾的快捷键和类型标签不被压缩（U9：长网页标题会把它们挤没），挤的是标题和副标题
       if let hotKey, !showsShortcut {
-        KeyCombo(hotKey).accessibilityLabel("快捷键 \(hotKey)")
+        KeyCombo(hotKey).fixedSize().accessibilityLabel("快捷键 \(hotKey)")
       }
-      kind
+      kind.fixedSize()
     }
     .padding(.horizontal, 10)
     .frame(maxHeight: .infinity)
@@ -685,6 +730,9 @@ private struct LauncherRow: View {
     } else if item.contentType?.conforms(to: .volume) == true {
       // 宗卷（eject 列出来的）：磁盘色块，不读宗卷本身取图标（按类型取是个文件夹，读宗卷可能要授权）
       KindTile(symbol: item.tileSymbol, color: item.familyColor)
+    } else if item.kind == .path, item.contentType?.conforms(to: .application) != false {
+      // 路径的行里的 App、不知道类型的（收藏、常用还原出来的）：按路径取图标，在主线程外读
+      PathIcon(path: item.target, type: item.contentType)
     } else if let type = item.contentType {
       Image(nsImage: LauncherIcons.icon(for: type)).resizable().frame(width: 24, height: 24)
     } else if item.kind == .app || item.kind == .path,
@@ -693,6 +741,9 @@ private struct LauncherRow: View {
       Image(nsImage: image).resizable().frame(width: 24, height: 24)
     } else if let path = item.process?.app?.path, let image = LauncherIcons.icon(for: path) {
       // port 列的程序坞 App：它自己的图标（列的时候已经从 NSRunningApplication 放进缓存，不读 App 包）
+      Image(nsImage: image).resizable().frame(width: 24, height: 24)
+    } else if let path = item.menuItem?.appPath, let image = LauncherIcons.icon(for: path) {
+      // 前台 App 的菜单项（N3）：那个 App 的图标
       Image(nsImage: image).resizable().frame(width: 24, height: 24)
     } else if item.isSettingsPane,
       let image = LauncherIcons.icon(for: AppCatalog.systemSettingsPath)
@@ -716,13 +767,13 @@ private struct LauncherRow: View {
         .font(.system(size: 12))
         .foregroundStyle(.tertiary)
         .opacity(showsShortcut ? 0 : 1)
-      KeyCap("⌘\(index + 1)")
+      KeyCap("⌘\(number + 1)")
         .opacity(showsShortcut ? 1 : 0)
         .scaleEffect(showsShortcut ? 1 : 0.9)
     }
     .animation(
       reduceMotion
-        ? .easeOut(duration: 0.12) : .easeOut(duration: 0.12).delay(Double(index) * 0.015),
+        ? .easeOut(duration: 0.12) : .easeOut(duration: 0.12).delay(Double(max(number, 0)) * 0.015),
       value: showsShortcut)
   }
 }
@@ -746,6 +797,7 @@ extension LauncherItem {
     case .prompt where target.hasPrefix("reminder-"): SettingsPage.reminders.symbol
     case .prompt where target.hasPrefix(LauncherModel.pluginPrefix):
       pluginPage?.symbol ?? "puzzlepiece.extension.fill"
+    case .prompt where target.hasPrefix(LauncherModel.awakePrefix): SettingsPage.keepAwake.symbol
     case .calculation: "equal"
     case .path where contentType?.conforms(to: .volume) == true: "externaldrive.fill"
     case .prompt where target == FileSearch.accessTarget: "lock.open.fill"
@@ -756,6 +808,7 @@ extension LauncherItem {
     case .prompt where target == ExchangeRates.promptTarget: "equal"
     case .prompt where target.hasPrefix(ExchangeRates.suggestionPrefix): "banknote"
     case .search, .prompt: "magnifyingglass"
+    case .menuItem: "filemenu.and.selection"
     default: symbol
     }
   }
@@ -790,6 +843,7 @@ extension LauncherItem {
     case .prompt where target.hasPrefix("reminder-"): Style.Family.reminders
     case .prompt where target.hasPrefix(LauncherModel.pluginPrefix):
       pluginPage?.color ?? Style.Family.general
+    case .prompt where target.hasPrefix(LauncherModel.awakePrefix): Style.Family.keepAwake
     case .system, .process, .ip, .script, .scriptResult: Style.Family.command
     case .prompt where target.hasPrefix("system-"): Style.Family.command
     case .url where isSettingsPane: Style.Family.general
@@ -801,44 +855,75 @@ extension LauncherItem {
     case .calculation: Style.Family.keyboard
     case .clip: Style.Family.clipboard
     case .app, .path: Style.Family.general
+    // 菜单项归 App 快捷键插件：它的家族色
+    case .menuItem: Style.Family.keyboard
     }
   }
 
-  /// 行右侧的类型、底栏左边的种类名
-  fileprivate var kindTitle: String {
+  /// 行右侧的类型、底栏左边的种类名、键盘换选中时的播报（显式 key：「提醒」「翻译」「设置」这些短词在别处是页名，
+  /// 英文是复数 / 别的说法）
+  var kindTitle: String {
     switch kind {
-    case .app: "应用"
-    case .path where contentType?.conforms(to: .volume) == true: "宗卷"
+    case .app: String(localized: "launcher.kind.app", defaultValue: "应用", comment: "启动器行右侧的类型")
+    case .path where contentType?.conforms(to: .volume) == true:
+      String(localized: "launcher.kind.volume", defaultValue: "宗卷", comment: "启动器行右侧的类型")
     case .path:
-      contentType.map { FileSearch.kindTitle(path: target, contentType: $0.identifier) } ?? "文件"
-    case .action: isStatusPreset ? HotKeyAction.statusScreen.title : "命令"
-    case .system: "系统"
-    case .prompt where target.hasPrefix("system-"): "系统"
-    case .translate: "翻译"
-    case .prompt where target == "translate-fy": "翻译"
-    case .url where isSettingsPane: "设置"
-    case .url: "网址"
-    case .prompt where target == FileSearch.accessTarget: "授权"
-    case .prompt where target == ExchangeRates.promptTarget: "汇率"
-    case .prompt where target.hasPrefix(ExchangeRates.suggestionPrefix): "货币"
-    case .prompt where target.hasPrefix("reminder-"): "提醒"
-    case .prompt where target.hasPrefix(LauncherModel.pluginPrefix): "插件"
-    case .prompt where target.hasPrefix(LauncherModel.choicePrefix): "选项"
-    case .search, .prompt: "搜索"
+      contentType.map { FileSearch.kindTitle(path: target, contentType: $0.identifier) }
+        ?? String(localized: "launcher.kind.file", defaultValue: "文件", comment: "启动器行右侧的类型")
+    case .action:
+      isStatusPreset
+        ? HotKeyAction.statusScreen.title
+        : String(localized: "launcher.kind.command", defaultValue: "命令", comment: "启动器行右侧的类型")
+    case .system:
+      String(localized: "launcher.kind.system", defaultValue: "系统", comment: "启动器行右侧的类型")
+    case .prompt where target.hasPrefix("system-"):
+      String(localized: "launcher.kind.system", defaultValue: "系统", comment: "启动器行右侧的类型")
+    case .translate:
+      String(localized: "launcher.kind.translate", defaultValue: "翻译", comment: "启动器行右侧的类型")
+    case .prompt where target == "translate-fy":
+      String(localized: "launcher.kind.translate", defaultValue: "翻译", comment: "启动器行右侧的类型")
+    case .url where isSettingsPane:
+      String(localized: "launcher.kind.settings", defaultValue: "设置", comment: "启动器行右侧的类型")
+    case .url: String(localized: "launcher.kind.url", defaultValue: "网址", comment: "启动器行右侧的类型")
+    case .prompt where target == FileSearch.accessTarget:
+      String(localized: "launcher.kind.access", defaultValue: "授权", comment: "启动器行右侧的类型")
+    case .prompt where target == ExchangeRates.promptTarget:
+      String(localized: "launcher.kind.rates", defaultValue: "汇率", comment: "启动器行右侧的类型")
+    case .prompt where target.hasPrefix(ExchangeRates.suggestionPrefix):
+      String(localized: "launcher.kind.currency", defaultValue: "货币", comment: "启动器行右侧的类型")
+    case .prompt where target.hasPrefix("reminder-"):
+      String(localized: "launcher.kind.reminder", defaultValue: "提醒", comment: "启动器行右侧的类型")
+    case .prompt where target.hasPrefix(LauncherModel.pluginPrefix):
+      String(localized: "launcher.kind.plugin", defaultValue: "插件", comment: "启动器行右侧的类型")
+    case .prompt where target.hasPrefix(LauncherModel.awakePrefix):
+      String(localized: "launcher.kind.keepAwake", defaultValue: "保持唤醒", comment: "启动器行右侧的类型")
+    case .prompt where target.hasPrefix(LauncherModel.choicePrefix):
+      String(localized: "launcher.kind.option", defaultValue: "选项", comment: "启动器行右侧的类型")
+    case .search, .prompt:
+      String(localized: "launcher.kind.search", defaultValue: "搜索", comment: "启动器行右侧的类型")
     // 计算卡不显示副标题：汇率换算的副标题（「人民币 · 11-03 汇率」，ExchangeRates）写在这里，别的是空的
-    case .calculation: subtitle.isEmpty ? "计算" : subtitle
-    case .clip: "剪贴板"
-    case .process: "进程"
-    case .ip: "网络"
-    case .reminder: "提醒"
+    case .calculation:
+      subtitle.isEmpty
+        ? String(localized: "launcher.kind.calculation", defaultValue: "计算", comment: "启动器行右侧的类型")
+        : subtitle
+    case .clip:
+      String(localized: "launcher.kind.clipboard", defaultValue: "剪贴板", comment: "启动器行右侧的类型")
+    case .process:
+      String(localized: "launcher.kind.process", defaultValue: "进程", comment: "启动器行右侧的类型")
+    case .ip: String(localized: "launcher.kind.network", defaultValue: "网络", comment: "启动器行右侧的类型")
+    case .reminder:
+      String(localized: "launcher.kind.reminder", defaultValue: "提醒", comment: "启动器行右侧的类型")
     // 列表结果写了 url / path 的：同网址行、文件行（↩ 打开写在底栏的主动作上，第三轮 B1）
     case .scriptResult:
       switch opens {
-      case .url: "网址"
-      case .file: "文件"
-      case nil: "脚本"
+      case .url: String(localized: "launcher.kind.url", defaultValue: "网址", comment: "启动器行右侧的类型")
+      case .file: String(localized: "launcher.kind.file", defaultValue: "文件", comment: "启动器行右侧的类型")
+      case nil: String(localized: "launcher.kind.script", defaultValue: "脚本", comment: "启动器行右侧的类型")
       }
-    case .script: "脚本"
+    case .script:
+      String(localized: "launcher.kind.script", defaultValue: "脚本", comment: "启动器行右侧的类型")
+    case .menuItem:
+      String(localized: "launcher.kind.menuItem", defaultValue: "菜单项", comment: "启动器行右侧的类型")
     }
   }
 }
@@ -873,6 +958,42 @@ enum LauncherIcons {
     let image = NSWorkspace.shared.icon(forFile: path)
     cache.setObject(image, forKey: path as NSString)
     return image
+  }
+
+  /// 按路径取图标，在主线程外读（路径可能在卡住的网络盘上，2026-11-18）；不在了是 nil
+  static func load(_ path: String) async -> NSImage? {
+    if let cached = cache.object(forKey: path as NSString) { return cached }
+    guard let picture = await render(path) else { return nil }
+    let image = NSImage(cgImage: picture, size: NSSize(width: 24, height: 24))
+    cache.setObject(image, forKey: path as NSString)
+    return image
+  }
+
+  /// 主线程外读一个文件的图标、画成 48 像素见方（24 点 × 2 倍屏）。NSWorkspace 的取图标文档写明哪个线程都能调
+  /// （启动台在后台画图标同理；mac-native §3「缩略图」一类）
+  @concurrent nonisolated static func render(_ path: String) async -> CGImage? {
+    guard FileManager.default.fileExists(atPath: path) else { return nil }
+    var rect = CGRect(x: 0, y: 0, width: 48, height: 48)
+    return NSWorkspace.shared.icon(forFile: path).cgImage(
+      forProposedRect: &rect, context: nil, hints: nil)
+  }
+}
+
+/// 按路径取的图标：先放类型图标（没有类型是普通文件的），主线程外读到了再换上
+private struct PathIcon: View {
+  let path: String
+  let type: UTType?
+  @State private var loaded: (path: String, image: NSImage)?
+
+  var body: some View {
+    let image =
+      loaded?.path == path
+      ? loaded?.image : LauncherIcons.cache.object(forKey: path as NSString)
+    Image(nsImage: image ?? LauncherIcons.icon(for: type ?? .data))
+      .resizable().frame(width: 24, height: 24)
+      .task(id: path) {
+        if let image = await LauncherIcons.load(path) { loaded = (path, image) }
+      }
   }
 }
 

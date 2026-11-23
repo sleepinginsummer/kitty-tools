@@ -5,6 +5,7 @@
 // 同一句话不画第二遍，透镜只剩元信息行）、代码 / JSON 128（行号 + 语法着色）、
 // 颜色 72（色块 + 四枚值胶囊，点一下复制）、链接 90（头图 + 标题 + 网址，LinkPreview 停留 0.25 s 才取）、
 // 图片 108（缩略图 + 尺寸；识别文字只用来搜索，不在这里显示）、文件 76（Quick Look 缩略图条）。
+// 图片行开着时（设置「列表里直接显示图片」）图片没有正文区：行里那张图自己在原地长到 108 高，透镜只剩元信息行。
 // 正文不可选中（焦点一直在搜索框，⌘ 快捷键都有效），要选文字按 ⌘Y。有搜索词时从第一个命中处摘录并高亮。
 
 import AppKit
@@ -18,10 +19,17 @@ enum Lens {
   /// 最高的透镜（代码 / JSON）比普通行多出来的：窗口一直按它预留，↑↓ 永远不改窗口高度
   static let reserve: CGFloat = 128 + meta + bottom
 
-  /// 正文区高度（查表，mac-whisker §6）
-  static func bodyHeight(for item: ClipItem, form: ContentForm?) -> CGFloat {
+  /// 行头：普通行 40；图片行展开时是上面 8 + 长到 108 高的图
+  static func head(for item: ClipItem, imageRows: Bool) -> CGFloat {
+    imageRows && item.kind == .image
+      ? ClipRowView.picturePadding + ClipRowView.expandedPictureHeight : head
+  }
+
+  /// 正文区高度（查表，mac-whisker §6）。imageRows：设置「列表里直接显示图片」开着（图片没有正文区，图在行头里长大）
+  static func bodyHeight(for item: ClipItem, form: ContentForm?, imageRows: Bool = false) -> CGFloat
+  {
     switch item.kind {
-    case .image: 108
+    case .image: imageRows ? 0 : 108
     case .file: 76
     case .text:
       switch form {
@@ -34,9 +42,10 @@ enum Lens {
     }
   }
 
-  /// 透镜总高 = 行头 + 正文 + 元信息 + 底（最高 198，标题已显示全的文本最矮 70）
-  static func height(for item: ClipItem, form: ContentForm?) -> CGFloat {
-    head + bodyHeight(for: item, form: form) + meta + bottom
+  /// 透镜总高 = 行头 + 正文 + 元信息 + 底（最高 198，标题已显示全的文本最矮 70；图片行展开 146，比没展开的 64 多 82）
+  static func height(for item: ClipItem, form: ContentForm?, imageRows: Bool = false) -> CGFloat {
+    head(for: item, imageRows: imageRows) + bodyHeight(for: item, form: form, imageRows: imageRows)
+      + meta + bottom
   }
 
   /// 没有换行且不超过 60 字：两行高就够，免得一行字下面空一大块
@@ -68,9 +77,10 @@ enum Lens {
 
   static func typeTitle(_ item: ClipItem, form: ContentForm?) -> String {
     switch item.kind {
-    case .text: form?.title ?? (item.richType != nil ? "富文本" : "文本")
-    case .image: "图片"
-    case .file: "文件"
+    case .text:
+      form?.title ?? (item.richType != nil ? String(localized: "富文本") : String(localized: "文本"))
+    case .image: String(localized: "图片")
+    case .file: String(localized: "文件")
     }
   }
 
@@ -108,9 +118,11 @@ struct LensView: View {
   let item: ClipItem
   let form: ContentForm?
   let model: ClipboardPanelModel
+  /// 设置「列表里直接显示图片」：图片的图在行头里，这里只画元信息行
+  var imageRows = false
 
   var body: some View {
-    let height = Lens.bodyHeight(for: item, form: form)
+    let height = Lens.bodyHeight(for: item, form: form, imageRows: imageRows)
     VStack(alignment: .leading, spacing: 0) {
       if height > 0 {
         content
@@ -184,7 +196,7 @@ struct LensView: View {
         Image(nsImage: icon).resizable().frame(width: 16, height: 16).accessibilityHidden(true)
           .padding(.trailing, 6)
       }
-      if let name = item.sourceName {
+      if let name = item.sourceTitle {
         Text(name).lineLimit(1)
       }
       Spacer(minLength: 8)
@@ -203,27 +215,34 @@ struct LensView: View {
   private var metaText: String {
     let detail: String? =
       switch item.kind {
-      case .text: "\((item.text ?? "").count) 字"
+      case .text: Self.characterCount(item.text ?? "")
       case .image:
         item.image.map {
           "\($0.width)×\($0.height) · \($0.byteCount.formatted(.byteCount(style: .file)))"
         }
-      case .file: "\(item.filePaths?.count ?? 0) 个"
+      case .file:
+        String(
+          localized: "clipboard.lens.fileCount", defaultValue: "\(item.filePaths?.count ?? 0) 个",
+          comment: "透镜元信息里文件条目有几个文件")
       }
     return [Lens.typeTitle(item, form: form), detail, Self.exactTime(item.copiedAt)]
       .compactMap { $0 }.joined(separator: " · ")
   }
 
-  /// 今天写 14:02，更早写 9月25日 14:02（跨年带年份）
+  /// 「70 字」（透镜、⌘Y 大卡的元信息同一个）
+  static func characterCount(_ text: String) -> String {
+    String(localized: "\(text.count) 字")
+  }
+
+  /// 今天写 14:02，更早写 9月25日 14:02（跨年带年份）。跟着界面语言（Locale.current）：英文「Sep 25 2:02 PM」，
+  /// 12 / 24 小时制按系统设置（中文是两位的 14:02、09:05，和以前定死 zh-Hans 时一样）
   static func exactTime(_ date: Date) -> String {
-    let chinese = Locale(identifier: "zh-Hans")
-    let time = date.formatted(
-      .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(chinese))
+    let time = date.formatted(.dateTime.hour().minute())
     if Calendar.current.isDateInToday(date) { return time }
     let day =
       Calendar.current.isDate(date, equalTo: .now, toGranularity: .year)
-      ? date.formatted(.dateTime.month().day().locale(chinese))
-      : date.formatted(.dateTime.year().month().day().locale(chinese))
+      ? date.formatted(.dateTime.month().day())
+      : date.formatted(.dateTime.year().month().day())
     return "\(day) \(time)"
   }
 }

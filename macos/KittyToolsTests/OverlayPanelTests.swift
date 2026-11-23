@@ -2,7 +2,8 @@
 // 焦点所在输入框里打的字回去、再回来——多行的（SourceTextView：翻译原文框、剪贴板的编辑对话框）和单行的
 // （CommandTextField：字段编辑器自己的栈）。面板只建不显示、不当 key；事件对象直接交给面板，不往系统里发。
 // 另有 macOS 27 的「排版里改高度，contentView 和窗口差一截」（2026-10-17）。
-// 另有输入法组字的回报（issue #16）：组着的字确认前不进绑定，两种输入框都要报「在组字」，外面自己画的占位据此藏起来。
+// 另有输入法组字的回报（issue #16）：组着的字确认前不进绑定，两种输入框都要报「在组字」，外面自己画的占位据此藏起来；
+// 报了之后那次重画不能拿绑定盖掉组到一半的拼音（issue #30：打 zhe 只剩 he）。
 
 import AppKit
 import Carbon.HIToolbox
@@ -29,6 +30,22 @@ struct OverlayPanelTests {
   private final class Draft {
     var text = "原文"
     var name = ""
+  }
+
+  @Observable fileprivate final class ComposingDraft {
+    var text = ""
+    var composing = false
+  }
+
+  private struct ComposingView: View {
+    @Bindable var draft: ComposingDraft
+
+    var body: some View {
+      // 用字号确认 updateNSView 真跑过，不能只查回调（普通的日志数组不会触发 SwiftUI 刷新）。
+      SourceTextView(
+        text: $draft.text, submitsOnEnter: false, fontSize: draft.composing ? 15 : 14,
+        onComposingChange: { draft.composing = $0 })
+    }
   }
 
   private func undoKey(redo: Bool = false, in window: NSWindow) throws -> NSEvent {
@@ -202,5 +219,149 @@ struct OverlayPanelTests {
     spin()
     #expect(log.single.last == false)
     #expect(log.multi == [true, false, true, false])
+  }
+
+  /// issue #30：组字一开始就报「在组字」，外面藏占位的 @State 跟着变、SwiftUI 重画一轮——这一轮里输入框不能拿绑定里的
+  /// 旧字（组着的字确认前不进绑定）把框里的盖掉，不然输入法组到一半的拼音被冲掉：打 zhe 只剩 he，每个字的第一个字母都丢。
+  /// 便签的标题框（CommandTextField）也一样：组字中写 stringValue 会先把拼音当字母确认掉，打成「z和」。
+  /// 用真的面板和视图：快速记一条的正文（SourceTextView）、便签的标题（CommandTextField）和正文（NoteTextView，
+  /// 本来就认 reported、没坏，一起锁住），空着时开始组字、已经有字时再组一次
+  @Test func composingSurvivesTheRedrawItTriggers() throws {
+    let store = try NoteStore(db: Database(path: ":memory:"))
+    let capture = NoteCaptureModel(store: store)
+    let id = store.create(now: .now).id
+    let panel = OverlayPanel(
+      size: NSSize(width: Style.listPanelWidth, height: 520), autoHide: .clickOutside,
+      isPinned: { false },
+      content: VStack {
+        NoteCaptureView(model: capture)
+        NoteEditing(store: store, id: id)
+      })
+    panel.contentView?.layoutSubtreeIfNeeded()
+    let none = NSRange(location: NSNotFound, length: 0)
+    func mark(_ text: String, in view: NSTextView) {
+      view.setMarkedText(
+        text, selectedRange: NSRange(location: (text as NSString).length, length: 0),
+        replacementRange: none)
+    }
+    func spin() {
+      for _ in 0..<5 { RunLoop.main.run(mode: .default, before: Date.now.addingTimeInterval(0.01)) }
+      panel.contentView?.layoutSubtreeIfNeeded()
+    }
+    /// 空着时组 zhe、确认成「这」，再组 s：每一步重画之后拼音都还在框里
+    func typePinyin(in view: NSTextView, _ name: Comment) {
+      for pinyin in ["z", "zh", "zhe"] {
+        mark(pinyin, in: view)
+        spin()
+        #expect(view.hasMarkedText() && view.string == pinyin, name)
+      }
+      view.insertText("这", replacementRange: none)
+      spin()
+      #expect(!view.hasMarkedText() && view.string == "这", name)
+      mark("s", in: view)
+      spin()
+      #expect(view.hasMarkedText() && view.string == "这s", name)
+      view.insertText("是", replacementRange: none)
+      spin()
+      #expect(view.string == "这是", name)
+    }
+    let captureEditor = try #require(find(SourceTextView.FocusTextView.self, in: panel.contentView))
+    #expect(panel.makeFirstResponder(captureEditor))
+    typePinyin(in: captureEditor, "快速记一条的正文")
+    #expect(capture.draft == "这是")
+    // 外面真改了的照样换（组字中点了「记下」：草稿清空），拼音不留在框里
+    mark("x", in: captureEditor)
+    capture.draft = ""
+    spin()
+    #expect(!captureEditor.hasMarkedText() && captureEditor.string == "")
+    // 第一个是快速记一条自己的标题框（没接 onComposingChange），要的是便签的那个
+    func fields(in view: NSView) -> [CommandTextField.FocusField] {
+      [view as? CommandTextField.FocusField].compactMap { $0 } + view.subviews.flatMap(fields)
+    }
+    let content = try #require(panel.contentView)
+    let title = try #require(fields(in: content).last)
+    #expect(panel.makeFirstResponder(title))
+    let titleEditor = try #require(title.currentEditor() as? NSTextView)
+    typePinyin(in: titleEditor, "便签的标题")
+    #expect(store.note(id)?.title == "这是")
+    let body = try #require(find(NoteTextView.self, in: panel.contentView))
+    #expect(panel.makeFirstResponder(body))
+    typePinyin(in: body, "便签的正文")
+    store.flush()
+    #expect(store.note(id)?.body == "这是")
+  }
+
+  /// 便签的标题框和正文框，写进仓库、按仓库里的这条重画（同全部便签窗口、屏幕边缘那叠）
+  private struct NoteEditing: View {
+    let store: NoteStore
+    let id: String
+    var body: some View {
+      if let note = store.note(id) {
+        NoteTitleField(
+          note: note, setTitle: { store.setTitle($0, of: id) }, onCommand: { _ in false })
+        NoteBodyField(
+          note: note, fontSize: 15, margin: 18, setBody: { store.setBody($0, of: id) },
+          onOverflow: {}
+        )
+        .frame(height: 120)
+      }
+    }
+  }
+
+  /// 每个字的首个拼音、后续拼音、确认 / 取消后再组字，都要经得住 SwiftUI 更新；选中文字重输也一样。
+  @Test func swiftUIUpdatesPreserveMarkedText() throws {
+    let draft = ComposingDraft()
+    let panel = OverlayPanel(
+      size: NSSize(width: 400, height: 260), autoHide: .clickOutside, isPinned: { false },
+      content: ComposingView(draft: draft))
+    panel.contentView?.layoutSubtreeIfNeeded()
+    let editor = try #require(find(SourceTextView.FocusTextView.self, in: panel.contentView))
+    #expect(panel.makeFirstResponder(editor))
+    let none = NSRange(location: NSNotFound, length: 0)
+    func refresh() {
+      panel.layoutIfNeeded()
+      #expect(editor.font?.pointSize == (draft.composing ? 15 : 14))
+      #expect(!panel.isVisible && !panel.isKeyWindow)
+    }
+    func mark(_ pinyin: String, after prefix: String) {
+      editor.setMarkedText(
+        pinyin, selectedRange: NSRange(location: pinyin.utf16.count, length: 0),
+        replacementRange: none)
+      refresh()
+      #expect(draft.composing && editor.hasMarkedText())
+      #expect(draft.text == prefix && editor.string == prefix + pinyin)
+      #expect(
+        editor.markedRange() == NSRange(location: prefix.utf16.count, length: pinyin.utf16.count))
+      #expect(editor.selectedRange() == NSRange(location: editor.string.utf16.count, length: 0))
+    }
+    for (pinyin, character) in [("zhe", "这"), ("shi", "是"), ("shen", "什"), ("me", "么")] {
+      let prefix = draft.text
+      for count in 1...pinyin.count { mark(String(pinyin.prefix(count)), after: prefix) }
+      editor.insertText(character, replacementRange: none)
+      refresh()
+      #expect(!draft.composing && !editor.hasMarkedText())
+      #expect(draft.text == prefix + character && editor.string == draft.text)
+    }
+    #expect(draft.text == "这是什么")
+    mark("qu", after: "这是什么")
+    editor.setMarkedText("", selectedRange: NSRange(location: 0, length: 0), replacementRange: none)
+    refresh()
+    #expect(!draft.composing && !editor.hasMarkedText())
+    #expect(draft.text == "这是什么" && editor.string == draft.text)
+    // 从绑定换成非空文字照常生效；选中末字后组字，不让旧文把候选盖回去。
+    draft.text = "重输字"
+    refresh()
+    #expect(editor.string == "重输字")
+    editor.setSelectedRange(NSRange(location: 2, length: 1))
+    editor.setMarkedText(
+      "z", selectedRange: NSRange(location: 1, length: 0), replacementRange: none)
+    refresh()
+    #expect(draft.text == "重输字" && editor.string == "重输z" && editor.hasMarkedText())
+    editor.insertText("中", replacementRange: none)
+    refresh()
+    #expect(draft.text == "重输中" && editor.string == draft.text && !draft.composing)
+    draft.text = ""
+    refresh()
+    #expect(editor.string.isEmpty)
   }
 }

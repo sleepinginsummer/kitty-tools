@@ -1,13 +1,15 @@
 // 主界面（2026-10-29 拍板「全部按推荐」，拍板页 macos/build/research/home-panel-2026-10-29/decisions.html）：一眼看到全部功能、
 // 点一下就用的那块面板。内容和菜单栏菜单读同一份——HotKeyAction.sections 分节、同名同序（关着的功能不出现），每节末尾接上那一节
-// 的 MenuExtra 里是动作的（有钉图时的两项）；有关着的功能时最下面一行「N 个功能关着 · 管理…」；底栏左边有新版本
+// 的 MenuExtra 里是动作的（有钉图时的两项）；有关着的功能时最下面一行「N 个功能关着 · 管理…」；别的 App 开着安全输入、
+// 只带 ⌥ 的快捷键收不到时（issue #27，HotKeyCenter.secureInputBlock）再上面一行橙字说是哪个 App；底栏左边有新版本
 // 时是「更新到 x」（UpdateBarHint），右边「设置 ⌘,」「退出 ⌘Q」。一格 = 30 pt 家族色块 + 名字 + 一行小字快捷键，一行 5 格；
 // 功能各一节（只剩一格的不画标题、连着的并成一行），添加了的插件全收进最后一节「插件」（同设置侧栏的分组，2026-11-13）。
 // **只放点一下就做的动作**（2026-11-13 拍板，对标托盘快捷面板的通行做法：面板放动作，开关放菜单里打勾）：开关
 // （暂停记录剪贴板、复制即译）不占格子，在右键菜单、启动器里；「打开主界面」自己不在里面；「钉住剪贴板内容」也不列
 // （剪贴板历史面板里就能钉，Home.unlisted），菜单栏菜单、启动器、快捷键照旧有它。格子点了面板先收起再做（同启动器的内置动作）。
 // 面板是一个 OverlayPanel 实例（AppDelegate.homePanel：Panel 皮肤、不激活本 App、点外面收）。键盘：←→ ↑↓ Tab 选（一块中性
-// 高亮滑过去），↩ / 空格执行，Esc 收起，⌘, 设置，⌘Q 退出。按键由一块当第一响应者的 NSView 收（同选状态的面板）。
+// 高亮滑过去），↩ / 空格执行，Esc 收起，⌘, 设置，⌘Q 退出；直接打字（字母、数字、标点）就收起主界面、在启动器里搜它（第四轮体检 X12）。
+// 按键由一块当第一响应者的 NSView 收（同选状态的面板）。
 // 分节、排版、选中怎么移动、按键对应什么都是纯函数（enum Home），单测锁住。
 
 import AppKit
@@ -19,6 +21,8 @@ enum Home {
   static let columns = 5
   /// 一格：最长的名字（「划词翻译并替换」这类七八个字）11 pt 一行放得下
   static let tile = CGSize(width: 92, height: 76)
+  /// 名字的第二行（多语言，2026-11-15：英文的名字长，一行放不下就折成两行）：11 pt 的一行
+  static let secondLine: CGFloat = 13
   /// 格子之间（横竖一样）
   static let gap: CGFloat = 2
   /// 面板左右内缩（同列表型面板的选中高亮离边 6 再加 4：格子的高亮是 card 圆角，和面板 16 同心要内缩 6 以上）
@@ -30,7 +34,7 @@ enum Home {
   static let titleHeight: CGFloat = 24
   /// 没标题的那一行和上一节之间
   static let untitledGap: CGFloat = 6
-  /// 「N 个功能关着 · 管理…」那一行
+  /// 「N 个功能关着 · 管理…」那一行（安全输入挡着快捷键那一行同高）
   static let noteHeight: CGFloat = 26
   /// 底栏（同启动器、剪贴板面板）
   static let barHeight: CGFloat = 36
@@ -50,6 +54,11 @@ enum Home {
     let key: String?
     /// 新功能标记（WhatsNew）：名字前面一个强调色小圆点
     var isNew = false
+    /// 格子里写的名字放不下全称时的短说法（Home.shortTitle）；悬停提示、读屏照旧用 title
+    var shortTitle: String? = nil
+
+    /// 格子里写的名字
+    var label: String { shortTitle ?? title }
 
     var id: String {
       switch target {
@@ -69,7 +78,7 @@ enum Home {
   static let unlisted: Set<HotKeyAction> = [.home, .pinClipboard]
 
   /// 插件那一节的标题（同设置侧栏那一组的名字）
-  static let pluginsTitle = "插件"
+  static var pluginsTitle: String { String(localized: "插件") }
 
   /// 分节（纯函数）：和菜单栏菜单同一份（AppDelegate.buildStatusMenu），关着的功能不出现，unlisted 的不列；
   /// 每节末尾接那一节的 MenuExtra 里是动作的（开关不列：isOn 不是 nil 的）。功能只剩一格的节不画标题，和前面同样是一格的
@@ -88,7 +97,7 @@ enum Home {
         Tile(
           target: .action(action), title: action.title(recording: state.isRunning(action)),
           symbol: action.symbol, color: action.color, key: keys[action],
-          isNew: fresh.contains(action))
+          isNew: fresh.contains(action), shortTitle: shortTitle(action))
       }
       for extra in extras where section.actions.contains(where: { $0 == extra.section }) {
         tiles.append(
@@ -133,15 +142,36 @@ enum Home {
     return rows
   }
 
-  /// 面板的高（纯函数）：格子那一块 + 关着的功能那一行（有才有）+ 底栏
-  static func height(_ sections: [Section], offCount: Int) -> CGFloat {
+  /// 格子里用短说法的动作（TRANSLATION.md 五）：「划词翻译并替换」英文全称折两行也放不下（会缩字），格子里写 Translate & Replace。
+  /// 中文和全称一样
+  static func shortTitle(_ action: HotKeyAction) -> String? {
+    guard action == .translateReplace else { return nil }
+    return String(
+      localized: "home.translateReplace", defaultValue: "划词翻译并替换",
+      comment: "短说法：主界面格子里「划词翻译并替换」的名字（英文全称两行也放不下）")
+  }
+
+  /// 名字一行放得下（格子宽减左右各 3；带「新」的小圆点再让出圆点 6 + 间距 3）
+  static func fitsOneLine(_ tile: Tile) -> Bool {
+    Style.fitsOneLine(tile.label, size: 11, width: Self.tile.width - 6 - (tile.isNew ? 9 : 0))
+  }
+
+  /// 格子的高（纯函数）：有一格的名字一行放不下（英文），整块面板的格子都高一行，排得齐；都放得下（中文）就是 tile.height
+  static func tileHeight(_ sections: [Section]) -> CGFloat {
+    let wraps = sections.contains { $0.tiles.contains { !fitsOneLine($0) } }
+    return tile.height + (wraps ? secondLine : 0)
+  }
+
+  /// 面板的高（纯函数）：格子那一块 + 安全输入那一行、关着的功能那一行（有才有）+ 底栏
+  static func height(_ sections: [Section], offCount: Int, secureInput: Bool = false) -> CGFloat {
     var height = top + bottom
+    let tileHeight = tileHeight(sections)
     for (index, section) in sections.enumerated() {
       height += section.title != nil ? titleHeight : (index == 0 ? 0 : untitledGap)
       let rows = CGFloat((section.tiles.count + columns - 1) / columns)
-      height += rows * tile.height + (rows - 1) * gap
+      height += rows * tileHeight + (rows - 1) * gap
     }
-    return height + (offCount > 0 ? noteHeight : 0) + barHeight
+    return height + (offCount > 0 ? noteHeight : 0) + (secureInput ? noteHeight : 0) + barHeight
   }
 
   enum Move { case left, right, up, down }
@@ -188,7 +218,20 @@ enum Home {
     }
   }
 
-  /// 面板里的 ⌘ 组合（纯函数）：⌘, 设置、⌘Q 退出（同菜单栏菜单的键）。按键码认，不看输入法和键盘布局；
+  /// 打字转到启动器（第四轮体检 X12）：不带 ⌘⌃⌥、打出来的是能显示的字（字母、数字、标点、符号；空格是执行选中的那格，
+  /// 不算）就给这段字，别的 nil（纯函数）
+  static func typed(_ characters: String?, modifiers: NSEvent.ModifierFlags) -> String? {
+    guard modifiers.isDisjoint(with: [.command, .control, .option]), let characters,
+      !characters.isEmpty,
+      characters.unicodeScalars.allSatisfy({ scalar in
+        !scalar.properties.isWhitespace && scalar.value >= 0x20 && scalar.value != 0x7F
+          && !(0xF700...0xF8FF).contains(scalar.value)  // 方向键、功能键这类私用区
+      })
+    else { return nil }
+    return characters
+  }
+
+  /// 面板里的 ⌘ 组合（纯函数）：⌘, 设置、⌘Q 退出（同菜单栏菜单的键）。code 是 NSEvent.typedKeyCode（按打出来的字认，E2）；
   /// 修饰键只比 ⌘⌃⌥⇧、不看大写锁定（同 OverlayPanel 的 ⌘W）
   static func command(code: Int, modifiers: NSEvent.ModifierFlags) -> MenuExtra? {
     guard modifiers.intersection([.command, .control, .option, .shift]) == .command else {
@@ -205,8 +248,17 @@ enum Home {
 @Observable final class HomeModel {
   private(set) var sections: [Home.Section]
   private(set) var offCount: Int
+  /// 安全输入挡着只带 ⌥ 的快捷键（打开时看的那一眼）；没挡着 nil
+  private(set) var secureInput: HotKeyCenter.SecureInputBlock?
   /// 设置里有只在那里才有入口的新功能（WhatsNew.inSettingsOnly）：底栏「设置」前面一个小圆点
   private(set) var settingsIsNew: Bool
+  /// 同步（AppDelegate 每次呼出前接上）：底栏「设置」的橙点直接读它的 needsAttention——那是被观察的，主界面开着时状态
+  /// 变了也跟着变（第五轮体检 U1）
+  @ObservationIgnored weak var syncer: NoteSyncer?
+  /// 截图自检直接摆的（没接同步时用它）
+  private let pinnedTrouble: Bool
+  /// 同步停了、该让人知道了：底栏「设置」前面一个橙色小圆点（盖过「新」的那个）
+  var syncTrouble: Bool { syncer?.needsAttention ?? pinnedTrouble }
   /// 键盘选中的那一格；没按过方向键时没有（打开时不画高亮）
   private(set) var selection: Int?
   /// 鼠标停在哪一格上（没选中的那格铺 fill.hover）
@@ -216,32 +268,45 @@ enum Home {
 
   /// 做一件事（AppDelegate 接上：动作走 run(action)，菜单栏那几项走 run(extra)）
   @ObservationIgnored var perform: (Home.Tile.Target) -> Void = { _ in }
-  /// 「管理…」：设置 › 通用（「功能」那一节在里面）
+  /// 「管理…」：设置 › 通用 ›「功能」
   @ObservationIgnored var openFeatures: () -> Void = {}
   /// 收起面板（不放淡出：接下来要做的事要面板已经不在屏幕上）
   @ObservationIgnored var hidePanel: () -> Void = {}
+  /// 打了字（X12）：收起主界面、打开启动器、把这一下按键原样交给它的输入框（AppDelegate 接；启动器关着时响一声）。
+  /// 交的是按键不是字：开着拼音时这一下要进输入法组字，直接填字会把第一个字母拆出去（同 issue #30）
+  @ObservationIgnored var typeToLauncher: (NSEvent) -> Void = { _ in }
 
   /// 截图自检直接摆出某个样子；正常使用建一个空的，每次呼出前 update
   init(
-    sections: [Home.Section] = [], offCount: Int = 0, settingsIsNew: Bool = false,
-    selection: Int? = nil, hovered: Int? = nil
+    sections: [Home.Section] = [], offCount: Int = 0,
+    secureInput: HotKeyCenter.SecureInputBlock? = nil, settingsIsNew: Bool = false,
+    syncTrouble: Bool = false, selection: Int? = nil, hovered: Int? = nil
   ) {
     self.sections = sections
     self.offCount = offCount
+    self.secureInput = secureInput
     self.settingsIsNew = settingsIsNew
+    pinnedTrouble = syncTrouble
     self.selection = selection
     self.hovered = hovered
   }
 
   var tiles: [Home.Tile] { sections.flatMap(\.tiles) }
-  var size: CGSize { CGSize(width: Home.width, height: Home.height(sections, offCount: offCount)) }
+  var tileHeight: CGFloat { Home.tileHeight(sections) }
+  var size: CGSize {
+    CGSize(
+      width: Home.width,
+      height: Home.height(sections, offCount: offCount, secureInput: secureInput != nil))
+  }
 
   /// 换成现在的样子。appearing：新呼出（选中、悬停清掉）；开着时再排一遍选中留着
   func update(
-    _ sections: [Home.Section], offCount: Int, settingsIsNew: Bool = false, appearing: Bool
+    _ sections: [Home.Section], offCount: Int, secureInput: HotKeyCenter.SecureInputBlock? = nil,
+    settingsIsNew: Bool = false, appearing: Bool
   ) {
     self.sections = sections
     self.offCount = offCount
+    self.secureInput = secureInput
     self.settingsIsNew = settingsIsNew
     if appearing {
       selection = nil
@@ -284,6 +349,7 @@ struct HomeView: View {
   var body: some View {
     VStack(spacing: 0) {
       grid
+      if let block = model.secureInput { secureInputNote(block) }
       if model.offCount > 0 { offNote }
       bar
     }
@@ -296,6 +362,7 @@ struct HomeView: View {
     let starts = model.sections.indices.map { index in
       model.sections[..<index].reduce(0) { $0 + $1.tiles.count }
     }
+    let tileHeight = model.tileHeight
     return VStack(alignment: .leading, spacing: 0) {
       ForEach(Array(model.sections.enumerated()), id: \.offset) { index, section in
         if let title = section.title {
@@ -317,7 +384,7 @@ struct HomeView: View {
                 offset in
                 HomeTile(
                   model: model, tile: section.tiles[offset], index: starts[index] + offset,
-                  namespace: selection)
+                  height: tileHeight, namespace: selection)
               }
             }
           }
@@ -339,11 +406,27 @@ struct HomeView: View {
         .foregroundStyle(Style.brandInk)
         .pointerStyle(.link)
         .accessibilityLabel("管理功能")
-        .accessibilityHint("打开 设置 › 通用，打开或关掉功能")
+        .accessibilityHint("打开 设置 › 通用 › 功能，打开或关掉功能")
     }
     .font(.system(size: 11))
     .padding(.leading, Home.inset + 10)
     .frame(maxWidth: .infinity, minHeight: Home.noteHeight, alignment: .leading)
+  }
+
+  /// 「「Google Chrome」开着安全输入，⌥ 快捷键暂时不响应」：橙字（同快捷键页注册失败的那行），悬停说为什么、按开着它的 App
+  /// 怎么关、哪些不受影响（SecureInputBlock.explanation）。只是告诉人为什么没反应，不给按钮——能做的是让那个 App 把安全输入关掉，
+  /// 或者把快捷键换成带 ⌘ / ⌃ 的、连按两下
+  private func secureInputNote(_ block: HotKeyCenter.SecureInputBlock) -> some View {
+    // App 名原样显示（Text(String) 不按 Markdown 解析）
+    Text(block.summary)
+      .foregroundStyle(Color(nsColor: .systemOrange))
+      .font(.system(size: 11))
+      .lineLimit(1)
+      .truncationMode(.middle)
+      .help(block.explanation)
+      .padding(.leading, Home.inset + 10)
+      .padding(.trailing, Home.inset)
+      .frame(maxWidth: .infinity, minHeight: Home.noteHeight, alignment: .leading)
   }
 
   /// 底栏（同启动器的底栏，mac-whisker §3「面板里共用的几件」）：左边有新版本时「更新到 x」，右边两个能点的动作
@@ -363,24 +446,41 @@ struct HomeView: View {
     .overlay(alignment: .top) { Hairline() }
   }
 
-  private func barButton(_ title: String, key: String, _ extra: MenuExtra) -> some View {
+  private func barButton(
+    _ title: LocalizedStringResource, key: String, _ extra: MenuExtra
+  ) -> some View {
     Button {
       model.run(extra)
     } label: {
       HStack(spacing: 6) {
-        // 设置里有新的（只在那里才有入口的）：「设置」前面一个小圆点（拍板 A4）
-        if isNew(extra) { NewDot() }
+        // 同步停了（U1）：橙色小圆点，好了自己没；不然设置里有新的（只在那里才有入口的）：强调色小圆点（拍板 A4）
+        if isTroubled(extra) {
+          Circle()
+            .fill(Color(nsColor: .systemOrange))
+            .frame(width: 6, height: 6)
+        } else if isNew(extra) {
+          NewDot()
+        }
         Text(title)
         KeyCap(key).accessibilityHidden(true)
       }
       .contentShape(.rect)
     }
+    .help(isTroubled(extra) ? Text("同步停了：到 设置 › 通用 › 同步 里看为什么") : Text(verbatim: ""))
     .accessibilityLabel(
-      extra == .quit ? "退出 Kitty Tools" : isNew(extra) ? "设置，" + WhatsNew.spoken : "设置")
+      extra == .quit
+        ? String(localized: "退出 Kitty Tools")
+        : String(localized: "设置")
+          + (isTroubled(extra) ? Island.comma + String(localized: "同步停了") : "")
+          + (isNew(extra) ? Island.comma + WhatsNew.spoken : ""))
   }
 
   private func isNew(_ extra: MenuExtra) -> Bool {
     extra == .settings && model.settingsIsNew
+  }
+
+  private func isTroubled(_ extra: MenuExtra) -> Bool {
+    extra == .settings && model.syncTrouble
   }
 }
 
@@ -390,11 +490,14 @@ private struct HomeTile: View {
   let model: HomeModel
   let tile: Home.Tile
   let index: Int
+  /// Home.tileHeight：一块面板里的格子一样高
+  let height: CGFloat
   let namespace: Namespace.ID
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     let selected = model.selection == index
+    let wraps = height > Home.tile.height
     let shape = RoundedRectangle(cornerRadius: Style.Radius.card, style: .continuous)
     Button {
       model.activate(index)
@@ -402,12 +505,22 @@ private struct HomeTile: View {
       VStack(spacing: 0) {
         KindTile(symbol: tile.symbol, color: tile.color, size: 30).padding(.top, 9)
         // 新功能：名字前面一个小圆点（iOS 主屏新装 App 的那种，拍板 A1）
-        HStack(spacing: 3) {
-          if tile.isNew { NewDot() }
-          Text(tile.title)
-            .font(.system(size: 11))
-            .lineLimit(1)
-            .minimumScaleFactor(0.85)
+        // 英文的名字长：一行放不下时整块面板的格子高一行（Home.tileHeight），名字折成两行、居中；这时每格的名字都占两行高、
+        // 顶对齐，一行的和两行的格子里快捷键在同一高度（第五轮体检 U3②：原来两行的那格快捷键往下掉一行）。
+        // 不折的时候（中文）照旧一行，和以前一个像素都不差
+        ZStack(alignment: .top) {
+          if wraps {
+            Text(verbatim: "A\nA").font(.system(size: 11)).lineLimit(2).hidden()
+              .accessibilityHidden(true)
+          }
+          HStack(spacing: 3) {
+            if tile.isNew { NewDot() }
+            Text(tile.label)
+              .font(.system(size: 11))
+              .lineLimit(wraps ? 2 : 1)
+              .multilineTextAlignment(wraps ? .center : .leading)
+              .minimumScaleFactor(0.85)
+          }
         }
         .padding(.horizontal, 3)
         .padding(.top, 6)
@@ -420,7 +533,7 @@ private struct HomeTile: View {
           .padding(.top, 1)
         Spacer(minLength: 0)
       }
-      .frame(width: Home.tile.width, height: Home.tile.height)
+      .frame(width: Home.tile.width, height: height)
       .background {
         if selected {
           shape.fill(Style.selectedFill)
@@ -443,8 +556,8 @@ private struct HomeTile: View {
       }
     }
     .help(tile.key.map { "\(tile.title)  \($0)" } ?? tile.title)
-    .accessibilityLabel(tile.isNew ? tile.title + "，" + WhatsNew.spoken : tile.title)
-    .accessibilityValue(tile.key.map { "快捷键 \($0)" } ?? "")
+    .accessibilityLabel(tile.isNew ? tile.title + Island.comma + WhatsNew.spoken : tile.title)
+    .accessibilityValue(tile.key.map { String(localized: "快捷键 \($0)") } ?? "")
     .accessibilityAddTraits(selected ? .isSelected : [])
   }
 }
@@ -482,7 +595,13 @@ private struct HomeKeys: NSViewRepresentable {
       // Esc 走面板现成的路（OverlayPanel.cancelOperation → dismiss）
       case .cancel?: window?.cancelOperation(nil)
       case let key?: model?.handle(key)
-      case nil: super.keyDown(with: event)
+      case nil:
+        // 打字转到启动器搜索（X12）：按字母大概率是想搜东西
+        if Home.typed(event.characters, modifiers: event.modifierFlags) != nil {
+          model?.typeToLauncher(event)
+        } else {
+          super.keyDown(with: event)
+        }
       }
     }
   }

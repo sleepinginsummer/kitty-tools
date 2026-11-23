@@ -6,7 +6,8 @@
 // （钥匙图标，只给「打开设置」，直达这个服务的详情页），网络 / 服务错误是淡红卡（图标晃一下，给「重试」，
 // 自建 AI 服务另给「打开设置」）。重新翻译时卡片原位不动，只让正文交叉淡变 0.18 s（§4）。
 // 复制时对勾替换 + 整卡闪品牌粉。大模型完成后按 Markdown 渲染（行内记号 + 标题、列表、引用、分隔线、代码块）。
-// 折叠状态由浮窗按服务记住（跨重启），不再因为出结果自动展开；复制的对勾状态在会话里（⌘1–9 也亮）。
+// 折叠状态由浮窗按服务记住（跨重启），不再因为出结果自动展开；折叠着的服务不自动翻译、点开才翻（2026-11-15），
+// 折叠着不画彗星光和完成时的闪光（看不到正文，闪了像在偷偷翻）。复制的对勾状态在会话里（⌘1–9 也亮）。
 // 正文最高 8 行（按字号算的常数），再长就在卡片里滚动：滚动区铺满卡宽，系统滚动条贴卡片右边、落在内边距里不压字；
 // 下面还有时底部渐隐、滚下去后顶部也渐隐；
 // 大模型生成中跟着末尾走，用户往上滚就停、滚回底部再接着跟。
@@ -22,6 +23,8 @@ struct ProviderCardView: View {
   var fontScale = 1.0
   /// 单词卡（大模型单词模式、词典类服务）：右上角的喇叭只读释义（R1）
   var wordStyle = false
+  /// 讲解卡（issue #35）：喇叭只读第一段（译文）
+  var explains = false
   /// 单词卡第一行是「美 /…/ 英 /…/」时，读音旁边的小喇叭念的英文词（R2）；不是英文词时 nil
   var pronounce: String?
   var isCollapsed = false
@@ -78,7 +81,7 @@ struct ProviderCardView: View {
   }
 
   private var isGenerating: Bool {
-    guard card.service.isStreaming else { return false }
+    guard card.service.isStreaming, !isCollapsed else { return false }
     switch card.state {
     case .waiting, .running: return true
     default: return false
@@ -97,6 +100,7 @@ struct ProviderCardView: View {
   /// 正文区现在是哪一种（等待 / 思考、正文、截断、失败）：变了才交叉淡变；生成中到完成还是同一种（同一个 ResultText）
   private var phase: Int {
     switch card.state {
+    case .idle: 4
     case .waiting: 0
     case .running(let text): text.isEmpty ? 0 : 1
     case .done(let text): card.service.isStreaming && Self.rendered(text) != nil ? 2 : 1
@@ -140,7 +144,8 @@ struct ProviderCardView: View {
         } keyframes: { _ in
           KeyframeTrack {
             LinearKeyframe(
-              isDone && card.service.isStreaming && !reduceMotion ? 0.45 : 0, duration: 0.01)
+              isDone && card.service.isStreaming && !isCollapsed && !reduceMotion ? 0.45 : 0,
+              duration: 0.01)
             LinearKeyframe(0, duration: 0.6)
           }
         }
@@ -163,7 +168,7 @@ struct ProviderCardView: View {
   }
 
   private var header: some View {
-    let name = Self.displayName(card.service)
+    let name = card.service.shortName
     return HStack(spacing: 8) {
       ServiceTile(service: card.service)
       // 服务名 12 和模型名 11 按基线对齐（居中对齐的话两段字的基线差 0.5–1 pt）
@@ -183,8 +188,8 @@ struct ProviderCardView: View {
       Spacer(minLength: 6)
       CardActions {
         if let text = card.state.text, !text.isEmpty {
-          // 只读译文：单词卡读第一行释义，别的去掉 Markdown 记号再读（R1）
-          let speech = Speaker.speechText(text, wordStyle: wordStyle)
+          // 只读译文：单词卡读第一行释义，讲解卡读第一段，别的去掉 Markdown 记号再读（R1）
+          let speech = Speaker.speechText(text, wordStyle: wordStyle, explanation: explains)
           Button(
             "朗读", systemImage: speaker.speaking == speech ? "speaker.wave.2.fill" : "speaker.wave.2"
           ) { speaker.toggle(speech, language: language) }
@@ -196,7 +201,7 @@ struct ProviderCardView: View {
           .accessibilityLabel("朗读\(name)的译文")
           Button("复制", systemImage: isCopied ? "checkmark" : "doc.on.doc", action: onCopy)
             .contentTransition(.symbolEffect(.replace))
-            .help(index < 9 ? "复制（⌘\(index + 1)）" : "复制")
+            .help(index < 9 ? "复制（⌘\(String(index + 1))）" : "复制")
             .accessibilityLabel("复制\(name)的译文")
         }
         Button("重新翻译", systemImage: "arrow.clockwise") {
@@ -207,7 +212,10 @@ struct ProviderCardView: View {
         .accessibilityLabel("用\(name)重新翻译")
         Button(isCollapsed ? "展开" : "收起", systemImage: "chevron.down", action: onToggleCollapse)
           .rotationEffect(.degrees(isCollapsed ? 0 : 180))
-          .help(isCollapsed ? "展开（会一直记住）" : "收起（会一直记住）")
+          .help(isCollapsed ? "展开：以后自动翻译" : "收起：以后不自动翻译，点开再翻")
+          // 读屏名字带上服务名（第五轮体检 A4①）：几张卡分不清，它还决定这个服务以后自不自动翻译
+          .accessibilityLabel(isCollapsed ? "展开\(name)" : "收起\(name)")
+          .accessibilityHint(isCollapsed ? "以后自动翻译" : "以后不自动翻译，点开再翻")
       }
     }
     .frame(height: 18)
@@ -313,7 +321,8 @@ struct ProviderCardView: View {
       HStack(alignment: .firstTextBaseline, spacing: 12) {
         ForEach(Array(line.phonetics.enumerated()), id: \.offset) { _, phonetic in
           HStack(alignment: .firstTextBaseline, spacing: 2) {
-            Text("\(phonetic.accent == .uk ? "英" : "美") /\(phonetic.text)/")
+            // 读音的口音标签跟界面语言（存着的字里是「美 /…/」，Speaker.phoneticLine 认出来的）
+            Text(verbatim: DictionaryCardView.label(phonetic))
               .font(.system(size: 15 * fontScale))
               .textSelection(.enabled)
             PronounceButton(word: pronounce, accent: phonetic.accent ?? .us, speaker: speaker)
@@ -365,6 +374,12 @@ struct ProviderCardView: View {
       .id(phase)
     } else if case .failed(let error) = state {
       failureRow(error).id(phase)
+    } else if state == .idle {
+      // 展开着却没翻（折叠状态从别处改过来的，正常点开会马上开跑）：说一句，不画骨架（骨架会一直在）
+      Text("折叠着时没有翻译，点右上角的重新翻译")
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
+        .id(phase)
     } else {
       VStack(alignment: .leading, spacing: 4) {
         if state.isThinking { ThinkingLabel() }
@@ -413,11 +428,6 @@ struct ProviderCardView: View {
     .buttonStyle(.plain).foregroundStyle(Style.brandInk).pointerStyle(.link)
     .font(.system(size: 12))
     .onAppear { errorTicks += 1 }
-  }
-
-  /// 「智谱 GLM（免费）」这类默认名去掉括号里的说明
-  static func displayName(_ service: TranslateService) -> String {
-    service.name.replacing(/（.*）$/, with: "")
   }
 
   /// 完成的大模型结果按 Markdown 画成的样子，没有 Markdown 是 nil。完成的卡每次重画（复制闪光、朗读、换字号、
@@ -692,7 +702,7 @@ struct ServiceTile: View {
 
   /// 首字母：名字以中文开头取第一个字（智谱 GLM → 智），否则取第一个拉丁字母（大写）
   static func monogram(_ service: TranslateService) -> String {
-    let name = ProviderCardView.displayName(service).trimmingCharacters(in: .whitespaces)
+    let name = service.shortName.trimmingCharacters(in: .whitespaces)
     guard let first = name.first else { return "?" }
     if !first.isASCII { return String(first) }
     return name.first(where: { $0.isLetter }).map { String($0).uppercased() } ?? String(first)
