@@ -34,6 +34,12 @@
   --cyan: #55bef0;
   --brown: #a2845e;
   --gray: #8e8e93;
+  --amber: #e69914;
+  --slate: #54789e;
+  --violet: #6b5cdb;
+  --navy: #264dad;
+  --olive: #6b9429;
+  --orange: #ff9500;
 
   --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
     "Microsoft YaHei", "Noto Sans SC", "Segoe UI", sans-serif;
@@ -82,6 +88,12 @@
     --cyan: #5ac8f5;
     --brown: #ac8e68;
     --gray: #98989d;
+  --amber: #f5ad38;
+  --slate: #789cc2;
+  --violet: #998cff;
+  --navy: #6e91f5;
+  --olive: #99c752;
+  --orange: #ff9f0a;
     color-scheme: dark;
   }
 }
@@ -112,6 +124,12 @@
   --cyan: #5ac8f5;
   --brown: #ac8e68;
   --gray: #98989d;
+  --amber: #f5ad38;
+  --slate: #789cc2;
+  --violet: #998cff;
+  --navy: #6e91f5;
+  --olive: #99c752;
+  --orange: #ff9f0a;
   color-scheme: dark;
 }
 
@@ -407,6 +425,19 @@ body::before {
 .icon-link svg {
   width: 22px;
   height: 22px;
+}
+/* 语言切换：页头右边一个字链（中文页写 English，英文页写 中文） */
+.lang-link {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.lang-link:hover {
+  color: var(--fg);
+  background: var(--fill-hover);
+  text-decoration: none;
 }
 @media (max-width: 720px) {
   .top-in {
@@ -746,6 +777,9 @@ body::before {
 .i-dock-preview {
   --i: url("icons/kitty.dock.preview.svg");
 }
+.i-finder-menu {
+  --i: url("icons/kitty.finder.menu.svg");
+}
 .i-general {
   --i: url("icons/kitty.general.svg");
 }
@@ -754,6 +788,18 @@ body::before {
 }
 .i-island {
   --i: url("icons/kitty.island.svg");
+}
+.i-keep-awake {
+  --i: url("icons/kitty.keep.awake.svg");
+}
+.i-bluetooth-snooze {
+  --i: url("icons/kitty.bluetooth.snooze.svg");
+}
+.i-smooth-scroll {
+  --i: url("icons/kitty.smooth.scroll.svg");
+}
+.i-app-shortcuts {
+  --i: url("icons/kitty.app.shortcuts.svg");
 }
 .i-launcher {
   --i: url("icons/kitty.launcher.svg");
@@ -766,6 +812,9 @@ body::before {
 }
 .i-record {
   --i: url("icons/kitty.record.svg");
+}
+.i-reminders {
+  --i: url("icons/kitty.reminders.svg");
 }
 .i-screenshot {
   --i: url("icons/kitty.screenshot.svg");
@@ -1376,6 +1425,7 @@ a.card:hover {
 }
 .step-copy {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-content: start;
   position: relative;
@@ -1474,6 +1524,7 @@ a.card:hover {
 .mock-main {
   padding: 16px 18px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-content: start;
   min-width: 0;
@@ -1491,6 +1542,7 @@ a.card:hover {
 }
 .mock-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
@@ -1500,6 +1552,7 @@ a.card:hover {
   border: 1px solid var(--line);
 }
 .mock-row span:first-child {
+  flex: 1 1 8em;
   min-width: 0;
 }
 .mock-row.hl {
@@ -1508,7 +1561,6 @@ a.card:hover {
 }
 .mock-select {
   color: var(--muted);
-  white-space: nowrap;
 }
 .mock-btn {
   flex: none;
@@ -1536,22 +1588,21 @@ a.card:hover {
 }
 .cmd {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   padding: 10px 12px;
   border-radius: 10px;
   background: var(--fill-control);
-  overflow-x: auto;
 }
 .cmd code {
   background: none;
   padding: 0;
-  white-space: nowrap;
-  overflow-wrap: normal;
-  flex: 1;
+  flex: 1 1 22ch;
 }
 .copy {
   flex: none;
+  margin-left: auto;
   font: 600 13px/1 var(--sans);
   color: var(--fg);
   background: var(--surface);

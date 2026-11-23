@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Kitty Tools：Mac 上的小事，交给一只猫</title>
-<meta name="description" content="Kitty Tools 是常驻菜单栏的免费效率工具：剪贴板历史、翻译、启动器、截图与长截图、录屏录音、便签、启动台、状态屏……按一下快捷键就到手边。Mac 版支持 Apple 芯片、macOS 15 起，也有 Windows 版。">
+<meta name="description" content="Kitty Tools 是常驻菜单栏的免费效率工具：剪贴板历史、翻译、启动器、截图与长截图、录屏录音、便签、启动台、状态屏……按一下快捷键就到手边。Mac 版支持 Apple 芯片和 Intel、macOS 15 起，也有 Windows 版。">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Kitty Tools">
 <meta property="og:title" content="Kitty Tools：Mac 上的小事，交给一只猫">
@@ -13,6 +13,9 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#141012" media="(prefers-color-scheme: dark)">
+<link rel="alternate" hreflang="zh-CN" href="https://yyadnbug.github.io/kitty-tools/">
+<link rel="alternate" hreflang="en" href="https://yyadnbug.github.io/kitty-tools/en/">
+<link rel="alternate" hreflang="x-default" href="https://yyadnbug.github.io/kitty-tools/">
 <link rel="icon" href="assets/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="stylesheet" href="assets/site.css">
@@ -30,6 +33,7 @@
       <a href="faq/">常见问题</a>
     </nav>
     <div class="top-actions">
+      <a class="lang-link" href="en/" hreflang="en" lang="en">English</a>
       <a class="icon-link" href="https://github.com/YyAdnBug/kitty-tools" aria-label="GitHub 上的代码"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
       <a class="btn sm" href="download/">下载</a>
     </div>
@@ -51,13 +55,13 @@
         </a>
         <a class="btn quiet" href="features/">看看都能做什么</a>
       </div>
-      <p class="dl-meta" data-auto-meta><span data-needs="mac" hidden>版本 <span data-fill="mac-version"></span></span><span>Apple 芯片</span><span>macOS 15 起</span><span>免费</span></p>
+      <p class="dl-meta" data-auto-meta><span data-needs="mac" hidden>版本 <span data-fill="mac-version"></span></span><span>Apple 芯片 · <a href="download/#mac">Intel 版</a></span><span>macOS 15 起</span><span>免费</span></p>
       <p class="dl-meta" data-auto-meta-win hidden><span>Windows 11（22H2 起）</span><span>x64 和 ARM64</span><span>免费</span></p>
       <p class="dl-note" id="dl-note" hidden>
         <span class="for-mac">下载开始了。第一次打开会被系统拦下：到「系统设置 › 隐私与安全性」，在下面点「仍要打开」就好，只有第一次需要。<a href="download/#install">看安装说明</a></span>
         <span class="for-win">下载开始了。出现「Windows 已保护你的电脑」时，点「更多信息」→「仍要运行」。<a href="download/#windows">看安装说明</a></span>
       </p>
-      <p class="dl-note for-phone">在手机上看？Kitty Tools 装在电脑上：Mac（Apple 芯片）或 Windows 11。回到电脑上打开这个网址下载就好。</p>
+      <p class="dl-note for-phone">在手机上看？Kitty Tools 装在电脑上：Mac（Apple 芯片或 Intel）或 Windows 11。回到电脑上打开这个网址下载就好。</p>
       <p class="small muted"><span class="for-mac">也有 <a href="download/#windows">Windows 版</a>。</span><span class="for-win">也有 <a href="download/#mac">Mac 版</a>，功能更全。</span> <a href="download/#install">第一次安装要注意什么？</a></p>
     </div>
 
@@ -106,21 +110,29 @@
   <div class="wrap">
     <div class="section-head">
       <h2>常用的，都在这儿</h2>
-      <p class="lead">每样都能用快捷键叫出来，弹出时不抢你正在用的 App。用不上的，可以在设置里整个关掉。</p>
+      <p class="lead">每样都能用快捷键叫出来，弹出时不抢你正在用的 App。用不上的可以整个关掉；便签、提醒这些做成了插件，要用时再添加。</p>
     </div>
     <div class="tiles">
       <a class="tile reveal" href="features/#clipboard"><span class="ico i-clipboard" style="--c:var(--blue)"></span><b>剪贴板历史 <kbd>⌥C</kbd></b><span>复制过的文字、图片、文件都留着，搜得到、粘得回去</span></a>
-      <a class="tile reveal" href="features/#launcher"><span class="ico i-launcher" style="--c:var(--purple)"></span><b>启动器 <kbd>⌥Space</kbd></b><span>打开 App、找文件、算算数、搜网页，拼音也认</span></a>
+      <a class="tile reveal" href="features/#launcher"><span class="ico i-launcher" style="--c:var(--purple)"></span><b>启动器 <kbd>⌥Space</kbd></b><span>打开 App、找文件、算算数、跑自己的脚本，拼音也认</span></a>
       <a class="tile reveal" href="features/#translate"><span class="ico i-translate" style="--c:var(--green)"></span><b>翻译 <kbd>⌥D</kbd></b><span>划词、输入、复制、截图都能翻，内置服务不用配置</span></a>
       <a class="tile reveal" href="features/#screenshot"><span class="ico i-screenshot" style="--c:var(--pink)"></span><b>截图 <kbd>⌥A</kbd></b><span>框选、十种标注、钉在屏幕上，还能拼长截图</span></a>
       <a class="tile reveal" href="features/#screenshot"><span class="ico i-screenshot-text" style="--c:var(--pink)"></span><b>识字 <kbd>⌥O</kbd></b><span>框一块屏幕把字认出来，二维码也行，不联网</span></a>
       <a class="tile reveal" href="features/#record"><span class="ico i-record" style="--c:var(--pink)"></span><b>录屏与录音 <kbd>⌥R</kbd></b><span>录一块区域或整屏，带上声音，转 GIF、压缩</span></a>
       <a class="tile reveal" href="features/#notes"><span class="ico yellow i-notes" style="--c:var(--yellow)"></span><b>便签 <kbd>⌥N</kbd></b><span>贴在屏幕边上，想到什么随手记一条</span></a>
+      <a class="tile reveal" href="features/#reminders"><span class="ico i-reminders" style="--c:var(--amber)"></span><b>提醒</b><span>到点挂在刘海岛上，能全屏、读出来、一直催</span></a>
       <a class="tile reveal" href="features/#screenshot"><span class="ico i-screenshot-history" style="--c:var(--pink)"></span><b>截图历史</b><span>截过的、录过的都在一处，回头还能接着改标注</span></a>
       <a class="tile reveal" href="features/#launchpad"><span class="ico i-launchpad" style="--c:var(--mint)"></span><b>启动台</b><span>全屏的 App 网格，捏合触控板就打开（macOS 26 起）</span></a>
       <a class="tile reveal" href="features/#status-screen"><span class="ico i-status-screen" style="--c:var(--brown)"></span><b>状态屏</b><span>盖住屏幕、拦住键盘鼠标，擦屏幕或离开座位时用</span></a>
       <a class="tile reveal" href="features/#dock-preview"><span class="ico i-dock-preview" style="--c:var(--cyan)"></span><b>程序坞预览</b><span>停在程序坞图标上，看这个 App 的所有窗口</span></a>
-      <a class="tile reveal" href="features/#island"><span class="ico i-island" style="--c:var(--gray)"></span><b>刘海岛</b><span>提示从刘海里长出来，点一下叫出常用动作</span></a>
+      <a class="tile reveal" href="features/#finder-menu"><span class="ico i-finder-menu" style="--c:var(--slate)"></span><b>访达右键</b><span>右键新建文件、拷贝路径、压缩解压（默认关）</span></a>
+      <a class="tile reveal" href="features/#island"><span class="ico i-island" style="--c:var(--gray)"></span><b>刘海岛</b><span>提示从刘海里长出来，计时、正在放的歌和专注模式挂在两边</span></a>
+      <a class="tile reveal" href="features/#keep-awake"><span class="ico i-keep-awake" style="--c:var(--violet)"></span><b>保持唤醒</b><span>不让电脑睡着：开几小时、到某一刻，或按时段自动开</span></a>
+      <a class="tile reveal" href="features/#smooth-scroll"><span class="ico i-smooth-scroll" style="--c:var(--olive)"></span><b>平滑滚动</b><span>普通鼠标的滚轮也像触控板那样滑着滚</span></a>
+      <a class="tile reveal" href="features/#app-shortcuts"><span class="ico i-app-shortcuts" style="--c:var(--orange)"></span><b>App 快捷键</b><span>按住 ⌘ 一会儿，看当前 App 菜单里的全部快捷键</span></a>
+      <a class="tile reveal" href="features/#bluetooth-snooze"><span class="ico i-bluetooth-snooze" style="--c:var(--navy)"></span><b>睡眠关蓝牙</b><span>合上盖子就关蓝牙，放进包里不会被鼠标键盘弄醒</span></a>
+      <a class="tile reveal" href="features/#home"><span class="ico i-home" style="--c:var(--brand)"></span><b>主界面</b><span>点菜单栏里的猫，全部功能一格一格摆着</span></a>
+      <a class="tile reveal" href="features/#settings"><span class="ico i-general" style="--c:var(--gray)"></span><b>同步与备份</b><span>同步盘或 WebDAV 同步，每天自动备份一份</span></a>
     </div>
   </div>
 </section>
@@ -157,7 +169,7 @@
         <ul class="points">
           <li>算式和单位换算直接出结果，↩ 把结果粘出去</li>
           <li>「g 关键词」搜网页，常用的搜索网站都预置好了</li>
-          <li>锁屏、清空废纸篓、结束进程、看端口被谁占着，一行命令</li>
+          <li>锁屏、清空废纸篓、结束进程、看端口被谁占着，一行命令；自己的脚本也能放进来</li>
           <li>⌘K 打开动作菜单，常用的收藏起来</li>
         </ul>
         <a class="arrow-link" href="features/#launcher">启动器的全部功能</a>
@@ -175,7 +187,7 @@
       <div class="feature-copy">
         <span class="eyebrow"><span class="ico sm i-translate" style="--c:var(--green)"></span>翻译 <kbd>⌥D</kbd></span>
         <h2>选中就翻，不用切窗口</h2>
-        <p>在任何 App 里选中文字按快捷键，浮窗跟着鼠标出来。也能输入翻译、复制即译，或者框一块屏幕截图翻译。</p>
+        <p>在任何 App 里选中文字按快捷键，浮窗就出来。也能输入翻译、复制即译，或者框一块屏幕截图翻译。</p>
         <ul class="points">
           <li>内置服务开箱即用；另有十几家翻译服务和大模型可选，几家一起出结果</li>
           <li>大模型的译文边生成边显示</li>
@@ -256,7 +268,7 @@
       </a>
       <a class="card reveal" href="features/#island">
         <div class="stage"><img class="shot" src="assets/shots/island.png" width="407" height="114" alt="刘海岛：「已存到桌面」的提示，带「在访达中显示」按钮" loading="lazy"></div>
-        <div class="card-body"><h3><span class="ico sm i-island" style="--c:var(--gray)"></span>刘海岛</h3><p>复制好了、存好了，提示都从刘海里长出来；点一下刘海，叫出最近的提示和常用动作。</p></div>
+        <div class="card-body"><h3><span class="ico sm i-island" style="--c:var(--gray)"></span>刘海岛</h3><p>复制好了、存好了，提示都从刘海里长出来；录屏计时、正在放的歌、专注模式挂在刘海两边，点一下叫出常用动作。</p></div>
       </a>
     </div>
   </div>
@@ -266,7 +278,7 @@
   <div class="wrap split">
     <div class="section-head" style="margin:0">
       <h2>也有 Windows 版</h2>
-      <p class="muted">剪贴板、翻译、启动器、截图、录屏录音，样子和用法都照 Mac 版来；片段、收藏、生词本能在两边同步。支持 Windows 11（22H2 起），x64 和 ARM64。</p>
+      <p class="muted">剪贴板、翻译、启动器、截图、录屏录音、便签、提醒、状态屏、保持唤醒，样子和用法都照 Mac 版来；片段、收藏、生词本、便签、提醒能在两边同步。支持 Windows 11（22H2 起），x64 和 ARM64。</p>
     </div>
     <div class="btn-row">
       <a class="btn quiet" href="https://github.com/YyAdnBug/kitty-tools/releases?q=windows&amp;expanded=true" data-dl="win">下载 Windows 版</a>
@@ -305,7 +317,7 @@
           <a class="btn" href="https://github.com/YyAdnBug/kitty-tools/releases/latest" data-dl="mac" data-auto aria-describedby="dl-note-2"><span data-label>下载 Mac 版</span></a>
           <a class="btn quiet" href="download/">其他下载方式</a>
         </div>
-        <p class="dl-meta" data-auto-meta><span>Apple 芯片</span><span>macOS 15 起</span><span>免费</span></p>
+        <p class="dl-meta" data-auto-meta><span>Apple 芯片 · <a href="download/#mac">Intel 版</a></span><span>macOS 15 起</span><span>免费</span></p>
         <p class="dl-meta" data-auto-meta-win hidden><span>Windows 11（22H2 起）</span><span>x64 和 ARM64</span><span>免费</span></p>
         <p class="dl-note" id="dl-note-2" hidden>
           <span class="for-mac">下载开始了。第一次打开会被系统拦下：到「系统设置 › 隐私与安全性」，在下面点「仍要打开」就好。<a href="download/#install">看安装说明</a></span>

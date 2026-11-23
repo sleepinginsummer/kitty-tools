@@ -13,6 +13,9 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#141012" media="(prefers-color-scheme: dark)">
+<link rel="alternate" hreflang="zh-CN" href="https://yyadnbug.github.io/kitty-tools/download/">
+<link rel="alternate" hreflang="en" href="https://yyadnbug.github.io/kitty-tools/en/download/">
+<link rel="alternate" hreflang="x-default" href="https://yyadnbug.github.io/kitty-tools/download/">
 <link rel="icon" href="../assets/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
 <link rel="stylesheet" href="../assets/site.css">
@@ -30,6 +33,7 @@
       <a href="../faq/">常见问题</a>
     </nav>
     <div class="top-actions">
+      <a class="lang-link" href="../en/download/" hreflang="en" lang="en">English</a>
       <a class="icon-link" href="https://github.com/YyAdnBug/kitty-tools" aria-label="GitHub 上的代码"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
       <a class="btn sm" href="../download/">下载</a>
     </div>
@@ -51,13 +55,14 @@
         <div><h2 id="mac-title">Mac 版</h2><p class="small muted"><span data-needs="mac" hidden>版本 <span data-fill="mac-version"></span> · <span data-fill="mac-date"></span> · <span data-fill="mac-size"></span></span><span class="when-failed">最新版本见 GitHub 发布页</span></p></div>
       </div>
       <ul class="req">
-        <li>Apple 芯片（M1 及以后）</li>
+        <li>Apple 芯片（M1 及以后）或 Intel 芯片</li>
         <li>macOS 15 及以上</li>
       </ul>
       <div class="btn-row">
         <a class="btn" href="https://github.com/YyAdnBug/kitty-tools/releases/latest" data-dl="mac" aria-describedby="dl-note-mac">下载 DMG</a>
         <a class="small" href="https://github.com/YyAdnBug/kitty-tools/releases/latest" data-href="mac-release">这一版的发布说明</a>
       </div>
+      <p class="small muted">按钮下载的是 Apple 芯片的版本；Intel 芯片的 Mac 下载 <a href="https://github.com/YyAdnBug/kitty-tools/releases/latest" data-dl="mac-intel">Intel 版</a>。不确定是哪种，看<a href="../faq/#intel">这里</a>。</p>
       <p class="dl-note" id="dl-note-mac" hidden>下载开始了。照下面的三步装好；第一次打开被拦下时，看第 3 步。</p>
     </section>
 
@@ -140,11 +145,12 @@
       <p class="muted">欢迎引导会带你一项项开。每项权限只拿来做下面写的事，不给也能用其余功能。</p>
     </div>
     <dl class="perms">
-      <div><dt>辅助功能</dt><dd>把选好的内容粘贴回原来的 App、划词翻译、用译文替换原文、长截图自动滚动、录屏时显示按键、程序坞预览。</dd></div>
+      <div><dt>辅助功能</dt><dd>把选好的内容粘贴回原来的 App、划词翻译、用译文替换原文、长截图自动滚动、录屏时显示按键、程序坞预览、把音量和亮度的提示换到刘海上。</dd></div>
       <div><dt>屏幕录制</dt><dd>截图、截图翻译、识字、长截图、录屏、录系统声音、程序坞预览的缩略图。授权后可能要重新打开一次 App。</dd></div>
       <div><dt>麦克风</dt><dd>录屏、录音时录下你的声音。第一次用到时才问。</dd></div>
       <div><dt>文件和文件夹</dt><dd>只在启动器搜文件时按需申请。</dd></div>
       <div><dt>完全磁盘访问权限（可选）</dt><dd>只有想在启动器里搜 Safari 的书签和历史时才需要。</dd></div>
+      <div><dt>日历（可选）</dt><dd>只在刘海岛打开「下一个日程」时问。</dd></div>
     </dl>
     <p class="small muted">新装或系统大版本更新后，第一次识字前系统要先准备识字模型，大约一分钟；App 启动后会在后台自己准备好。</p>
   </div>
@@ -180,7 +186,7 @@
       <h2>Windows 版怎么卸载</h2>
       <p>设置 › 应用 › 已安装的应用 › Kitty Tools › 卸载。</p>
       <h2>Windows 版有哪些功能</h2>
-      <p>剪贴板历史、翻译、启动器、截图（含长截图和截图历史）、录屏与录音、主界面。便签、启动台、状态屏、程序坞预览和刘海岛目前只有 Mac 版有。</p>
+      <p>剪贴板历史、翻译、启动器、截图（含长截图和截图历史）、录屏与录音、便签、提醒、状态屏和主界面。启动台、程序坞预览、访达右键和刘海岛目前只有 Mac 版有。</p>
     </div>
   </div>
 </section>
