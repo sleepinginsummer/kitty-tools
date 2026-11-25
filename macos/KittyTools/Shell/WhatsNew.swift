@@ -121,6 +121,17 @@ enum WhatsNew {
     Entry(
       id: "screenshot-corner-radius", version: "0.10.2", feature: .screenshot, page: .screenshot,
       section: "截图圆角"),
+    // 0.10.3：新插件「键位映射」（没添加时在侧栏「插件」那一行标，添加了算碰过）、剪贴板的片段展开和新的全局动作
+    // 「暂停 / 继续录制」（不设默认快捷键，录制时菜单、主界面、快捷键页标，用过一次算看过）。启动台「隐藏的 App」
+    // （推进行没接「新」）、录屏暂停本身（HUD 上的按钮）、美化与提速（改样子、提速）不标，交给更新日志
+    // 片段展开（11-24 起是剪贴板的一项，不是插件）：设置 › 剪贴板「打关键词展开片段」那一行标，拨过、存过一个关键词算看过
+    Entry(
+      id: "snippet-expand", version: "0.10.3", feature: .clipboard, page: .clipboard,
+      section: "打关键词展开片段"),
+    Entry(
+      id: "plugin-key-remapping", version: "0.10.3", feature: nil, page: .plugins,
+      plugin: .keyRemapping),
+    Entry(id: "record-pause", version: "0.10.3", feature: .record, actions: [.recordPause]),
   ]
 
   /// 一版最多标几个（拍板 B1：标多了到处都是「新」，等于没标）。同一版的几个新插件算一个：都只标在「全部插件」一处
@@ -211,9 +222,15 @@ enum WhatsNew {
     entries.contains { ids.contains($0.id) && $0.page == page }
   }
 
-  /// 「全部插件」里这个插件的那一行要不要标
+  /// 插件页里这个插件的那一行要不要标：新插件本身，或者它自己那一页里有新东西（2026-11-23 插件侧栏改版 N3：插件的页不在侧栏、
+  /// 从这一行推进，标在页里的新功能从外面也要看得到）
   static func marks(plugin: Feature, in ids: Set<String>) -> Bool {
-    entries.contains { ids.contains($0.id) && $0.plugin == plugin }
+    entries.contains { ids.contains($0.id) && ($0.plugin == plugin || $0.page == plugin.page) }
+  }
+
+  /// 侧栏「插件」那一行要不要标（N3）：插件页自己的（新插件），加上各插件页里的
+  static func marksPlugins(in ids: Set<String>) -> Bool {
+    entries.contains { ids.contains($0.id) && $0.page?.sidebarPage == .plugins }
   }
 
   /// 设置页里这一节要不要标（按 key 比）

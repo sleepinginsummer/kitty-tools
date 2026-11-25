@@ -286,6 +286,8 @@ extension AppDelegate {
     // 访达右键把 App 冷启动时交过来的动作：剪贴板历史、偏好都起来了再做（拷贝的路径才记得进历史）
     for url in pendingLinks { FinderLink.perform(url, island: island) }
     pendingLinks = []
+    // 闲下来以后在屏外预排启动器和剪贴板面板（P7）
+    panelPrewarm.schedule()
   }
 
   /// 设置 › 刘海岛的「停在刘海上自动展开」「触感反馈」跟上（启动时、偏好变了时）
@@ -457,13 +459,6 @@ extension AppDelegate {
           "「\(other)」也在处理鼠标滚轮", detail: "两边一起开会平滑两次、反向两次：留一边就好", tone: .warning,
           symbol: "computermouse")
       }
-    }
-
-    // 片段展开：起停在 snippetExpander.apply（偏好监听里调）。运行中添加时缺授权就当场要（同平滑滚动；启动时、欢迎引导里不问）
-    if turnedOn.contains(.snippetExpand), !launching, !settingsNavigation.showsOnboarding,
-      !Permissions.isAccessibilityTrusted
-    {
-      Permissions.requestAccessibility()
     }
 
     guard !launching else { return }

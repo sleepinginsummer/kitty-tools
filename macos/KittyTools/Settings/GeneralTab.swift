@@ -1,5 +1,5 @@
 // 设置 › 通用（2026-11-18 设置改版 S2：外面只留常用的，成组的推进子页，零散的收进「高级…」）。外面三组：
-// ① 功能 ›（各功能的开关，FeaturesPage；Shell/Feature.swift）、插件 ›（侧栏「全部插件」）；
+// ① 功能 ›（各功能的开关，FeaturesPage；Shell/Feature.swift）、插件 ›（侧栏的「插件」那一页）；
 // ② 语言（跟随系统 / 简体中文 / English，重新打开后生效；Shell/InterfaceLanguage.swift）、外观（三张缩略图）、强调色、登录时自动打开；
 // ③ 权限 ›（辅助功能、屏幕录制、麦克风、15.4 起的剪贴板访问，同一种 PermissionRow；缺授权时这一组挪到最上面、行尾橙字）、
 // 同步 ›（SyncSection 原样搬进子页，行尾写上次同步）、备份与导出导入 ›（TransferSection 原样搬进子页）。
@@ -32,7 +32,8 @@ struct GeneralTab: View {
   /// 界面语言（InterfaceLanguage：本 App 自己偏好域里的 AppleLanguages，不注册默认值，@AppStorage 读不到「没存过」）
   @State private var language = InterfaceLanguage.stored
   @State private var languageNeedsRelaunch = InterfaceLanguage.needsRelaunch
-  @State private var loginStatus = SMAppService.mainApp.status
+  /// 初值用上一次读到的：@State 的初值每建一次这个视图都会算一遍，读一次是一次跨进程调用（约 35 ms），出现时 recheck 再读
+  @State private var loginStatus = LaunchAtLogin.status
   @State private var loginError: String?
   /// 此刻开着的功能（「功能」那一行的小字）：偏好变了跟着重算
   @State private var enabled = Feature.enabled
@@ -135,7 +136,7 @@ struct GeneralTab: View {
           navigation?.path = [FeaturesPage.route]
         }
         .settingsAnchor(.generalFeatures)
-        // 插件页改版 D1：插件挪进侧栏的「全部插件」，这里一行带过去
+        // 插件页改版 D1：插件挪进侧栏的「插件」那一页（原名「全部插件」），这里一行带过去
         SettingsPushRow(
           title: "插件",
           detail: pluginsDetail,
@@ -315,7 +316,7 @@ struct GeneralTab: View {
   }
 
   private func recheck() {
-    loginStatus = SMAppService.mainApp.status
+    loginStatus = LaunchAtLogin.readStatus()
     let now = Self.missingPermissions()
     if now != missing { missing = now }
     latestBackup = Self.latestBackup(transfer)
@@ -336,7 +337,7 @@ struct GeneralTab: View {
       } catch {
         loginError = String(localized: "设置失败：\(error.localizedDescription)")
       }
-      loginStatus = SMAppService.mainApp.status
+      loginStatus = LaunchAtLogin.readStatus()
     }
   }
 
@@ -836,7 +837,16 @@ enum LaunchAtLogin {
   }
 
   /// 还没注册过登录项（要用户批准的、已经开着的都不算）
-  static var isNotRegistered: Bool { SMAppService.mainApp.status == .notRegistered }
+  static var isNotRegistered: Bool { readStatus() == .notRegistered }
+
+  /// 上一次读到的状态（通用页的初值；2026-11-23 美化与提速 P6：sample 里每次换到通用页现读两遍，一遍约 35 ms）
+  private(set) static var status = SMAppService.mainApp.status
+
+  /// 现读一遍（跨进程）并记下
+  static func readStatus() -> SMAppService.Status {
+    status = SMAppService.mainApp.status
+    return status
+  }
 
   static func set(_ enabled: Bool) throws {
     if enabled {

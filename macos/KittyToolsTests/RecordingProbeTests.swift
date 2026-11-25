@@ -23,9 +23,10 @@
 // 出待录的控制条（不录：没有停止项、没有「进行中」记录、没有文件），在控制条上点 ● 开始——同一个窗口原地换成录制态，
 // 录 1.5 s 后停，m4a 能播；再开一条、点 ✕ 直接关掉。
 // 录音第 6 批加了 audioRecorderSystemTake(_:)（同样要 _MIC=1）：来源是系统声音 / 两者时走录屏管线只录声音，录约 2 s、0.5 s 时
-// afplay 放一声，验 m4a 能播、只有一条 AAC 音轨、没有视频轨、时长对、电平事件来过、中间的 mp4 已删、⏸ 置灰。
+// afplay 放一声，验 m4a 能播、只有一条 AAC 音轨、没有视频轨、时长对、电平事件来过、中间的 mp4 已删、⏸ 可点（issue #48 起录系统声音也能暂停）。
 // 录屏录音第 7 批加了 gifTake()：ScreenRecorder 真录 2 s 后用 VideoExport 转 GIF，验帧数约 30、宽 ≤ 960、循环、每帧约 1/15 s，
 // 视频轨比文件短时最后一帧停到结尾，转到一半取消不留文件；录下的视频和 GIF 验完就删（第一帧 gif-first.png 看完自己删）。
+// issue #48 加了 pauseTake()：真录一段、暂停（投一次锁屏不结束）、继续再录一段，验存成一个文件、时长不算暂停、没有空洞、接缝准。
 import AVFoundation
 import AppKit
 import ScreenCaptureKit
@@ -751,6 +752,209 @@ struct RecordingProbeTests {
       ] + media.summary)
   }
 
+  // MARK: - issue #48：暂停 / 继续真录
+
+  /// 暂停 / 继续真录（issue #48，不倒数、不录麦克风、不画光标，开着系统声音和显示点按）：第一段选区里一块红窗口头 0.5 s 来回挪、
+  /// 再停 1 s（画面不动：这一段视频轨比音轨短）后暂停；暂停中点按圈收起，投一次「锁屏」不结束；1.5 s 后窗口换成蓝的、继续，
+  /// 点按圈回来、「进行中」记着两段，再录约 1.5 s 停止。验：存成一个文件、各段和记录都清掉，会话计的时长和文件时长都不算
+  /// 暂停的 1.5 s；视频、声音各只有一个编辑段；到视频轨结束每 0.1 s 都取得到帧（第一段画面不动那截停在最后一帧，不是空洞），
+  /// 接缝前红、后蓝。只跑这一个：
+  ///   -only-testing:KittyToolsTests/RecordingProbeTests/pauseTake()
+  @Test func pauseTake() async throws {
+    let env = try await Env.make()
+    let suite = "kitty-test-record-pause-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(0, forKey: Prefs.screenRecordCountdown)
+    defaults.set(30, forKey: Prefs.screenRecordFrameRate)
+    defaults.set(false, forKey: Prefs.screenRecordShowsCursor)
+    defaults.set(true, forKey: Prefs.screenRecordSystemAudio)
+    defaults.set(false, forKey: Prefs.screenRecordMicrophone)
+    defaults.set(true, forKey: Prefs.screenRecordShowsClicks)
+    let folder = Self.directory.appending(path: "pause")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let visible = env.screen.visibleFrame
+    let region = CGRect(x: visible.minX + 240, y: visible.midY - 180, width: 640, height: 360)
+    let window = NSWindow(
+      contentRect: CGRect(x: region.minX + 200, y: region.midY - 60, width: 160, height: 120),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.backgroundColor = NSColor(srgbRed: 0.9, green: 0.1, blue: 0.1, alpha: 1)
+    window.level = .floating
+    window.isReleasedWhenClosed = false
+    window.orderFrontRegardless()
+    defer { window.orderOut(nil) }
+    let origin = window.frame.origin
+    func wiggle() async throws {
+      for step in 0..<30 {
+        window.setFrameOrigin(CGPoint(x: origin.x + CGFloat(step % 20) * 3, y: origin.y))
+        try await Task.sleep(for: .milliseconds(16))
+      }
+      window.setFrameOrigin(origin)
+    }
+    var finished: ScreenRecorder.Result?
+    let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
+    let recorder = try #require(
+      ScreenRecorder(region: region, directory: folder, defaults: defaults) { finished = $0 })
+    recorder.start()
+    var stopItem: NSWindow?
+    for _ in 0..<100 where stopItem == nil {
+      try await Task.sleep(for: .milliseconds(50))
+      stopItem = NSApp.windows.first {
+        String(describing: type(of: $0)) == "NSStatusBarWindow" && $0.isVisible
+          && !existing.contains(ObjectIdentifier($0))
+      }
+    }
+    _ = try #require(stopItem, "5 s 内没开始录")
+    let began = Date.now
+    #expect(recorder.inputOverlay != nil)
+    try await wiggle()
+    try await Task.sleep(for: .seconds(1))
+    let first = Date.now.timeIntervalSince(began)
+    recorder.togglePause()
+    for _ in 0..<40 where !recorder.isPaused { try await Task.sleep(for: .milliseconds(25)) }
+    #expect(recorder.isPaused, "1 s 内没暂停")
+    #expect(recorder.inputOverlay == nil, "暂停中点按圈没收起")
+    // 暂停中锁屏不结束（拍板 Q2）
+    recorder.stop(.locked)
+    try await Task.sleep(for: .seconds(1.5))
+    #expect(finished == nil && recorder.isPaused, "暂停中锁屏结束了录制")
+    window.backgroundColor = NSColor(srgbRed: 0.1, green: 0.1, blue: 0.9, alpha: 1)
+    let asked = Date.now
+    recorder.togglePause()
+    for _ in 0..<80 where recorder.isPaused { try await Task.sleep(for: .milliseconds(25)) }
+    #expect(!recorder.isPaused, "2 s 内没继续")
+    let resumed = Date.now
+    #expect(recorder.inputOverlay != nil, "继续后点按圈没回来")
+    #expect(defaults.stringArray(forKey: Prefs.screenRecordingParts)?.count == 2)
+    play("Glass")
+    try await wiggle()
+    try await Task.sleep(for: .seconds(max(0, 1.5 - Date.now.timeIntervalSince(resumed))))
+    let second = Date.now.timeIntervalSince(resumed)
+    recorder.stop()
+    for _ in 0..<300 where finished == nil { try await Task.sleep(for: .milliseconds(50)) }
+    let result = try #require(finished, "15 s 内没收尾")
+    #expect(result.reason == .user && result.moved && result.pieces == 1)
+    #expect(defaults.string(forKey: Prefs.screenRecordingInProgress) == nil)
+    #expect(defaults.object(forKey: Prefs.screenRecordingParts) == nil)
+    let expected = first + second
+    let session =
+      Double(result.duration.components.seconds)
+      + Double(result.duration.components.attoseconds) / 1e18
+    #expect(abs(session - expected) < 0.3, "会话计的 \(session) s，应约 \(expected) s")
+    let file = try #require(result.file)
+    let media = await inspect(file)
+    #expect(media.playable && media.audioTracks == 1)
+    #expect(abs(media.duration - expected) < 0.5, "文件 \(media.duration) s，应约 \(expected) s")
+    let asset = AVURLAsset(url: file)
+    let video = try #require(try await asset.loadTracks(withMediaType: .video).first)
+    let audio = try #require(try await asset.loadTracks(withMediaType: .audio).first)
+    let videoEdits = try await video.load(.segments).count
+    let audioEdits = try await audio.load(.segments).count
+    #expect(videoEdits == 1 && audioEdits == 1, "编辑段：视频 \(videoEdits)、声音 \(audioEdits)")
+    let videoEnd = try await video.load(.timeRange).end.seconds
+    let scale = env.screen.backingScaleFactor
+    var missing: [Double] = []
+    var firstBlue: Double?
+    var reds = 0
+    for time in stride(from: 0.05, to: videoEnd - 0.05, by: 0.1) {
+      guard let image = await frame(file, at: time),
+        let color = pixel(
+          image, x: Int((window.frame.midX - region.minX) * scale),
+          y: Int((region.maxY - window.frame.midY) * scale))
+      else {
+        missing.append(time)
+        continue
+      }
+      if color.0 > 180, color.1 < 80, color.2 < 80 { reds += 1 }
+      if color.2 > 180, color.0 < 80, firstBlue == nil { firstBlue = time }
+    }
+    // 接缝前后各存一张（pause-before.png / pause-after.png，看完和视频一起删）
+    if let before = await frame(file, at: max(0, first - 0.2)) {
+      try save(before, "pause-before.png")
+    }
+    if let after = await frame(file, at: min(videoEnd - 0.05, first + 0.3)) {
+      try save(after, "pause-after.png")
+    }
+    #expect(missing.isEmpty, "这些时刻取不到帧（空洞）：\(missing)")
+    #expect(reds > 0)
+    let seam = try #require(firstBlue, "接缝后没有蓝")
+    #expect(abs(seam - first) < 0.3, "第一个蓝帧在 \(seam) s，第一段约 \(first) s")
+    note(
+      "暂停 / 继续真录（issue #48）",
+      [
+        "第一段约 \(fmt(first)) s（后 1 s 画面不动）、暂停 1.5 s（中途投了一次锁屏）、第二段约 \(fmt(second)) s；点继续到开始写 \(fmt(resumed.timeIntervalSince(asked))) s",
+        "结果：\(result.reason)，一个文件 \(file.lastPathComponent)，会话计的 \(fmt(session)) s，文件 \(fmt(media.duration)) s",
+        "视频轨到 \(fmt(videoEnd)) s，编辑段视频 \(videoEdits)、声音 \(audioEdits)；每 0.1 s 取帧缺 \(missing.count) 个，红 \(reds) 个，第一个蓝帧 \(fmt(seam)) s",
+      ] + media.summary)
+  }
+
+  /// 录音「系统声音」暂停 / 继续真录（issue #48，不开麦克风）：录约 1 s（放一声 Glass）→ 暂停 1.2 s → 继续再录约 1 s → 停。
+  /// 引擎在暂停时停流、继续时新开一段，停止时几段的音轨接成一个 m4a：只有一个文件、各段 mp4 和「进行中」记录都清掉，
+  /// 会话计的时长和文件时长都不算暂停的 1.2 s。只跑这一个：
+  ///   -only-testing:KittyToolsTests/RecordingProbeTests/audioSystemPauseTake()
+  @Test func audioSystemPauseTake() async throws {
+    let suite = "kitty-test-audio-pause-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(AudioRecorder.Source.system.rawValue, forKey: Prefs.audioRecordSource)
+    let folder = Self.directory.appending(path: "audio-pause")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    var finished: ScreenRecorder.Result?
+    let recorder = AudioRecorder(directory: folder, defaults: defaults) { finished = $0 }
+    recorder.start()
+    let working = try #require(defaults.string(forKey: Prefs.audioRecordingInProgress))
+    var hud: RecordingHUD?
+    for _ in 0..<250 where hud == nil {
+      try await Task.sleep(for: .milliseconds(20))
+      hud = NSApp.windows.lazy.compactMap { Self.hud(in: $0) }.first { $0.medium == .audio }
+    }
+    let shown = try #require(hud, "5 s 内没出录音 HUD")
+    let began = Date.now
+    play("Glass")
+    try await Task.sleep(for: .seconds(1))
+    let first = Date.now.timeIntervalSince(began)
+    recorder.togglePause()
+    for _ in 0..<40 where !recorder.isPaused { try await Task.sleep(for: .milliseconds(25)) }
+    #expect(recorder.isPaused && shown.isPaused, "1 s 内没暂停")
+    try await Task.sleep(for: .seconds(1.2))
+    recorder.togglePause()
+    for _ in 0..<80 where recorder.isPaused { try await Task.sleep(for: .milliseconds(25)) }
+    #expect(!recorder.isPaused && !shown.isPaused, "2 s 内没继续")
+    let resumed = Date.now
+    let parts = defaults.stringArray(forKey: Prefs.audioRecordingParts) ?? []
+    #expect(parts.count == 2)
+    play("Glass")
+    try await Task.sleep(for: .seconds(1))
+    let second = Date.now.timeIntervalSince(resumed)
+    recorder.stop()
+    for _ in 0..<500 where finished == nil { try await Task.sleep(for: .milliseconds(20)) }
+    let result = try #require(finished, "10 s 内没收尾")
+    #expect(result.reason == .user && result.moved && result.pieces == 1)
+    #expect(defaults.string(forKey: Prefs.audioRecordingInProgress) == nil)
+    #expect(defaults.object(forKey: Prefs.audioRecordingParts) == nil)
+    #expect(
+      !([working] + parts).contains { FileManager.default.fileExists(atPath: $0) }, "各段 mp4 还在")
+    let file = try #require(result.file)
+    defer { try? FileManager.default.removeItem(at: file) }
+    #expect(file.pathExtension == "m4a")
+    let asset = AVURLAsset(url: file)
+    let duration = try await asset.load(.duration).seconds
+    let session =
+      Double(result.duration.components.seconds)
+      + Double(result.duration.components.attoseconds) * 1e-18
+    let expected = first + second
+    #expect(try await asset.load(.isPlayable))
+    #expect(try await asset.loadTracks(withMediaType: .audio).count == 1)
+    #expect(abs(session - expected) < 0.3, "会话计的 \(session) s，应约 \(expected) s")
+    #expect(abs(duration - expected) < 0.5, "文件 \(duration) s，应约 \(expected) s")
+    note(
+      "录音「系统声音」暂停 / 继续真录（issue #48）",
+      [
+        "第一段约 \(fmt(first)) s、暂停 1.2 s、第二段约 \(fmt(second)) s；结果 \(result.reason)，\(file.lastPathComponent)",
+        "会话计的 \(fmt(session)) s，文件 \(fmt(duration)) s；各段 mp4 已删",
+      ])
+  }
+
   // MARK: - 第二轮体检 R1：清晰度 / 编码真录
 
   /// 清晰度和编码真录（按需）：三种组合各录约 2 s（不倒数、不录声音、不画光标、不显示点按 / 按键；主屏可见区里 640 × 360 点，
@@ -1200,7 +1404,7 @@ struct RecordingProbeTests {
   /// AudioRecorder 先 open() 再开始（要麦克风授权，系统声音那一遍还要「屏幕录制」授权，Dev 版都有，不会弹框）：待录的控制条
   /// 出来（鼠标所在屏底部居中，[系统声音][麦克风] ｜ [✕][●]，开关按来源画，截一张 audio-ready-<来源>-hud.png），这时没有菜单栏
   /// 停止项、没有「进行中」记录、输出目录里没有文件、会话没算开始；点控制条的 ●（performClick，等于再按一次快捷键）——同一个
-  /// 窗口原地换成录制态（录系统声音的 ⏸ 置灰）、停止项出来、「进行中」记上，录 1.5 s 后停，m4a 挪进输出目录的
+  /// 窗口原地换成录制态（⏸ 都可点，issue #48）、停止项出来、「进行中」记上，录 1.5 s 后停，m4a 挪进输出目录的
   /// audio-ready-<来源>/、能播、时长约 1.5 s。再 open() 一条、点 ✕：控制条收掉、按取消收尾、不留文件。偏好都在临时域。
   /// 系统声音那一遍从默认的麦克风出发，在真的控制条上点两下开关切过去（来源是开始那一刻才读的）。
   /// 录下的音频验完就删（截图看完自己删）。只跑这个：
@@ -1274,7 +1478,7 @@ struct RecordingProbeTests {
     for _ in 0..<500 where hud.state == .ready { try await Task.sleep(for: .milliseconds(10)) }
     let latency = ms(since: began)
     #expect(hud.state != .ready, "5 s 内没录起来")
-    #expect(try #require(hud.button(for: .pause)).isEnabled == (source == .microphone))
+    #expect(try #require(hud.button(for: .pause)).isEnabled)
     // 同一个窗口原地换内容：还是它、还显示着、水平中心没动
     #expect(Self.hud(in: hudWindow) === hud && hudWindow.isVisible)
     #expect(
@@ -1324,7 +1528,7 @@ struct RecordingProbeTests {
   // MARK: - 录音第 6 批：系统声音 / 两者走录屏管线
 
   /// AudioRecorder 的来源是系统声音 / 两者（要「屏幕录制」和麦克风授权，Dev 版都有，不会弹框）：录屏管线只录声音（鼠标所在屏
-  /// 左上角 64 × 64 点、1 fps），录约 2 s、0.5 s 时 afplay 放一声 Glass——HUD 出来且 ⏸ 置灰、菜单栏有停止项；停下后 HUD 和停止项
+  /// 左上角 64 × 64 点、1 fps），录约 2 s、0.5 s 时 afplay 放一声 Glass——HUD 出来且 ⏸ 可点（issue #48）、菜单栏有停止项；停下后 HUD 和停止项
   /// 立刻收掉，m4a 挪进输出目录的 audio-<来源>/「录音 ….m4a」、能播、只有一条 AAC 音轨、没有视频轨、时长约 2 s（和会话计的一致）、
   /// 中间的 mp4 不在了；电平事件来过（Glass 那一下到 −60 dB 以上），两者时麦克风的底噪算「听到了」（只录系统声音不看）；
   /// 波形 poster 400 × 250；再开一次、HUD 出来之前马上叫停：当取消、不留文件。「进行中」记录和来源都在临时偏好域。录下的音频
@@ -1357,7 +1561,7 @@ struct RecordingProbeTests {
     let hud = try #require(hudWindow.flatMap(Self.hud(in:)), "5 s 内没出录音 HUD")
     let latency = ms(since: began)
     let started = Date.now
-    #expect(try #require(hud.button(for: .pause)).isEnabled == false)
+    #expect(try #require(hud.button(for: .pause)).isEnabled)
     let stopItem = NSApp.windows.first {
       String(describing: type(of: $0)) == "NSStatusBarWindow" && $0.isVisible
         && !existing.contains(ObjectIdentifier($0))

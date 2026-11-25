@@ -40,7 +40,7 @@ extension AppDelegate {
       UserDefaults.standard.string(forKey: Prefs.launcherPanelPosition),
       hasUserFrame: launcherPanel.hasUserFrame, mouse: NSEvent.mouseLocation)
     launcherPanel.toggle(anchor: place.anchor, atTop: place.atTop)
-    // 接着上次的查询（没执行就收起、60 秒内，体检 A27）：字全选，直接打字就替换，↩ 照样执行上次选中的
+    // 接着上次的查询（没执行就收起、或执行的是文件结果，90 秒内，体检 A27、拍板 1A）：字全选，直接打字就替换，↩ 照样执行上次选中的
     if appearing, launcherModel.resumesQuery {
       (launcherPanel.firstResponder as? NSTextView)?.selectAll(nil)
     }
@@ -162,6 +162,7 @@ extension AppDelegate {
       pinsHidden: pins.panels.isEmpty ? nil : pins.isHidden, checksUpdates: updater.isSupported,
       recording: recorder != nil
         ? .screenRecord : audioRecorder?.isStarted == true ? .audioRecord : nil,
+      recordPaused: recorder?.isPaused ?? audioRecorder?.isPaused ?? false,
       awake: Feature.keepAwake.isOn && keepAwake.sessionEnd != nil,
       statusPresets: StatusPreset.load(),
       statusEntersFirst: UserDefaults.standard.bool(forKey: Prefs.statusScreenHotKeyEntersFirst),
@@ -191,6 +192,7 @@ extension AppDelegate {
     case .recognizeText: recognizeText()
     case .screenRecord: screenRecord()
     case .audioRecord: audioRecord()
+    case .recordPause: toggleRecordingPause()
     case .pinClipboard: pinClipboard()
     case .shotHistory: showShotHistory()
     case .clothesline: toggleClothesline()

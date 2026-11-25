@@ -93,7 +93,8 @@ enum Home {
     var result: [Section] = []
     var plugins: [Tile] = []
     for section in HotKeyAction.visibleSections(enabled: state.features) {
-      var tiles = section.actions.filter { !unlisted.contains($0) }.map { action in
+      var tiles = section.actions.filter { !unlisted.contains($0) && state.lists($0) }.map {
+        action in
         Tile(
           target: .action(action), title: action.title(recording: state.isRunning(action)),
           symbol: action.symbol, color: action.color, key: keys[action],
@@ -368,7 +369,7 @@ struct HomeView: View {
         if let title = section.title {
           Text(title)
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(Style.metaText)
             .padding(.leading, 10)
             .padding(.bottom, 2)
             .frame(height: Home.titleHeight, alignment: .bottomLeading)

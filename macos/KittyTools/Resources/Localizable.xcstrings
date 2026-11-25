@@ -459,12 +459,12 @@
         }
       }
     },
-    "%@插件没添加，先不同步；到 设置 › 全部插件 里添加就接着同步" : {
+    "%@插件没添加，先不同步；到 设置 › 插件 里添加就接着同步" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The %@ plugin isn’t added, so it isn’t synced for now; add it in Settings › All Plugins to resume"
+            "value" : "The %@ plugin isn’t added, so it isn’t synced for now; add it in Settings › Plugins to resume"
           }
         }
       }
@@ -1406,6 +1406,28 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld files differed from others only in letter case, so “ 2” was added to their names"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld 个文件和文件夹" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld file or folder"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld files and folders"
                 }
               }
             }
@@ -5629,6 +5651,40 @@
         }
       }
     },
+    "search.clipboard.snippetExcluded" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Don’t Expand,Password Manager,Terminal"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "不展开,密码管理器,终端"
+          }
+        }
+      }
+    },
+    "search.clipboard.snippetExpand" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Snippet,Keyword,Expand,Auto Expand,Abbreviation,Text Expansion,Text Replacement"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "片段,关键词,展开,自动展开,缩写,文本扩展,文字替换"
+          }
+        }
+      }
+    },
     "search.dockPreview.cmdTab" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -7247,16 +7303,16 @@
     "search.launchpad.frequent" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "常用,最近,经常,使用次数"
-          }
-        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "frequent,recent,most used,usage"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "常用,最近,经常,使用次数"
           }
         }
       }
@@ -7264,16 +7320,16 @@
     "search.launchpad.hidden" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "隐藏,显示,不显示,去掉"
-          }
-        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "hide,show,hidden,remove"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "隐藏,显示,不显示,去掉"
           }
         }
       }
@@ -8350,23 +8406,6 @@
         }
       }
     },
-    "search.snippetExpand.excluded" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Don’t Expand,Turn Off,Password Manager,Terminal"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "不展开,停用,密码管理器,终端"
-          }
-        }
-      }
-    },
     "search.statusScreen.animations" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -8942,16 +8981,16 @@
     "snippetExpand.duplicate" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "重复"
-          }
-        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Duplicate"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "重复"
           }
         }
       }
@@ -10667,6 +10706,16 @@
         }
       }
     },
+    "上次录屏没有正常结束，分成了 %lld 段保存" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last screen recording didn’t finish properly. It was saved as %lld files."
+          }
+        }
+      }
+    },
     "上次录屏没有正常结束，已保存" : {
       "localizations" : {
         "en" : {
@@ -10693,6 +10742,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Last audio recording didn’t finish properly"
+          }
+        }
+      }
+    },
+    "上次录音没有正常结束，分成了 %lld 段保存" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last audio recording didn’t finish properly. It was saved as %lld files."
           }
         }
       }
@@ -11779,12 +11838,12 @@
         }
       }
     },
-    "从网上下载的脚本，第一次运行前会先给你看一眼全文。Kitty Tools 自带的大功能（便签、刘海岛这些）是插件，在 设置 › 全部插件 里添加。" : {
+    "从网上下载的脚本，第一次运行前会先给你看一眼全文。Kitty Tools 自带的大功能（便签、刘海岛这些）是插件，在 设置 › 插件 里添加。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Scripts downloaded from the web show you their full text before they first run. Kitty Tools’ larger built-in features (Notes, the Notch, and more) are plugins; add them in Settings › All Plugins."
+            "value" : "Scripts downloaded from the web show you their full text before they first run. Kitty Tools’ larger built-in features (Notes, the Notch, and more) are plugins; add them in Settings › Plugins."
           }
         }
       }
@@ -12249,12 +12308,12 @@
         }
       }
     },
-    "便签、提醒、刘海岛这些在「全部插件」里添加" : {
+    "便签、提醒、刘海岛这些在「插件」里添加" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Add Notes, Reminders, the Notch, and more in All Plugins"
+            "value" : "Add Notes, Reminders, the Notch, and more in Plugins"
           }
         }
       }
@@ -13519,16 +13578,6 @@
         }
       }
     },
-    "全部插件" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "All Plugins"
-          }
-        }
-      }
-    },
     "全部操作（⌘K 或 →）" : {
       "localizations" : {
         "en" : {
@@ -13857,6 +13906,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Same keyword as “%@”; the one higher in the list is used"
+          }
+        }
+      }
+    },
+    "关键词在剪贴板面板里设：新建片段时填上，已有的片段在 ⌘K 里选「关键词…」。打完关键词的最后一个字就展开，前面紧挨着字母或数字时不展开；密码框里、输入法正在打拼音时不展开。只在内存里留最近打的十几个字用来比对，不存盘、不上传、不写进日志；没有片段设关键词时完全不听键盘。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set keywords in Clipboard History: fill one in when you create a snippet, or choose “Keyword…” in ⌘K for an existing one. A keyword expands as soon as you type its last character, but not right after a letter or digit, in password fields, or while an input method is still composing. Only the last dozen or so characters you type stay in memory for matching; nothing is saved, uploaded or logged, and when no snippet has a keyword the keyboard isn’t watched at all."
           }
         }
       }
@@ -15631,16 +15690,6 @@
         }
       }
     },
-    "剪贴板关着：片段在剪贴板里，打开剪贴板才会展开。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clipboard History is off: snippets live in Clipboard History, so turn it on to expand them."
-          }
-        }
-      }
-    },
     "剪贴板历史" : {
       "localizations" : {
         "en" : {
@@ -16919,6 +16968,16 @@
         }
       }
     },
+    "取消多选" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel Selection"
+          }
+        }
+      }
+    },
     "取消归档" : {
       "localizations" : {
         "en" : {
@@ -17087,6 +17146,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "image and file favorites aren’t included (%@)"
+          }
+        }
+      }
+    },
+    "另有 %lld 项没能移走" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more item couldn’t be moved"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more items couldn’t be moved"
+                }
+              }
+            }
           }
         }
       }
@@ -19269,6 +19350,16 @@
         }
       }
     },
+    "在任何 App 里打出片段的关键词，换成片段的内容" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Type a snippet’s keyword in any app to replace it with the snippet"
+          }
+        }
+      }
+    },
     "在任何 App 里按下这些键，对应的功能就会出来。\n现在按一下，按过的会打勾。" : {
       "localizations" : {
         "en" : {
@@ -19375,36 +19466,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Search Clipboard History for “%@”"
-          }
-        }
-      }
-    },
-    "在剪贴板面板里新建片段时填上关键词，已有的片段在 ⌘K 里选「关键词…」" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fill in a keyword when you create a snippet in Clipboard History, or choose “Keyword…” in ⌘K for an existing one"
-          }
-        }
-      }
-    },
-    "在剪贴板面板里新建片段时填上关键词，已有的片段在 ⌘K 里选「关键词…」。在任何 App 里打完关键词的最后一个字，它就换成片段的内容；关键词前面紧挨着字母或数字时不展开。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fill in a keyword when you create a snippet in Clipboard History, or choose “Keyword…” in ⌘K for an existing one. In any app, as soon as you type the last character of a keyword, it’s replaced with the snippet. A keyword right after a letter or digit doesn’t expand."
-          }
-        }
-      }
-    },
-    "在单独一条线程上看着打的字：只在内存里留最近十几个字用来比对关键词，不存盘、不上传、不写进日志，切换 App 或点一下鼠标就清空。一条片段都没设关键词时完全不听键盘" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Watches what you type on a separate thread: only the last dozen or so characters stay in memory to match keywords. Nothing is saved, uploaded, or logged, and it’s cleared when you switch apps or click. When no snippet has a keyword, it doesn’t listen to the keyboard at all"
           }
         }
       }
@@ -19761,6 +19822,28 @@
         }
       }
     },
+    "在访达中显示 %lld 个" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Show %lld Item in Finder"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Show %lld Items in Finder"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "在访达中显示数据目录" : {
       "localizations" : {
         "en" : {
@@ -19891,12 +19974,12 @@
         }
       }
     },
-    "在这些 App 里不展开" : {
+    "在这些 App 里不展开片段" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Don’t Expand in These Apps"
+            "value" : "Don’t Expand Snippets in These Apps"
           }
         }
       }
@@ -20938,6 +21021,16 @@
         }
       }
     },
+    "存成了 %lld 个文件" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved as %lld files"
+          }
+        }
+      }
+    },
     "存进脚本文件夹" : {
       "localizations" : {
         "en" : {
@@ -21201,16 +21294,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "密码是 %1$lld–%2$lld 位数字"
-          }
-        }
-      }
-    },
-    "密码框、密码管理器里不展开；中文输入法正在打拼音时也不展开" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Doesn’t expand in password fields or password managers, or while an input method is still composing"
           }
         }
       }
@@ -22501,6 +22584,16 @@
         }
       }
     },
+    "已勾选" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selected"
+          }
+        }
+      }
+    },
     "已压缩" : {
       "localizations" : {
         "en" : {
@@ -23567,6 +23660,28 @@
         }
       }
     },
+    "已拷贝 %lld 个文件" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Copied %lld file"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Copied %lld files"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "已拷贝名称" : {
       "localizations" : {
         "en" : {
@@ -23893,6 +24008,28 @@
         }
       }
     },
+    "已放回 %lld 项" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Put back %lld item"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Put back %lld items"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "已放回「%@」" : {
       "localizations" : {
         "en" : {
@@ -24173,6 +24310,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Moved to Trash"
+          }
+        }
+      }
+    },
+    "已移到废纸篓 %lld 项" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Moved %lld item to the Trash"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Moved %lld items to the Trash"
+                }
+              }
+            }
           }
         }
       }
@@ -24483,6 +24642,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Connected"
+          }
+        }
+      }
+    },
+    "已选 %lld 个" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld selected"
           }
         }
       }
@@ -25631,6 +25800,16 @@
         }
       }
     },
+    "录屏已暂停" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Screen Recording Paused"
+          }
+        }
+      }
+    },
     "录屏控制" : {
       "localizations" : {
         "en" : {
@@ -25701,22 +25880,12 @@
         }
       }
     },
-    "录系统声音时不能暂停" : {
+    "录系统声音时菜单栏会出现屏幕录制指示；录着时锁屏会停止。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Can’t pause while recording system audio"
-          }
-        }
-      }
-    },
-    "录系统声音时菜单栏会出现屏幕录制指示；锁屏会停止；不能暂停。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "When recording system audio, the menu bar shows the screen recording indicator; locking the screen stops it, and you can’t pause."
+            "value" : "When recording system audio, the menu bar shows the screen recording indicator; locking the screen while recording stops it."
           }
         }
       }
@@ -27214,12 +27383,12 @@
         }
       }
     },
-    "打出片段的关键词，换成片段的内容" : {
+    "打关键词展开片段" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Type a snippet’s keyword to replace it with the snippet"
+            "value" : "Expand snippets by keyword"
           }
         }
       }
@@ -27260,6 +27429,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Open"
+          }
+        }
+      }
+    },
+    "打开 %lld 个" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Open %lld Item"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Open %lld Items"
+                }
+              }
+            }
           }
         }
       }
@@ -29752,12 +29943,12 @@
         }
       }
     },
-    "插件 · 用得上再勾，以后也能在 设置 › 全部插件 里添加" : {
+    "插件 · 用得上再勾，以后也能在 设置 › 插件 里添加" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Plugins · optional; you can add them later in Settings › All Plugins"
+            "value" : "Plugins · optional; you can add them later in Settings › Plugins"
           }
         }
       }
@@ -30874,6 +31065,28 @@
         }
       }
     },
+    "放回了 %lld 项" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Put back %lld item"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Put back %lld items"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "放回刚删的便签（连着删了几条就一条条放回；光标在正文、标题、搜索框里时先撤销那里打的字）" : {
       "localizations" : {
         "en" : {
@@ -31852,12 +32065,12 @@
         }
       }
     },
-    "新装时插件都没添加。添加了才出现在侧栏、菜单栏、主界面、快捷键和启动器里；移除了设置和数据都留着，再添加就回来。" : {
+    "新装时插件都没添加。添加了才出现在菜单栏、主界面、快捷键和启动器里，设置在这一页点进去；移除了设置和数据都留着，再添加就回来。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Plugins aren’t added on a new install. Once added, a plugin shows up in the sidebar, the menu bar, Home, shortcuts, and the Launcher. If you remove it, its settings and data stay for when you add it again."
+            "value" : "Plugins aren’t added on a new install. Once added, a plugin shows up in the menu bar, Home, shortcuts, and the Launcher, and its settings open from this page. If you remove it, its settings and data stay for when you add it again."
           }
         }
       }
@@ -32018,16 +32231,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Log files"
-          }
-        }
-      }
-    },
-    "日期、剪贴板、光标停在哪这些占位符照样展开；带填空的会先打开剪贴板面板问你" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Placeholders like the date, the clipboard, and where the cursor lands still work; snippets with fill-ins open Clipboard History to ask you first"
           }
         }
       }
@@ -32618,6 +32821,16 @@
         }
       }
     },
+    "暂停 / 继续录制" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause / Resume Recording"
+          }
+        }
+      }
+    },
     "暂停全部提醒 1 小时" : {
       "localizations" : {
         "en" : {
@@ -32654,6 +32867,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Pause snapping"
+          }
+        }
+      }
+    },
+    "暂停录制" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause Recording"
+          }
+        }
+      }
+    },
+    "暂停录屏" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause Screen Recording"
           }
         }
       }
@@ -33588,6 +33821,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Some apps don’t have a menu bar"
+          }
+        }
+      }
+    },
+    "有的原处已经有同名的了、或者原来的文件夹不在了" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some already have an item with the same name in their place, or their original folder is gone"
           }
         }
       }
@@ -35047,6 +35290,16 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "正在复制 %1$lld 项到「%2$@」…"
+          }
+        }
+      }
+    },
+    "正在存储录屏…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving recording…"
           }
         }
       }
@@ -37564,6 +37817,16 @@
         }
       }
     },
+    "没能继续录制" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t resume recording"
+          }
+        }
+      }
+    },
     "没能继续录音" : {
       "localizations" : {
         "en" : {
@@ -38016,12 +38279,12 @@
         }
       }
     },
-    "添加了才出现在侧栏、菜单栏、主界面、快捷键和启动器里" : {
+    "添加了才出现在菜单栏、主界面、快捷键和启动器里" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Once added, it shows up in the sidebar, the menu bar, Home, shortcuts, and the Launcher"
+            "value" : "Once added, it shows up in the menu bar, Home, shortcuts, and the Launcher"
           }
         }
       }
@@ -38816,16 +39079,6 @@
         }
       }
     },
-    "片段,关键词,展开,自动展开,替换,缩写,文本扩展,文字替换,邮箱,签名,模板,占位符,停用,密码,密码管理器,输入法,snippet,expand" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Snippet,Keyword,Expand,Auto Expand,Replace,Abbreviation,Text Expansion,Text Replacement,Email,Signature,Template,Placeholder,Turn Off,Password,Password Manager,Input Method"
-          }
-        }
-      }
-    },
     "片段、收藏、生词和便签原样写在里面。" : {
       "localizations" : {
         "en" : {
@@ -38862,16 +39115,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "More than %lld snippets and text favorites. Deselect “Snippets and Favorites” first."
-          }
-        }
-      }
-    },
-    "片段展开" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Snippet Expansion"
           }
         }
       }
@@ -40802,16 +41045,6 @@
         }
       }
     },
-    "移除后打关键词不再展开，也不再听键盘；片段和它们的关键词都留着，再添加就回来" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Once removed, keywords no longer expand and the keyboard isn’t watched; snippets and their keywords stay for when you add it again"
-          }
-        }
-      }
-    },
     "移除后按住那个键不再弹出，快捷键页里也没有它；设置留着，再添加就回来" : {
       "localizations" : {
         "en" : {
@@ -42043,12 +42276,12 @@
         }
       }
     },
-    "给剪贴板里的片段设一个关键词，比如 ;mail，在任何 App 里打出它就换成片段的内容" : {
+    "给了才能认出打的关键词、换成片段" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Give a snippet in Clipboard History a keyword like ;mail, then type it in any app to replace it with the snippet"
+            "value" : "Needed to recognize keywords as you type and replace them with snippets"
           }
         }
       }
@@ -42059,16 +42292,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Give apps names you like, then type them in the Launcher to find the apps"
-          }
-        }
-      }
-    },
-    "给片段设一个关键词，在任何 App 里打出它就换成片段的内容" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Give a snippet a keyword, then type it in any app to replace it with the snippet"
           }
         }
       }
@@ -42089,6 +42312,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Continue"
+          }
+        }
+      }
+    },
+    "继续录制" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume Recording"
+          }
+        }
+      }
+    },
+    "继续录屏" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume Screen Recording"
           }
         }
       }
@@ -44025,16 +44268,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Can’t tell how long"
-          }
-        }
-      }
-    },
-    "认出你打的关键词，再把它换成片段的内容；没有它用不了" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Recognizes the keywords you type and replaces them with snippets; without it, this plugin can’t work"
           }
         }
       }

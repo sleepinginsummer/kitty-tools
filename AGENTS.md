@@ -52,7 +52,7 @@ macos/                       # 本分支唯一开发区
 ├── TRANSLATION.md           # 多语言：代码怎么写、每批的流程、英文口径、术语表、不翻的清单
 ├── status-emoji.swift       # 状态屏打进包里的那几个动画表情（自带的状态和示例提醒用的 + 眼睛）：下载好的动画 PNG → Resources/status-emoji-*.heics（只用 ImageIO）；别的在 release emoji-pack-1，用到时下载
 ├── emoji-pack.swift         # 动画表情包：Fluent 动画全部 746 个 → 上传到 release emoji-pack-<版本> 的 HEICS + Resources/emoji-pack.json 对照表（中文名用 CLDR）+ Resources/emoji-thumbs/ 缩略图
-├── brand-icons.swift        # 品牌图标：角色「探头」的 AppIcon 10 张 + 菜单栏剪影 StatusIcon + DMG 背景（CoreGraphics 生成）
+├── brand-icons.swift        # 品牌图标：角色「探头」的 App 图标 AppIcon.icon（分层）+ 平面 AppIcon 10 张（给 Windows）+ ColorIcon16 / 20 + 菜单栏剪影 StatusIcon + DMG 背景（CoreGraphics 生成）
 ├── .swift-format
 ├── PLAN.md                  # 仍有效的方案：§2 技术栈、§4 架构与文件表、§8 打包、§10 约束与决定、§11 实现原则、§12 现状与下一步
 ├── HANDTEST.md              # 真机回归清单（约 40 条，发版前走）+ 正在验收的那一轮手测（新的手测加在这里；旧条目在 docs/archive/HANDTEST-2026-10.md）
@@ -129,7 +129,8 @@ TEST_RUNNER_KITTY_LIVE_LAUNCHPAD_ANIM=/tmp/kitty-launchpad-anim xcodebuild -proj
   test -only-testing:'KittyToolsTests/LaunchpadAnimationLiveTests/recordAnimations()'
 
 # 内存探针（按需，约 7 分钟，屏外量缓存 / 识字 / 各面板 / 回收接口各占多少；报告追加在 <目录>/report.md，用法和四个坑见测试文件头；
-# 量面板的图层要再加 TEST_RUNNER_KITTY_MEMORY_PROBE_ONSCREEN=1：屏外的窗口系统不画图层，开了之后屏幕右上角有一块几乎透明的面板）
+# 量面板的图层要再加 TEST_RUNNER_KITTY_MEMORY_PROBE_ONSCREEN=1：屏外的窗口系统不画图层，开了之后屏幕右上角有一块几乎透明的面板；
+# 只量设置窗各页看两遍、关窗、放掉（约 3 分钟，-O 加 SWIFT_OPTIMIZATION_LEVEL=-O 和单独的 -derivedDataPath）：TEST_RUNNER_KITTY_MEMORY_PROBE_ONLY=settings）
 TEST_RUNNER_KITTY_MEMORY_PROBE_DIR=/tmp/kitty-memory xcodebuild -project macos/KittyTools.xcodeproj -scheme KittyTools \
   test -only-testing:'KittyToolsTests/MemoryProbeTests/measure()'
 
@@ -191,13 +192,13 @@ TEST_RUNNER_KITTY_LIVE_FINDER_KEYS=1 xcodebuild -project macos/KittyTools.xcodep
   test -only-testing:'KittyToolsTests/FinderKeysTests/liveTargetsKeyWindowOwner()'
 
 # 平滑滚动插件的实机自检（按需，约 3 秒，要测试宿主有「辅助功能」授权；**跑之前先问用户**）：真的起滚动线程、建事件拦截（探针模式：
-# 真的滚轮原样放过），发几个带记号的合成滚轮，量第一帧多快、一共滑多远、主线程卡半秒时帧还出不出、停了线程退没退；帧也吞掉，
+# 真的滚轮原样放过），发几个带记号的合成滚轮，量第一帧多快、一共滑多远、帧在不在那一格的位置、注解的那一点上有没有目标进程（issue #50）、主线程卡半秒时帧还出不出、停了线程退没退；帧也吞掉，
 # 到不了别的 App。改了 SmoothScroll/ 后跑。另有只听不改的 record()：TEST_RUNNER_KITTY_SMOOTH_SCROLL_RECORD=<秒>，这几秒里
 # 用真鼠标拨滚轮，打印系统给的行数 / 像素 / 定点（定「每行 40 点、一格至少一行」那两个数用）
 TEST_RUNNER_KITTY_LIVE_SMOOTH_SCROLL=1 xcodebuild -project macos/KittyTools.xcodeproj -scheme KittyTools \
   test -only-testing:'KittyToolsTests/SmoothScrollTests/liveProbe()'
 
-# 片段展开插件：测试宿主（= Dev 版的授权）建得起哪一种事件拦截（只听的 / 不吞键的），建了马上撤、不发键，打印辅助功能和输入监控
+# 剪贴板的片段展开：测试宿主（= Dev 版的授权）建得起哪一种事件拦截（只听的 / 不吞键的），建了马上撤、不发键，打印辅助功能和输入监控
 # 给没给（按需，不到 1 秒）。真的打字展开在 macos/build/research/snippet-expand-2026-11-22/run.sh（探针自己的窗口，约 40 秒，
 # 会临时切 ABC / 系统拼音再切回；跑之前先跟用户说）
 TEST_RUNNER_KITTY_LIVE_SNIPPET_TAP=1 xcodebuild -project macos/KittyTools.xcodeproj -scheme KittyTools \
@@ -243,6 +244,12 @@ TEST_RUNNER_KITTY_LAUNCHPAD_PROBE=1 xcodebuild -project macos/KittyTools.xcodepr
 TEST_RUNNER_KITTY_LIVE_SELF_CAPTURE=/tmp/kitty-self xcodebuild -project macos/KittyTools.xcodeproj -scheme KittyTools \
   test -only-testing:'KittyToolsTests/SelfCaptureLiveTests/ownWindowInEveryPath()'
 
+# 界面卡顿与玻璃观感的量测探针（按需；2026-11-23 美化与提速，用法和开关在文件头）：-O 构建、面板真上屏（右上角透明度 0.05）
+# 量启动器 / 剪贴板 / 翻译浮窗 / 设置窗主线程忙多久，报告在 <目录>/report.md；_ONLY 只量几块、_LOOP 来回做给 sample 用；
+# glass() 是屏上真玻璃（屏幕左下角出现两扇窗口，跑之前先说一声），_GLASS_TINT=0 / 1 临时覆盖「透明」「着色」
+TEST_RUNNER_KITTY_POLISH_PROBE=/tmp/kitty-polish TEST_RUNNER_KITTY_POLISH_PROBE_ONSCREEN=1 xcodebuild -project macos/KittyTools.xcodeproj \
+  -scheme KittyTools test SWIFT_OPTIMIZATION_LEVEL=-O -only-testing:'KittyToolsTests/PolishProbeTests/measure()'
+
 # 启动台布局的随机操作测试：随机挪 / 建文件夹 / 拖出 / 删 / 装新 App / 卸 App / 改行列数，每步查不变式；
 # 步数随手给（默认 1500，2 万步几秒钟），换种子加 TEST_RUNNER_KITTY_LAUNCHPAD_FUZZ_SEED=<种子>
 TEST_RUNNER_KITTY_LAUNCHPAD_FUZZ=20000 xcodebuild -project macos/KittyTools.xcodeproj -scheme KittyTools \
@@ -253,7 +260,8 @@ macos/build-dmg.sh
 # Intel 包（Apple 芯片上交叉编；出 _x86_64.dmg / .zip，不写清单）
 ARCH=x86_64 macos/build-dmg.sh
 
-# 重新生成 App 图标、菜单栏剪影和 DMG 背景（改角色或产品名只改这个脚本；加一个目录参数另存放大预览）
+# 重新生成 App 图标（Resources/AppIcon.icon + 平面 PNG）、菜单栏剪影 / 彩色小图和 DMG 背景（改角色或产品名只改这个脚本；
+# 加一个目录参数另存放大预览，含 ictool 渲的六种图标风格；--layers <目录> 只出分层图标的各层）
 swift macos/brand-icons.swift
 
 # 功能图标（色块里那 26 个，mac 和 Windows 共用）：改了 icons/feature/*.svg 之后重新生成 mac 的自定义符号；

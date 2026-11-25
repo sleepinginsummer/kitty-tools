@@ -607,12 +607,6 @@ struct SnapshotProbeTests {
       case .appShortcuts: AnyView(AppShortcutsTab(trusted: false))
       // 没 start()：不列键盘、不碰系统的键位
       case .keyRemapping: AnyView(KeyRemappingTab(remapping: KeyRemapping(rulesKey: "unused")))
-      // 授权、名单、安全输入按固定的画
-      case .snippetExpand:
-        AnyView(
-          SnippetExpandTab(
-            store: store, authorized: false, excluded: ClipboardFilter.defaultExcluded,
-            secure: .some(nil)))
       case .translate:
         AnyView(TranslateTab(services: services, history: history, speaker: speaker))
       case .hotkeys: AnyView(HotkeysTab(center: hotKeys))
@@ -843,7 +837,11 @@ struct SnapshotProbeTests {
         StatusIconProbe(), size: NSSize(width: 260, height: 124), dark: dark,
         to: "\(out)/status-icons\(dark ? "-dark" : "").png")
     }
-    let colorRep = try #require(StatusItem.colorIcon.representations.last as? NSBitmapImageRep)
+    // 资源目录里的图不是位图表示：经 TIFF 转一遍，取 @2x 那张
+    let colorReps = NSBitmapImageRep.imageReps(
+      with: try #require(StatusItem.colorIcon.tiffRepresentation))
+    let colorRep = try #require(
+      colorReps.compactMap { $0 as? NSBitmapImageRep }.max { $0.pixelsWide < $1.pixelsWide })
     try #require(colorRep.representation(using: .png, properties: [:]))
       .write(to: URL(filePath: "\(out)/status-icon-color@2x.png"))
     // 最小窗口（contentMinSize 700 × 460）下的通用页：外观缩略图、强调色两排放得下
@@ -3731,10 +3729,12 @@ struct SnapshotProbeTests {
       ),
       // 划词没取到文字：占位换成说明（体检 A16）
       ("translate-missed-selection", { c in c.beginInput(missedSelection: true) }),
-      // 原文改过、还没重译：原文框右下角弹出「翻译 ↩」
+      // 原文改过、还没重译：原文框右下角弹出「翻译 ↩」；用户点进去改了字，原文框亮强调色焦点环（美化 V7——
+      // 别的状态都是呼出后没碰过的原文框：拿着焦点，但只是中性的框）
       (
         "translate-edited",
         { c in
+          c.sourceTouched = true
           c.sourceText = "SwiftUI provides views and controls."
           c.translatedSource = "SwiftUI provides views."
           c.detected = .en
@@ -4360,6 +4360,9 @@ struct SnapshotProbeTests {
         ("launcher-files", "open 报告", found), ("launcher-files-recent", " ", recent),
         ("launcher-files-find", "find 报告", found), ("launcher-files-short", "open a", []),
         ("launcher-files-actions", "open 报告", found),
+        // 多选（拍板 3A）：勾了 3 个（行首勾选圆、勾中的品牌粉淡底、底栏「已选 3 个」「打开 3 个 ↩」）和勾着时的 ⌘K
+        ("launcher-files-multi", "open 报告", found),
+        ("launcher-files-multi-actions", "open 报告", found),
       ] {
         model.query = query
         // 最近的文件那张带上最后一行的授权提示
@@ -4369,8 +4372,13 @@ struct SnapshotProbeTests {
           model.showFiles(hits, for: request)
         }
         model.alternate = name == "launcher-files-find" ? .command : .none
+        if name.hasPrefix("launcher-files-multi") {
+          model.checked = [0, 2, 3].map { model.results[$0].id }
+          model.selection = 2
+        }
         // 文件的 ⌘K：快速查看、打开方式（默认的标「默认」）、移到废纸篓（体检 C7）
-        model.showsActions = name == "launcher-files-actions"
+        model.showsActions =
+          name == "launcher-files-actions" || name == "launcher-files-multi-actions"
         try snapshot(
           LauncherPanelView(model: model),
           size: NSSize(width: 720, height: LauncherPanelView.height(for: model)),
@@ -5735,9 +5743,9 @@ struct SnapshotProbeTests {
     }
   }
 
-  /// 设置 › 片段展开（插件，2026-11-22）：没授权、还没有关键词（浅 / 深）；授权了、三条关键词里两条重复、有 App 开着安全输入
-  /// （橙字），浅 / 深。几秒，图以 snippet- 开头：-only-testing:'KittyToolsTests/SnapshotProbeTests/snippetExpandSettings()'。
-  /// 偏好读临时偏好域；授权、名单、安全输入传固定的
+  /// 设置 › 剪贴板「片段」一节（片段展开，2026-11-22；11-24 起不是插件）：开着、还没有关键词、没授权（浅 / 深）；授权了、
+  /// 三条关键词里两条重复、有 App 开着安全输入（橙字），浅 / 深；关着；「高级…」里不展开的 App。几秒，图以 snippet- 开头：
+  /// -only-testing:'KittyToolsTests/SnapshotProbeTests/snippetExpandSettings()'。偏好读临时偏好域；授权、安全输入传固定的
   @Test(.enabled(if: directory != nil)) func snippetExpandSettings() throws {
     let out = try #require(Self.directory)
     try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
@@ -5745,18 +5753,18 @@ struct SnapshotProbeTests {
     let name = "kitty-snapshot-snippet-\(UUID().uuidString)"
     let prefs = try #require(UserDefaults(suiteName: name))
     defer { prefs.removePersistentDomain(forName: name) }
-    prefs.set(true, forKey: Feature.snippetExpand.prefsKey)
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let store = try ClipboardStore(
       db: Database(path: ":memory:"), images: ImageStore(directory: dir))
+    func section(trusted: Bool, secure: HotKeyCenter.SecureInputBlock?) -> some View {
+      Form { SnippetExpandSection(store: store, trusted: trusted, secure: .some(secure)) }
+        .formStyle(.grouped)
+        .defaultAppStorage(prefs)
+    }
     for dark in [false, true] {
       try snapshot(
-        SnippetExpandTab(
-          store: store, authorized: false, excluded: ClipboardFilter.defaultExcluded,
-          secure: .some(nil)
-        ).defaultAppStorage(prefs),
-        size: NSSize(width: 640, height: 900), dark: dark,
+        section(trusted: false, secure: nil), size: NSSize(width: 640, height: 400), dark: dark,
         to: "\(out)/snippet-settings\(dark ? "-dark" : "").png")
     }
     for (text, note, keyword) in [
@@ -5773,13 +5781,18 @@ struct SnapshotProbeTests {
     }
     for dark in [false, true] {
       try snapshot(
-        SnippetExpandTab(
-          store: store, authorized: true, excluded: ["com.apple.Terminal"],
-          secure: .init(holder: "终端", bundleID: "com.apple.Terminal")
-        ).defaultAppStorage(prefs),
-        size: NSSize(width: 640, height: 900), dark: dark,
+        section(trusted: true, secure: .init(holder: "终端", bundleID: "com.apple.Terminal")),
+        size: NSSize(width: 640, height: 500), dark: dark,
         to: "\(out)/snippet-settings-any\(dark ? "-dark" : "").png")
     }
+    prefs.set(false, forKey: Prefs.clipboardSnippetExpand)
+    try snapshot(
+      section(trusted: true, secure: nil), size: NSSize(width: 640, height: 300), dark: false,
+      to: "\(out)/snippet-settings-off.png")
+    try snapshot(
+      Form { SnippetExcludedSection() }.formStyle(.grouped).defaultAppStorage(prefs),
+      size: NSSize(width: 640, height: 500), dark: false, to: "\(out)/snippet-settings-excluded.png"
+    )
   }
 
   /// App 快捷键（插件，2026-11-17）：面板（访达那样的几张卡、两段式和 🌐 的键帽，浅 / 深；221 条要竖着滚；一条都没有、

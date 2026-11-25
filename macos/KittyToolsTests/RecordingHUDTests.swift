@@ -2,7 +2,7 @@
 // 2026-10-12 视觉对齐起按右边线对齐：录制条 → 倒数 → 录制态、录音的待录 → 录制，✕ 和主圆钮不挪，宽度变了右边线不动）、
 // 放弃要点两下的时序（纯状态）、窗口不进截图冻结帧和录制白名单（状态栏层级的普通 NSPanel，永不当 key）、按钮在两种状态下
 // 交回什么；录制中的声音状态（录屏第 4 批：只读图标、两个都关不显示、麦克风断开变橙）；录音的形态（录音第 5 批：暂停钮、
-// 暂停时的样子与旁白、「没听到声音」让 HUD 变宽、名字）；录系统声音时不能暂停（录音第 6 批：⏸ 原位置灰、提示原因）、「两者」麦克风断开的橙字。
+// 暂停时的样子与旁白、「没听到声音」让 HUD 变宽、名字）；「两者」麦克风断开的橙字（录系统声音 issue #48 起也能暂停）。
 // 计时是图层排的（Shell/Ticker.swift，2026-10-11 从 numericText 换过来）：每秒只换变了的那位、暂停时整行重排、按当前读数的
 // 位数留宽（到 10 分钟、1 小时各变宽一次）。
 // 录音的待录态（手测反馈第 3 批）：[系统声音][麦克风] ｜ [✕][●]——有哪些钮、名字和提示、✕ 点一下就关、● 交回 .start、
@@ -131,10 +131,9 @@ struct RecordingHUDTests {
     #expect(hud.screenFrame.maxX == barFrame.maxX && hud.screenFrame.minY == barFrame.minY)
     #expect(hud.screenFrame.width < barFrame.width)
     #expect(fromRight(try #require(hud.button(for: .cancel)), in: hud) == barClose)
-    // 录制态：右边线不动，✕ 还在原地，■ 落在 ● 上
+    // 录制态：右边线不动，✕ 还在原地，■ 落在 ● 上（issue #48 加了 ⏸ 之后带声音图标的比录制条宽，往左多出来）
     hud.update(.recording(0))
     #expect(hud.screenFrame.maxX == barFrame.maxX && hud.screenFrame.minY == barFrame.minY)
-    #expect(hud.screenFrame.width < barFrame.width)
     #expect(fromRight(try #require(hud.button(for: .discard)), in: hud) == barClose)
     #expect(fromRight(try #require(hud.button(for: .stop)), in: hud) == barStart)
     // 计时按位数留宽：9:59 以内不变，10:00、1:00:00 各变宽一次——往左长，右边线不动
@@ -375,7 +374,10 @@ struct RecordingHUDTests {
       var found: [NSImageView] = []
       var queue: [NSView] = [hud]
       while let view = queue.popLast() {
-        if let image = view as? NSImageView, !(view.superview is NSButton) { found.append(image) }
+        // 藏着的（暂停时才顶替红点的暂停符号）不算
+        if let image = view as? NSImageView, !(view.superview is NSButton), !image.isHidden {
+          found.append(image)
+        }
         queue += view.subviews
       }
       return found.sorted {
@@ -457,14 +459,22 @@ struct RecordingHUDTests {
     #expect(hud.frame.width == width)
     hud.updateMeter([-60, -20, -0.5])  // 只画，不改布局
     #expect(hud.frame.width == width)
-    // 录屏的 HUD 没有暂停钮，暂停 / 没听到声音对它不起作用
-    let screen = RecordingHUD(state: .recording(0), stopKey: nil)
-    #expect(screen.button(for: .pause) == nil && screen.accessibilityLabel() == "录屏控制")
+    // 录屏的 HUD 也有暂停钮（issue #48）：在 ✕ 前面，暂停时换成「继续录屏」、读数说已暂停、宽度不变；没听到声音对它不起作用
+    let screen = RecordingHUD(state: .recording(5), stopKey: nil)
+    #expect(screen.accessibilityLabel() == "录屏控制")
+    let screenPause = try #require(screen.button(for: .pause))
+    let screenClose = try #require(screen.button(for: .discard))
+    #expect(screenPause.accessibilityLabel() == "暂停录屏" && screenPause.toolTip == "暂停录屏")
+    #expect(
+      screenPause.convert(screenPause.bounds, to: screen).minX
+        < screenClose.convert(screenClose.bounds, to: screen).minX)
     let screenWidth = screen.frame.width
     screen.setPaused(true)
+    #expect(screen.isPaused && screenPause.accessibilityLabel() == "继续录屏")
+    #expect(screen.accessibilityValue() as? String == "已暂停，已录 5 秒")
     screen.setSilent(true)
-    #expect(!screen.isPaused && screen.frame.width == screenWidth)
-    #expect(try #require(screen.button(for: .discard)).accessibilityLabel() == "放弃录制")
+    #expect(screen.frame.width == screenWidth)
+    #expect(screenClose.accessibilityLabel() == "放弃录制")
   }
 
   /// 计时是图层排的（Shell/Ticker.swift；不用 numericText：它每秒逐帧重画，录制期间一直占着 CPU）：字就是 ScreenRecorder.clock，
@@ -517,23 +527,6 @@ struct RecordingHUDTests {
           == RecordingHUD(state: .recording(seconds), stopKey: nil, medium: .audio).frame.width)
       last = (hud.frame.width, clock.frame.width)
     }
-  }
-
-  /// 录系统声音（录音第 6 批，录屏管线没有暂停）：⏸ 还在原来的位置（HUD 一样宽）、置灰、提示为什么；点它不交回点击
-  @Test func systemAudioCannotPause() throws {
-    var clicks: [RecordingHUD.Item] = []
-    let hud = RecordingHUD(state: .recording(7), stopKey: nil, medium: .audio, pausable: false)
-    hud.onClick = { clicks.append($0) }
-    let pause = try #require(hud.button(for: .pause))
-    #expect(!pause.isEnabled && pause.alphaValue == 0.35)
-    #expect(pause.toolTip == "录系统声音时不能暂停" && pause.accessibilityLabel() == "暂停录音")
-    let pausable = RecordingHUD(state: .recording(7), stopKey: nil, medium: .audio)
-    #expect(hud.frame.width == pausable.frame.width)
-    #expect(try #require(pausable.button(for: .pause)).isEnabled)
-    pause.performClick(nil)
-    #expect(clicks.isEmpty)
-    try #require(hud.button(for: .stop)).performClick(nil)
-    #expect(clicks == [.stop])
   }
 
   /// 录音的待录态（手测反馈第 3 批）：[系统声音][麦克风] ｜ [✕][●]。✕ 叫「关闭」、点一下就交回 .cancel（没有东西可放弃，
@@ -642,14 +635,14 @@ struct RecordingHUDTests {
       #expect(clicks == [.cancel])
 
       clicks = []
-      hud.setPausable(false)
       hud.update(.recording(0))
       #expect(hud.panel === panel && hud.state == .recording(0))
       #expect(hud.frame.width > readyWidth)
       #expect(system.superview == nil && microphone.superview == nil && start.superview == nil)
       #expect(hud.accessibilityValue() as? String == "已录 0 秒")
       let pause = try #require(hud.button(for: .pause))
-      #expect(pause.superview != nil && !pause.isEnabled && pause.toolTip == "录系统声音时不能暂停")
+      // 录系统声音也能暂停（issue #48）：⏸ 可点
+      #expect(pause.superview != nil && pause.isEnabled && pause.toolTip == "暂停录音")
       let stop = try #require(hud.button(for: .stop))
       #expect(stop.superview != nil)
       let discard = try #require(hud.button(for: .discard))
@@ -661,9 +654,8 @@ struct RecordingHUDTests {
       stop.performClick(nil)
       #expect(clicks.isEmpty)
       #expect(hud.ignoresStop(at: .now) && !hud.ignoresStop(at: .now + .seconds(1)))
-      // 和直接开始的录音 HUD 一样宽；能暂停的来源 ⏸ 可点
-      let direct = RecordingHUD(
-        state: .recording(0), stopKey: nil, medium: .audio, pausable: false)
+      // 和直接开始的录音 HUD 一样宽
+      let direct = RecordingHUD(state: .recording(0), stopKey: nil, medium: .audio)
       direct.onClick = { clicks.append($0) }
       #expect(hud.frame.width == direct.frame.width)
       #expect(!direct.ignoresStop(at: .now))
@@ -671,8 +663,6 @@ struct RecordingHUDTests {
       #expect(clicks == [.stop])
       // ⏸ 前面换上来的是电平，不用挡了：刚换完就能点
       clicks = []
-      hud.setPausable(true)
-      #expect(pause.isEnabled && pause.toolTip == "暂停录音")
       pause.performClick(nil)
       #expect(clicks == [.pause])
       hud.close()
@@ -694,7 +684,7 @@ struct RecordingHUDTests {
       }
       return nil
     }
-    let hud = RecordingHUD(state: .recording(7), stopKey: nil, medium: .audio, pausable: false)
+    let hud = RecordingHUD(state: .recording(7), stopKey: nil, medium: .audio)
     let width = hud.frame.width
     #expect(note(hud) == nil)
     hud.microphoneLost()
@@ -702,7 +692,7 @@ struct RecordingHUDTests {
     #expect(label.stringValue == "麦克风断开了")
     #expect(label.toolTip == "麦克风断开了，后面没有麦克风声音")
     #expect(hud.frame.width > width)
-    let silent = RecordingHUD(state: .recording(7), stopKey: nil, medium: .audio, pausable: false)
+    let silent = RecordingHUD(state: .recording(7), stopKey: nil, medium: .audio)
     silent.setSilent(true)
     silent.microphoneLost()
     #expect(try #require(note(silent)).stringValue == "麦克风断开了")

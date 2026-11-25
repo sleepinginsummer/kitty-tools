@@ -657,6 +657,7 @@ struct ScreenshotSnapshotTests {
       ("record-hud-sound", .recording(12), false, false),
       ("record-hud-system", .recording(12), false, false),
       ("record-hud-mic-lost", .recording(12), false, false),
+      ("record-hud-paused", .recording(12), false, false),
     ] {
       let full = name.hasSuffix("full")
       let root = NSView(frame: bounds)
@@ -666,6 +667,8 @@ struct ScreenshotSnapshotTests {
         let border = ScrollBorderView(animates: counting)
         border.frame = region.insetBy(dx: -ScrollBorderView.margin, dy: -ScrollBorderView.margin)
         if counting { border.update(lost: false, marching: true) }
+        // issue #48：暂停时边框灰、静止的虚线，HUD 红点换成暂停符号、计时变灰
+        if name == "record-hud-paused" { border.setPaused(true) }
         root.addSubview(border)
       }
       let sound = ["record-hud-sound", "record-hud-system", "record-hud-mic-lost"].contains(name)
@@ -674,12 +677,22 @@ struct ScreenshotSnapshotTests {
         microphone: sound && name != "record-hud-system")
       if armed { try #require(hud.button(for: .discard)).performClick(nil) }
       if name == "record-hud-mic-lost" { hud.microphoneLost(animated: false) }
+      if name == "record-hud-paused" { hud.setPaused(true) }
       hud.removeFromSuperview()  // 从它自己的窗口里拿出来，摆到假桌面上
       hud.frame.origin = RecordingHUD.origin(
         size: hud.frame.size, region: full ? bounds : region, screen: bounds, visible: visible,
         isFullScreen: full, dragged: nil)
       root.addSubview(hud)
-      try shoot(offscreen(root), name, crop: hud.frame.insetBy(dx: -24, dy: -24))
+      // 暂停的那张连选区右下角一起拍（看边框）
+      let corner = CGRect(x: region.maxX - 160, y: region.minY - 16, width: 176, height: 120)
+      try shoot(
+        offscreen(root), name,
+        crop: (name == "record-hud-paused" ? hud.frame.union(corner) : hud.frame)
+          .insetBy(dx: -24, dy: -24))
+      // 26 起 HUD 的玻璃屏外画成一块白：录制态、暂停态（issue #48 加了 ⏸）另拍一张只有内容的
+      if ["record-hud", "record-hud-paused", "record-hud-sound"].contains(name) {
+        try shootContent(hud, name)
+      }
     }
 
     // 右边线对齐：从上到下是录制条（toolbarPlacement）、倒数、录制态（不带 / 带声音图标）、录了一小时多的（计时多三位），
@@ -716,20 +729,18 @@ struct ScreenshotSnapshotTests {
 
     // 录音 HUD（录音第 5 批）：整屏的摆法（可见区底部居中、离底 24），[● 0:42][电平] ｜ [⏸] ｜ [✕][■]；
     // 录制中（说话的电平）、暂停（暂停符号、计时和电平变灰）、没听到声音（橙字）、最新一根超过 −1 dB（橙）；
-    // 录音第 6 批：录系统声音（⏸ 原位置灰）、「两者」录着时麦克风断开（橙字「麦克风断开了」）
+    // 录音第 6 批：「两者」录着时麦克风断开（橙字「麦克风断开了」）。录系统声音那张（⏸ 原位置灰）issue #48 起去掉：三种来源都能暂停
     let speech = (0..<24).map { index -> Float in -38 + 16 * sin(Float(index) * 0.9) }
-    for (name, levels, paused, silent, pausable) in [
-      ("audio-hud", speech, false, false, true), ("audio-hud-paused", speech, true, false, true),
-      ("audio-hud-silent", [Float](repeating: -120, count: 24), false, true, true),
-      ("audio-hud-loud", speech.dropLast() + [-0.4], false, false, true),
-      ("audio-hud-system", speech, false, false, false),
-      ("audio-hud-mic-lost", speech, false, false, false),
+    for (name, levels, paused, silent) in [
+      ("audio-hud", speech, false, false), ("audio-hud-paused", speech, true, false),
+      ("audio-hud-silent", [Float](repeating: -120, count: 24), false, true),
+      ("audio-hud-loud", speech.dropLast() + [-0.4], false, false),
+      ("audio-hud-mic-lost", speech, false, false),
     ] {
       let root = NSView(frame: bounds)
       root.wantsLayer = true
       root.layer?.contents = desktop
-      let hud = RecordingHUD(
-        state: .recording(42), stopKey: nil, medium: .audio, pausable: pausable)
+      let hud = RecordingHUD(state: .recording(42), stopKey: nil, medium: .audio)
       hud.updateMeter(levels)
       if paused { hud.setPaused(true) }
       if silent { hud.setSilent(true) }

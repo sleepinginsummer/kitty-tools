@@ -45,6 +45,15 @@ struct ClipboardPanelTests {
 
   /// JSON 默认美化（体检 A10）：换条目不复位，一次呼出里点过「原文」就一直看原文，收起面板（reset）才回到美化；
   /// 美化结果按条目缓存，编辑正文后清掉
+  /// 刚改过搜索词（不到 0.2 s）：结果变了时面板高度直接到位（美化与提速 P3）；停下来之后的变化照常动画
+  @Test func typingResizesInstantly() {
+    let gap = LauncherModel.typingGap
+    #expect(ClipboardPanelModel.isTyping(100, now: 100.01))
+    #expect(ClipboardPanelModel.isTyping(100, now: 100 + gap / 2))
+    #expect(!ClipboardPanelModel.isTyping(100, now: 100 + gap))
+    #expect(!ClipboardPanelModel.isTyping(0, now: 100))
+  }
+
   @Test func jsonPrettyByDefault() throws {
     let (model, _) = try makeModel([#"{"b":1,"a":[2]}"#, "普通文本", #"{"x":true}"#])
     let json = try item(model, #"{"b":1,"a":[2]}"#)
@@ -646,8 +655,14 @@ struct ClipboardPanelTests {
   }
 
   /// 搜索框的空格接到 onSpace：框原来空着、打了一个空格 → 交给它，它接了框退回空的、绑定不变；它不接、或框里原来有字，
-  /// 空格照常进框
-  @Test func spaceReachesHandlerOnlyFromEmptyField() {
+  /// 空格照常进框。按下的那一下（不带修饰键的空格）传进去：controlTextDidChange 读 NSApp.currentEvent，全量跑时那是
+  /// 别的测试留下的事件，带 ⌘ 的按键会让三条都不过
+  @Test func spaceReachesHandlerOnlyFromEmptyField() throws {
+    let space = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+        context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false,
+        keyCode: UInt16(kVK_Space)))
     final class Box { var text = "" }
     let box = Box()
     var handled = true
@@ -662,8 +677,7 @@ struct ClipboardPanelTests {
     ).makeCoordinator()
     func type(_ text: String) {
       field.stringValue = text
-      coordinator.controlTextDidChange(
-        Notification(name: NSControl.textDidChangeNotification, object: field))
+      coordinator.textChanged(in: field, event: space)
     }
     type(" ")
     #expect(calls == 1 && field.stringValue.isEmpty && box.text.isEmpty)

@@ -566,7 +566,7 @@ struct LocalizationTests {
       "KittyTools/Launcher/LauncherItem.swift",
       [
         "脚本命令", "脚本写法", "钉图 贴图", "Capture 便签", "启动台 应用", "全部功能", "防息屏 防止睡眠", "便签 侧边",
-        "延时 定时 倒计时",
+        "延时 定时 倒计时", "暂停录屏 继续录屏",
       ],
       false, "动作的英文别名后面另加的中文搜索词：只进搜索名"
     ),
@@ -601,6 +601,13 @@ struct LocalizationTests {
     ),
     ("KittyTools/Screenshot/ScrollCapture.swift", ["一\n二"], false, "量两行字高用的字，不显示"),
     (
+      "KittyTools/Screenshot/RecordingJoin.swift",
+      [
+        "写不了", "写入失败", "写入没有进展", "几段的视频格式不一样", "加不上视频轨", "加不上音轨", "声道太多", "声音写不进去",
+        "没写完", "视频写不进去", "读不出声音", "读不出视频", "编不了声音",
+      ], false, "拼接失败的原因只进日志（界面上只说「没能合成一个文件」）"
+    ),
+    (
       "KittyTools/Screenshot/ShotShelf.swift", ["Kitty Tools 截图"], false,
       "拖出用的临时目录名：启动时按名字清空，换了语言也得认得上次的"
     ),
@@ -622,7 +629,7 @@ struct LocalizationTests {
       [
         "笔记", "记一条", "闹钟", "请勿触碰", "程序坞", "窗口预览", "右键菜单", "刘海", "灵动岛", "防息屏", "防止睡眠", "唤醒",
         "咖啡因", "合盖", "休眠", "平滑", "鼠标滚轮", "鼠标反向", "滚动方向", "快捷键列表",
-        "app 快捷键", "改键", "文本扩展", "文字替换", "缩写", "自动展开",
+        "app 快捷键", "改键",
       ], false,
       "启动器里认插件的词（pluginWords，中英都认）"
     ),

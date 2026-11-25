@@ -119,7 +119,7 @@ struct LauncherBatch5Tests {
     #expect(model.notice == nil && !model.handleKeyEquivalent(undo))
   }
 
-  /// A27：没执行就收起，60 秒内再呼出保留查询和选中项（搜索框全选）；执行过、超过 60 秒的清空
+  /// A27：没执行就收起，90 秒内（拍板 2B，原来 60 秒）再呼出保留查询和选中项（搜索框全选）；执行过、超过 90 秒的清空
   @Test func keepsQueryAfterDismissWithoutRunning() throws {
     let usage = try LauncherUsage(db: Database(path: ":memory:"))
     let apps = [app("Safari"), app("Slack"), app("Sketch")]
@@ -129,11 +129,11 @@ struct LauncherBatch5Tests {
     model.selection = 2
     let selected = try #require(model.selectedItem)
     model.didHide(now: start)
-    model.prepareForShow(now: start.addingTimeInterval(30))
+    model.prepareForShow(now: start.addingTimeInterval(80))
     #expect(model.query == "s" && model.selectedItem == selected && model.resumesQuery)
-    // 超过 60 秒：照旧清空
+    // 超过 90 秒：照旧清空
     model.didHide(now: start)
-    model.prepareForShow(now: start.addingTimeInterval(61))
+    model.prepareForShow(now: start.addingTimeInterval(91))
     #expect(model.query.isEmpty && !model.resumesQuery)
     // quit 空格的列表再呼出时重列：收起期间退出了的 App 不在、新开的在
     model.commandTargets = { _ in [apps[0], apps[1]] }
@@ -247,11 +247,21 @@ struct LauncherBatch5Tests {
         "about",
         "quit",
       ])
-    // 状态屏不是一条：每个状态一条（StatusScreenTests.entries）
-    for action in HotKeyAction.allCases where action != .launcher && action != .statusScreen {
+    // 状态屏不是一条：每个状态一条（StatusScreenTests.entries）；暂停 / 继续录制只在录着时列（下面）
+    for action in HotKeyAction.allCases
+    where action != .launcher && action != .statusScreen && action != .recordPause {
       let item = plain.first { $0.hotKeyAction == action }
       #expect(item?.title == action.title && item?.symbol == action.symbol, "\(action)")
     }
+    // issue #48：没在录时不列；录着时叫「暂停录制」，那一段暂停着叫「继续录制」，排在录音后面
+    #expect(!plain.contains { $0.hotKeyAction == .recordPause })
+    let recording = LauncherItem.actions(.init(recording: .screenRecord), caching: false)
+    let pause = recording.firstIndex { $0.hotKeyAction == .recordPause }
+    #expect(pause.map { recording[$0].title } == "暂停录制")
+    #expect(pause == recording.firstIndex { $0.hotKeyAction == .audioRecord }.map { $0 + 1 })
+    let paused = LauncherItem.actions(
+      .init(recording: .audioRecord, recordPaused: true), caching: false)
+    #expect(paused.first { $0.hotKeyAction == .recordPause }?.title == "继续录制")
     #expect(plain.first { $0.target == "copyToTranslate" }?.subtitle == "已关闭")
     #expect(plain.first { $0.target == "pause-clipboard" }?.subtitle == "正在记录")
     let busy = LauncherItem.actions(
